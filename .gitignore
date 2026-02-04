@@ -1,0 +1,117 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+credentials/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+db_data/
+postgres_data/
+pgdata/
+
+# Redis & RabbitMQ
+redis_data/
+rabbitmq_data/
+dump.rdb
+
+# Logs
+*.log
+logs/
+*.log.*
+celery.log
+scrapy.log
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Docker
+docker-compose.override.yml
+.dockerignore
+*.tar
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Playwright browsers
+playwright-browsers/
+.playwright/
+
+# CSV exports & reports
+reports/
+exports/
+*.csv
+!example.csv
+
+# Crawl cache & data
+crawl_data/
+cache/
+.scrapy/
+crawled_pages/
+
+# LLM cache
+llm_cache/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Jupyter Notebooks (если используются для анализа)
+.ipynb_checkpoints/
+*.ipynb
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store

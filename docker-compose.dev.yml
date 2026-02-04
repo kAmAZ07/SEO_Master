@@ -1,0 +1,285 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: seo-postgres-dev
+    environment:
+      POSTGRES_USER: seo_user
+      POSTGRES_PASSWORD: seo_pass
+      POSTGRES_DB: seo_platform
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./init_schema.sql:/docker-entrypoint-initdb.d/01-init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - seo-dev-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seo_user"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    container_name: seo-redis-dev
+    command: redis-server --requirepass redis_pass
+    ports:
+      - "6379:6379"
+    networks:
+      - seo-dev-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: seo-rabbitmq-dev
+    environment:
+      RABBITMQ_DEFAULT_USER: seo_user
+      RABBITMQ_DEFAULT_PASS: rabbitmq_pass
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - seo-dev-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  audit-service:
+    build:
+      context: .
+      dockerfile: audit_service/Dockerfile
+    container_name: seo-audit-service-dev
+    command: python -m uvicorn audit_service.main:app --host 0.0.0.0 --port 8001 --reload
+    environment:
+      SERVICE_NAME: audit-service
+      SERVICE_PORT: 8001
+      DATABASE_URL: postgresql://seo_user:seo_pass@postgres:5432/seo_platform
+      REDIS_URL: redis://:redis_pass@redis:6379/0
+      RABBITMQ_URL: amqp://seo_user:rabbitmq_pass@rabbitmq:5672//
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    networks:
+      - seo-dev-network
+
+  semantic-service:
+    build:
+      context: .
+      dockerfile: semantic_service/Dockerfile
+    container_name: seo-semantic-service-dev
+    command: python -m uvicorn semantic_service.main:app --host 0.0.0.0 --port 8002 --reload
+    environment:
+      SERVICE_NAME: semantic-service
+      SERVICE_PORT: 8002
+      DATABASE_URL: postgresql://seo_user:seo_pass@postgres:5432/seo_platform
+      REDIS_URL: redis://:redis_pass@redis:6379/0
+      RABBITMQ_URL: amqp://seo_user:rabbitmq_pass@rabbitmq:5672//
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8002:8002"
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    networks:
+      - seo-dev-network
+
+  reporting-service:
+    build:
+      context: .
+      dockerfile: reporting_service/Dockerfile
+    container_name: seo-reporting-service-dev
+    command: python -m uvicorn reporting_service.main:app --host 0.0.0.0 --port 8003 --reload
+    environment:
+      SERVICE_NAME: reporting-service
+      SERVICE_PORT: 8003
+      DATABASE_URL: postgresql://seo_user:seo_pass@postgres:5432/seo_platform
+      REDIS_URL: redis://:redis_pass@redis:6379/0
+      RABBITMQ_URL: amqp://seo_user:rabbitmq_pass@rabbitmq:5672//
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8003:8003"
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+    networks:
+      - seo-dev-network
+
+  management-service:
+    build:
+      context: .
+      dockerfile: management_service/Dockerfile
+    container_name: seo-management-service-dev
+    command: python -m uvicorn management_service.main:app --host 0.0.0.0 --port 8004 --reload
+    environment:
+      SERVICE_NAME: management-service
+      SERVICE_PORT: 8004
+      DATABASE_URL: postgresql://seo_user:seo_pass@postgres:5432/seo_platform
+      REDIS_URL: redis://:redis_pass@redis:6379/0
+      RABBITMQ_URL: amqp://seo_user:rabbitmq_pass@rabbitmq:5672//
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8004:8004"
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    networks:
+      - seo-dev-network
+
+  client-api-gateway:
+    build:
+      context: .
+      dockerfile: client_api_gateway/Dockerfile
+    container_name: seo-client-api-gateway-dev
+    command: python -m uvicorn client_api_gateway.main:app --host 0.0.0.0 --port 8005 --reload
+    environment:
+      SERVICE_NAME: client-api-gateway
+      SERVICE_PORT: 8005
+      DATABASE_URL: postgresql://seo_user:seo_pass@postgres:5432/seo_platform
+      REDIS_URL: redis://:redis_pass@redis:6379/0
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8005:8005"
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    networks:
+      - seo-dev-network
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: seo-celery-worker-dev
+    command: celery -A celery_config worker --loglevel=debug --concurrency=2
+    environment:
+      DATABASE_URL: postgresql://seo_user:seo_pass@postgres:5432/seo_platform
+      REDIS_URL: redis://:redis_pass@redis:6379/0
+      RABBITMQ_URL: amqp://seo_user:rabbitmq_pass@rabbitmq:5672//
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+    networks:
+      - seo-dev-network
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: seo-celery-beat-dev
+    command: celery -A celery_config beat --loglevel=debug
+    environment:
+      DATABASE_URL: postgresql://seo_user:seo_pass@postgres:5432/seo_platform
+      REDIS_URL: redis://:redis_pass@redis:6379/0
+      RABBITMQ_URL: amqp://seo_user:rabbitmq_pass@rabbitmq:5672//
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    networks:
+      - seo-dev-network
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: seo-flower-dev
+    command: celery -A celery_config flower --port=5555 --broker=amqp://seo_user:rabbitmq_pass@rabbitmq:5672//
+    environment:
+      FLOWER_PORT: 5555
+      REDIS_URL: redis://:redis_pass@redis:6379/0
+      RABBITMQ_URL: amqp://seo_user:rabbitmq_pass@rabbitmq:5672//
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "5555:5555"
+    networks:
+      - seo-dev-network
+
+volumes:
+  postgres_dev_data:
+    driver: local
+
+networks:
+  seo-dev-network:
+    driver: bridge

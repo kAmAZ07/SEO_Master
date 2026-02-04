@@ -1,0 +1,443 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: seo-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-seo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-seo_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-seo_platform}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_schema.sql:/docker-entrypoint-initdb.d/01-init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - database
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-seo_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: seo-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_pass} --maxmemory 2gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: seo-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-seo_user}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-rabbitmq_pass}
+      RABBITMQ_DEFAULT_VHOST: /
+      RABBITMQ_VM_MEMORY_HIGH_WATERMARK: 1024MiB
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  audit-service:
+    build:
+      context: .
+      dockerfile: audit_service/Dockerfile
+    container_name: seo-audit-service
+    environment:
+      SERVICE_NAME: audit-service
+      SERVICE_PORT: 8001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - frontend
+      - backend
+      - database
+    restart: unless-stopped
+
+  semantic-service:
+    build:
+      context: .
+      dockerfile: semantic_service/Dockerfile
+    container_name: seo-semantic-service
+    environment:
+      SERVICE_NAME: semantic-service
+      SERVICE_PORT: 8002
+      DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - frontend
+      - backend
+      - database
+    restart: unless-stopped
+
+  reporting-service:
+    build:
+      context: .
+      dockerfile: reporting_service/Dockerfile
+    container_name: seo-reporting-service
+    environment:
+      SERVICE_NAME: reporting-service
+      SERVICE_PORT: 8003
+      DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8003:8003"
+    volumes:
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+    networks:
+      - frontend
+      - backend
+      - database
+    restart: unless-stopped
+
+  management-service:
+    build:
+      context: .
+      dockerfile: management_service/Dockerfile
+    container_name: seo-management-service
+    environment:
+      SERVICE_NAME: management-service
+      SERVICE_PORT: 8004
+      DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8004:8004"
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - frontend
+      - backend
+      - database
+    restart: unless-stopped
+
+  client-api-gateway:
+    build:
+      context: .
+      dockerfile: client_api_gateway/Dockerfile
+    container_name: seo-client-api-gateway
+    environment:
+      SERVICE_NAME: client-api-gateway
+      SERVICE_PORT: 8005
+      DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8005:8005"
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - frontend
+      - backend
+      - database
+    restart: unless-stopped
+
+  celery-worker-audit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: seo-celery-worker-audit
+    command: celery -A celery_config worker --queues=audit_crawl,public_audit_queue --concurrency=2 --loglevel=info --max-tasks-per-child=50
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      WORKER_TYPE: audit
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - backend
+      - database
+    restart: unless-stopped
+
+  celery-worker-semantic:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: seo-celery-worker-semantic
+    command: celery -A celery_config worker --queues=semantic_analysis,llm_generation --concurrency=4 --loglevel=info --max-tasks-per-child=100
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      WORKER_TYPE: semantic
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - backend
+      - database
+    restart: unless-stopped
+
+  celery-worker-reporting:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: seo-celery-worker-reporting
+    command: celery -A celery_config worker --queues=reporting_export,gsc_sync,ga4_sync,yandex_sync --concurrency=2 --loglevel=info --max-tasks-per-child=100
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      WORKER_TYPE: reporting
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+    networks:
+      - backend
+      - database
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: seo-celery-beat
+    command: celery -A celery_config beat --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - backend
+      - database
+    restart: unless-stopped
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: seo-flower
+    command: celery -A celery_config flower --port=5555 --broker=amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
+    environment:
+      FLOWER_BASIC_AUTH: ${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-flower_pass}
+      FLOWER_PORT: 5555
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "5555:5555"
+    networks:
+      - frontend
+      - backend
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: seo-nginx
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - audit-service
+      - semantic-service
+      - reporting-service
+      - management-service
+      - client-api-gateway
+    networks:
+      - frontend
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: seo-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - backend
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: seo-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-grafana_pass}
+      GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-simple-json-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - backend
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+  database:
+    driver: bridge
+    internal: true

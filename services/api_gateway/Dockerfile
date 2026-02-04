@@ -13,19 +13,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY services/api_gateway/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY models.py database_config.py redis_config.py secrets_manager.py logging_config.py ./
-COPY client_api_gateway/ ./client_api_gateway/
-COPY migrations/ ./migrations/
-COPY alembic.ini .
+COPY config/ ./config/
+COPY database/ ./database/
+COPY services/api_gateway/ ./services/api_gateway/
 
 RUN mkdir -p /app/logs && chmod 777 /app/logs
 
-EXPOSE 8005
+EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8005/health || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["python", "-m", "uvicorn", "client_api_gateway.main:app", "--host", "0.0.0.0", "--port", "8005"]
+CMD ["python", "-m", "uvicorn", "services.api_gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]

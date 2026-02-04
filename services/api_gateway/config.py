@@ -1,13 +1,13 @@
 import os
-from typing import Optional, List
+from typing import Optional
 from pydantic import BaseSettings, Field, validator
 
 
 class Settings(BaseSettings):
     
     ENVIRONMENT: str = Field(default="production", env="ENVIRONMENT")
-    SERVICE_NAME: str = Field(default="client-api-gateway", env="SERVICE_NAME")
-    SERVICE_PORT: int = Field(default=8006, env="CLIENT_API_GATEWAY_PORT")
+    SERVICE_NAME: str = Field(default="api-gateway", env="SERVICE_NAME")
+    SERVICE_PORT: int = Field(default=8000, env="API_GATEWAY_PORT")
     
     DATABASE_URL: str = Field(..., env="DATABASE_URL")
     
@@ -19,39 +19,38 @@ class Settings(BaseSettings):
     
     LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")
     LOG_FORMAT: str = Field(default="json", env="LOG_FORMAT")
-    LOG_FILE_PATH: str = Field(default="logs/client_api_gateway.log", env="LOG_FILE_PATH")
+    LOG_FILE_PATH: str = Field(default="logs/api_gateway.log", env="LOG_FILE_PATH")
     
-    INTERNAL_API_KEY: str = Field(
-        default="internal-secret-key-change-in-production",
-        env="INTERNAL_API_KEY"
-    )
+    CORS_ORIGINS: str = Field(default="*", env="CORS_ORIGINS")
+    CORS_ALLOW_CREDENTIALS: bool = Field(default=True, env="CORS_ALLOW_CREDENTIALS")
+    CORS_ALLOW_METHODS: str = Field(default="GET,POST,PUT,DELETE,OPTIONS", env="CORS_ALLOW_METHODS")
+    CORS_ALLOW_HEADERS: str = Field(default="*", env="CORS_ALLOW_HEADERS")
     
-    HMAC_KEY_VERSION: int = Field(default=1, env="HMAC_KEY_VERSION")
-    HMAC_KEY_ROTATION_DAYS: int = Field(default=90, env="HMAC_KEY_ROTATION_DAYS")
-    HMAC_KEY_GRACE_PERIOD_DAYS: int = Field(default=7, env="HMAC_KEY_GRACE_PERIOD_DAYS")
-    HMAC_SIGNATURE_MAX_AGE_SECONDS: int = Field(default=300, env="HMAC_SIGNATURE_MAX_AGE_SECONDS")
+    JWT_SECRET_KEY: str = Field(..., env="JWT_SECRET_KEY")
+    JWT_ALGORITHM: str = Field(default="HS256", env="JWT_ALGORITHM")
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, env="ACCESS_TOKEN_EXPIRE_MINUTES")
+    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, env="REFRESH_TOKEN_EXPIRE_DAYS")
     
-    CHANGELOG_RETENTION_DAYS: int = Field(default=365, env="CHANGELOG_RETENTION_DAYS")
-    DEPLOYMENT_LOG_RETENTION_DAYS: int = Field(default=90, env="DEPLOYMENT_LOG_RETENTION_DAYS")
+    PUBLIC_RATE_LIMIT: int = Field(default=5, env="PUBLIC_RATE_LIMIT")
+    PUBLIC_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=3600, env="PUBLIC_RATE_LIMIT_WINDOW_SECONDS")
     
-    ENABLE_SIGNATURE_VALIDATION: bool = Field(default=True, env="ENABLE_SIGNATURE_VALIDATION")
-    ENABLE_IP_WHITELIST: bool = Field(default=False, env="ENABLE_IP_WHITELIST")
-    ALLOWED_IPS: str = Field(default="", env="ALLOWED_IPS")
+    PUBLIC_AUDIT_MAX_PAGES: int = Field(default=10, env="PUBLIC_AUDIT_MAX_PAGES")
+    PUBLIC_AUDIT_TIMEOUT_SECONDS: int = Field(default=60, env="PUBLIC_AUDIT_TIMEOUT_SECONDS")
+    PUBLIC_AUDIT_RETENTION_DAYS: int = Field(default=7, env="PUBLIC_AUDIT_RETENTION_DAYS")
+    
+    AUDIT_SERVICE_URL: str = Field(default="http://localhost:8001", env="AUDIT_SERVICE_URL")
+    MANAGEMENT_SERVICE_URL: str = Field(default="http://localhost:8004", env="MANAGEMENT_SERVICE_URL")
+    SEMANTIC_SERVICE_URL: str = Field(default="http://localhost:8002", env="SEMANTIC_SERVICE_URL")
+    REPORTING_SERVICE_URL: str = Field(default="http://localhost:8003", env="REPORTING_SERVICE_URL")
     
     ENABLE_METRICS: bool = Field(default=True, env="ENABLE_METRICS")
-    METRICS_PORT: int = Field(default=9106, env="METRICS_PORT")
+    METRICS_PORT: int = Field(default=9100, env="METRICS_PORT")
     
-    PATCH_RATE_LIMIT_PER_PROJECT: int = Field(default=100, env="PATCH_RATE_LIMIT_PER_PROJECT")
-    PATCH_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=3600, env="PATCH_RATE_LIMIT_WINDOW_SECONDS")
-    
-    MAX_CHANGELOG_SIZE_MB: int = Field(default=10, env="MAX_CHANGELOG_SIZE_MB")
-    MAX_PENDING_CHANGES_PER_PROJECT: int = Field(default=1000, env="MAX_PENDING_CHANGES_PER_PROJECT")
-    
-    @validator("ALLOWED_IPS")
-    def validate_allowed_ips(cls, v):
-        if not v:
-            return []
-        return [ip.strip() for ip in v.split(",") if ip.strip()]
+    @validator("JWT_SECRET_KEY")
+    def validate_jwt_secret(cls, v, values):
+        if values.get("ENVIRONMENT") == "production" and len(v) < 32:
+            raise ValueError("JWT_SECRET_KEY must be at least 32 characters in production")
+        return v
     
     @validator("LOG_LEVEL")
     def validate_log_level(cls, v):
@@ -68,15 +67,6 @@ class Settings(BaseSettings):
         if v_lower not in allowed_formats:
             raise ValueError(f"LOG_FORMAT must be one of {allowed_formats}")
         return v_lower
-    
-    @validator("INTERNAL_API_KEY")
-    def validate_internal_key(cls, v, values):
-        env = values.get("ENVIRONMENT", "production")
-        if env.lower() == "production" and v == "internal-secret-key-change-in-production":
-            raise ValueError("INTERNAL_API_KEY must be changed in production")
-        if len(v) < 32:
-            raise ValueError("INTERNAL_API_KEY must be at least 32 characters")
-        return v
     
     class Config:
         env_file = ".env"
@@ -100,30 +90,6 @@ def get_redis_config():
 def get_database_config():
     return {
         "url": settings.DATABASE_URL
-    }
-
-
-def get_hmac_config():
-    return {
-        "key_version": settings.HMAC_KEY_VERSION,
-        "rotation_days": settings.HMAC_KEY_ROTATION_DAYS,
-        "grace_period_days": settings.HMAC_KEY_GRACE_PERIOD_DAYS,
-        "signature_max_age": settings.HMAC_SIGNATURE_MAX_AGE_SECONDS
-    }
-
-
-def get_changelog_config():
-    return {
-        "retention_days": settings.CHANGELOG_RETENTION_DAYS,
-        "deployment_retention_days": settings.DEPLOYMENT_LOG_RETENTION_DAYS,
-        "max_size_mb": settings.MAX_CHANGELOG_SIZE_MB
-    }
-
-
-def get_rate_limit_config():
-    return {
-        "per_project": settings.PATCH_RATE_LIMIT_PER_PROJECT,
-        "window_seconds": settings.PATCH_RATE_LIMIT_WINDOW_SECONDS
     }
 
 

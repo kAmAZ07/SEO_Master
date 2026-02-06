@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = Field(default="development", env="ENVIRONMENT")
     
     HOST: str = Field(default="0.0.0.0", env="HOST")
-    PORT: int = Field(default=8003, env="PORT")
+    PORT: int = Field(default=8004, env="PORT")
     
     LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")
     

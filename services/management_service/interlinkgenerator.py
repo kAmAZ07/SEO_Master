@@ -8,7 +8,6 @@ import hashlib
 from collections import defaultdict
 from urllib.parse import urlparse
 
-# Correct imports according to project structure
 from services.management_service.config import settings
 from services.management_service.db.models import Project, Task, TaskType, TaskStatus
 from services.management_service.db.session import get_db
@@ -21,7 +20,6 @@ import redis.asyncio as redis
 
 logger = get_logger(__name__)
 
-# Prometheus Metrics
 interlink_generation_duration = Histogram(
     'interlink_generation_duration_seconds',
     'Duration of interlink generation',

@@ -1,0 +1,257 @@
+from contextlib import asynccontextmanager
+import asyncio
+import uuid
+
+import aio_pika
+from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+import uvicorn
+
+from services.management_service.config import settings
+from services.management_service.db.session import SessionLocal
+from config.logging_config import setup_logging, get_logger
+
+
+setup_logging("management-service")
+logger = get_logger(__name__, service_name="management-service")
+
+
+try:
+    from services.management_service.events.consumers import start_consumers, stop_consumers
+except Exception as exc:
+    _consumers_import_error = str(exc)
+
+    async def start_consumers():
+        logger.info(
+            "Event consumers are not configured; skipping startup",
+            extra={"error": _consumers_import_error},
+        )
+
+    async def stop_consumers():
+        return None
+
+
+try:
+    from services.management_service.scheduler.beat import start_scheduler, stop_scheduler
+except Exception as exc:
+    _scheduler_import_error = str(exc)
+
+    async def start_scheduler():
+        logger.info(
+            "Scheduler is not configured; skipping startup",
+            extra={"error": _scheduler_import_error},
+        )
+
+    async def stop_scheduler():
+        return None
+
+
+try:
+    from services.management_service.events.publishers import check_rabbitmq_connection
+except Exception:
+
+    async def check_rabbitmq_connection() -> bool:
+        if not settings.rabbitmq_url:
+            return False
+
+        try:
+            connection = await aio_pika.connect_robust(settings.rabbitmq_url)
+            await connection.close()
+            return True
+        except Exception as exc:
+            logger.error(f"RabbitMQ health check failed: {exc}")
+            return False
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting Management Service")
+
+    consumer_task = asyncio.create_task(start_consumers())
+    scheduler_task = asyncio.create_task(start_scheduler())
+
+    try:
+        logger.info("Management Service started successfully")
+        yield
+    finally:
+        logger.info("Shutting down Management Service")
+
+        await stop_consumers()
+        await stop_scheduler()
+
+        for task in (consumer_task, scheduler_task):
+            if task and not task.done():
+                task.cancel()
+
+        logger.info("Management Service stopped")
+
+
+app = FastAPI(
+    title="Management Service",
+    description="Orchestration, projects, tasks, HITL workflow, saga coordination",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
+    redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
+)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
+    request.state.correlation_id = correlation_id
+
+    response = await call_next(request)
+    response.headers["X-Correlation-ID"] = correlation_id
+
+    return response
+
+
+@app.middleware("http")
+async def logging_middleware(request: Request, call_next):
+    logger.info(
+        "Request started",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "correlation_id": getattr(request.state, "correlation_id", None),
+        },
+    )
+
+    response = await call_next(request)
+
+    logger.info(
+        "Request completed",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "correlation_id": getattr(request.state, "correlation_id", None),
+        },
+    )
+
+    return response
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        f"Unhandled exception: {str(exc)}",
+        extra={
+            "path": request.url.path,
+            "correlation_id": getattr(request.state, "correlation_id", None),
+        },
+        exc_info=True,
+    )
+
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "detail": "Internal server error",
+            "correlation_id": getattr(request.state, "correlation_id", None),
+        },
+    )
+
+
+@app.get("/health", status_code=status.HTTP_200_OK)
+async def health_check():
+    return {
+        "status": "healthy",
+        "service": "management-service",
+        "version": "1.0.0",
+    }
+
+
+@app.get("/health/ready", status_code=status.HTTP_200_OK)
+async def readiness_check():
+    db_healthy = False
+    rabbitmq_healthy = False
+
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+        db_healthy = True
+    except Exception as exc:
+        logger.error(f"Database health check failed: {exc}")
+    finally:
+        db.close()
+
+    try:
+        rabbitmq_healthy = await check_rabbitmq_connection()
+    except Exception as exc:
+        logger.error(f"RabbitMQ health check failed: {exc}")
+
+    if not db_healthy or not rabbitmq_healthy:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "status": "unhealthy",
+                "database": "up" if db_healthy else "down",
+                "rabbitmq": "up" if rabbitmq_healthy else "down",
+            },
+        )
+
+    return {
+        "status": "ready",
+        "database": "up",
+        "rabbitmq": "up",
+    }
+
+
+def _include_optional_routers(app: FastAPI) -> None:
+    try:
+        from services.management_service.api.endpoints import projects, tasks, hitl, internal
+    except Exception as exc:
+        logger.warning(
+            "API routers are not available; skipping registration",
+            extra={"error": str(exc)},
+        )
+        return
+
+    app.include_router(
+        projects.router,
+        prefix="/api/v1/projects",
+        tags=["projects"],
+    )
+
+    app.include_router(
+        tasks.router,
+        prefix="/api/v1/tasks",
+        tags=["tasks"],
+    )
+
+    app.include_router(
+        hitl.router,
+        prefix="/api/v1/hitl",
+        tags=["hitl"],
+    )
+
+    app.include_router(
+        internal.router,
+        prefix="/internal",
+        tags=["internal"],
+    )
+
+
+_include_optional_routers(app)
+
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "services.management_service.main:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.ENVIRONMENT == "development",
+        log_level=settings.LOG_LEVEL.lower(),
+    )

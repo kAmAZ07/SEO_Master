@@ -12,7 +12,11 @@ from services.management_service.config import settings
 from services.management_service.db.models import Project, Task, TaskType, TaskStatus
 from services.management_service.db.session import get_db
 from services.management_service.events.task_created import publish_task_created_event
+<<<<<<< HEAD
 from config.logging_config import get_logger
+=======
+from config.loggingconfig import get_logger
+>>>>>>> b1c8d319cacd3de5d12893d9b89864aee6368263
 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from prometheus_client import Counter, Histogram

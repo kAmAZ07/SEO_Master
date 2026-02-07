@@ -1,0 +1,81 @@
+# EditorConfig for SEO Web-Application
+# https://editorconfig.org
+
+root = true
+
+# Defaults for all files
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+# Python files (FastAPI, Celery, Scrapy)
+[*.py]
+indent_size = 4
+max_line_length = 120
+
+# YAML files (Docker Compose, configs, CI/CD)
+[*.{yml,yaml}]
+indent_size = 2
+
+# JSON files (configs, API schemas)
+[*.json]
+indent_size = 2
+
+# Markdown documentation
+[*.md]
+indent_size = 2
+trim_trailing_whitespace = false
+max_line_length = off
+
+# Shell scripts (deployment, setup)
+[*.sh]
+indent_size = 2
+end_of_line = lf
+
+# Dockerfile
+[Dockerfile*]
+indent_size = 2
+
+# Requirements files
+[requirements*.txt]
+indent_size = 4
+
+# Environment files
+[.env*]
+indent_size = 4
+trim_trailing_whitespace = false
+
+# HTML templates (если используются Jinja2)
+[*.html]
+indent_size = 2
+
+# CSS/SCSS
+[*.{css,scss}]
+indent_size = 2
+
+# JavaScript/TypeScript (если есть фронтенд)
+[*.{js,ts,jsx,tsx}]
+indent_size = 2
+
+# SQL migration files
+[*.sql]
+indent_size = 2
+
+# XML/SVG
+[*.{xml,svg}]
+indent_size = 2
+
+# INI/CFG files
+[*.{ini,cfg}]
+indent_size = 4
+
+# Makefile
+[Makefile]
+indent_style = tab
+
+# TOML (poetry, pyproject.toml)
+[*.toml]
+indent_size = 4

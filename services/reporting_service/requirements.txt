@@ -18,3 +18,5 @@ google-auth==2.36.0
 google-auth-oauthlib==1.2.1
 
 pytest==8.3.3
+
+greenlet==3.1.1

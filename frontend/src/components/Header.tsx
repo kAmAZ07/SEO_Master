@@ -1,116 +1,46 @@
-import { Link, useNavigate } from 'react-router-dom'
-import { useAppSelector, useAppDispatch } from '@/store/hooks'
-import { logout } from '@/store/slices/authSlice'
-import Button from './ui/Button'
-import { Menu, X } from 'lucide-react'
-import { useState } from 'react'
+import { Link } from 'react-router-dom';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { logout } from '../store/slices/authSlice';
 
-export default function Header() {
-  const { isAuthenticated, user } = useAppSelector((state) => state.auth)
-  const dispatch = useAppDispatch()
-  const navigate = useNavigate()
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+const Header = () => {
+  const dispatch = useAppDispatch();
+  const { user } = useAppSelector((state) => state.auth);
 
   const handleLogout = () => {
-    dispatch(logout())
-    navigate('/')
-  }
+    dispatch(logout());
+  };
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="container flex h-16 items-center justify-between">
-        <Link to="/" className="flex items-center space-x-2">
-          <span className="text-xl font-bold">SEO Master</span>
+    <header className="fixed top-0 left-0 right-0 h-16 bg-white border-b border-gray-200 z-50">
+      <div className="h-full px-6 flex items-center justify-between">
+        <Link to="/" className="flex items-center">
+          <h1 className="text-2xl font-bold text-blue-600">SEO Master</h1>
         </Link>
-
-        <nav className="hidden md:flex items-center space-x-6">
-          <Link to="/" className="text-sm font-medium transition-colors hover:text-primary">
-            Главная
-          </Link>
-          {isAuthenticated ? (
-            <>
-              <Link to="/dashboard" className="text-sm font-medium transition-colors hover:text-primary">
-                Дашборд
-              </Link>
-              <Link to="/hitl" className="text-sm font-medium transition-colors hover:text-primary">
-                Задачи
-              </Link>
-              <span className="text-sm text-muted-foreground">{user?.name}</span>
-              <Button variant="outline" size="sm" onClick={handleLogout}>
-                Выход
-              </Button>
-            </>
-          ) : (
-            <>
-              <Link to="/login">
-                <Button variant="outline" size="sm">
-                  Войти
-                </Button>
-              </Link>
-              <Link to="/register">
-                <Button size="sm">
-                  Регистрация
-                </Button>
-              </Link>
-            </>
-          )}
-        </nav>
-
-        <button
-          className="md:hidden"
-          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-        >
-          {mobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
-        </button>
-      </div>
-
-      {mobileMenuOpen && (
-        <div className="md:hidden border-t">
-          <nav className="container flex flex-col space-y-4 py-4">
-            <Link
-              to="/"
-              className="text-sm font-medium"
-              onClick={() => setMobileMenuOpen(false)}
-            >
-              Главная
-            </Link>
-            {isAuthenticated ? (
-              <>
-                <Link
-                  to="/dashboard"
-                  className="text-sm font-medium"
-                  onClick={() => setMobileMenuOpen(false)}
-                >
-                  Дашборд
-                </Link>
-                <Link
-                  to="/hitl"
-                  className="text-sm font-medium"
-                  onClick={() => setMobileMenuOpen(false)}
-                >
-                  Задачи
-                </Link>
-                <Button variant="outline" size="sm" onClick={handleLogout}>
-                  Выход
-                </Button>
-              </>
-            ) : (
-              <>
-                <Link to="/login" onClick={() => setMobileMenuOpen(false)}>
-                  <Button variant="outline" size="sm" className="w-full">
-                    Войти
-                  </Button>
-                </Link>
-                <Link to="/register" onClick={() => setMobileMenuOpen(false)}>
-                  <Button size="sm" className="w-full">
-                    Регистрация
-                  </Button>
-                </Link>
-              </>
-            )}
-          </nav>
+        
+        <div className="flex items-center gap-4">
+          <button className="p-2 text-gray-400 hover:text-gray-600 relative">
+            <span className="text-xl">🔔</span>
+            <span className="absolute top-1 right-1 h-2 w-2 bg-red-500 rounded-full"></span>
+          </button>
+          
+          <div className="flex items-center gap-3 border-l border-gray-200 pl-4">
+            <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-semibold">
+              {user?.email ? user.email[0].toUpperCase() : 'U'}
+            </div>
+            <div className="flex flex-col">
+              <span className="text-sm font-medium text-gray-900">{user?.email || 'Пользователь'}</span>
+              <button
+                onClick={handleLogout}
+                className="text-xs text-gray-500 hover:text-gray-700 text-left"
+              >
+                Выйти
+              </button>
+            </div>
+          </div>
         </div>
-      )}
+      </div>
     </header>
-  )
-}
+  );
+};
+
+export default Header;

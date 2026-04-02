@@ -3,6 +3,7 @@ export interface User {
   email: string;
   name: string;
   role: 'admin' | 'user';
+  company?: string;
 }
 
 export interface AuthState {
@@ -22,4 +23,15 @@ export interface RegisterData {
   email: string;
   password: string;
   name: string;
+}
+
+export interface UpdateProfilePayload {
+  name: string;
+  email: string;
+  company?: string;
+}
+
+export interface ChangePasswordPayload {
+  currentPassword: string;
+  newPassword: string;
 }

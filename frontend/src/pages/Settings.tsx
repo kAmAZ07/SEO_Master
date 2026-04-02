@@ -1,62 +1,68 @@
-import { useState } from 'react';
-import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { updateProfile, changePassword } from '../store/slices/authSlice';
-import Card from '../components/ui/Card';
-import Button from '../components/ui/Button';
-import Input from '../components/ui/Input';
+import { useState } from 'react'
+import { useAppDispatch, useAppSelector } from '../store/hooks'
+import { changePassword, updateProfile } from '../store/slices/authSlice'
+import Card from '../components/ui/Card'
+import Button from '../components/ui/Button'
+import Input from '../components/ui/Input'
 
 const Settings = () => {
-  const dispatch = useAppDispatch();
-  const { user, loading } = useAppSelector((state) => state.auth);
-  
+  const dispatch = useAppDispatch()
+  const { user, loading } = useAppSelector((state) => state.auth)
+
   const [profileData, setProfileData] = useState({
     name: user?.name || '',
     email: user?.email || '',
     company: user?.company || '',
-  });
+  })
 
   const [passwordData, setPasswordData] = useState({
     currentPassword: '',
     newPassword: '',
     confirmPassword: '',
-  });
+  })
 
   const [notifications, setNotifications] = useState({
     emailReports: true,
     weeklyDigest: true,
     auditAlerts: true,
     keywordChanges: false,
-  });
+  })
 
-  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'notifications'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'notifications'>('profile')
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await dispatch(updateProfile(profileData));
-  };
+    e.preventDefault()
+    await dispatch(updateProfile(profileData))
+  }
 
   const handleChangePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
+    e.preventDefault()
+
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      alert('Пароли не совпадают');
-      return;
+      alert('Passwords do not match')
+      return
     }
+
     if (passwordData.newPassword.length < 6) {
-      alert('Пароль должен содержать минимум 6 символов');
-      return;
+      alert('Password must contain at least 6 characters')
+      return
     }
-    await dispatch(changePassword({
-      currentPassword: passwordData.currentPassword,
-      newPassword: passwordData.newPassword,
-    }));
-    setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-  };
+
+    await dispatch(
+      changePassword({
+        currentPassword: passwordData.currentPassword,
+        newPassword: passwordData.newPassword,
+      })
+    )
+
+    setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' })
+  }
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Настройки</h1>
-        <p className="text-gray-600 mt-1">Управление вашим аккаунтом и настройками</p>
+        <h1 className="text-3xl font-bold text-gray-900">Settings</h1>
+        <p className="mt-1 text-gray-600">Manage your account and notification preferences.</p>
       </div>
 
       <div className="flex gap-4 border-b border-gray-200">
@@ -64,43 +70,43 @@ const Settings = () => {
           onClick={() => setActiveTab('profile')}
           className={`px-4 py-2 font-medium transition-colors ${
             activeTab === 'profile'
-              ? 'text-blue-600 border-b-2 border-blue-600'
+              ? 'border-b-2 border-blue-600 text-blue-600'
               : 'text-gray-600 hover:text-gray-900'
           }`}
         >
-          Профиль
+          Profile
         </button>
         <button
           onClick={() => setActiveTab('password')}
           className={`px-4 py-2 font-medium transition-colors ${
             activeTab === 'password'
-              ? 'text-blue-600 border-b-2 border-blue-600'
+              ? 'border-b-2 border-blue-600 text-blue-600'
               : 'text-gray-600 hover:text-gray-900'
           }`}
         >
-          Безопасность
+          Security
         </button>
         <button
           onClick={() => setActiveTab('notifications')}
           className={`px-4 py-2 font-medium transition-colors ${
             activeTab === 'notifications'
-              ? 'text-blue-600 border-b-2 border-blue-600'
+              ? 'border-b-2 border-blue-600 text-blue-600'
               : 'text-gray-600 hover:text-gray-900'
           }`}
         >
-          Уведомления
+          Notifications
         </button>
       </div>
 
       {activeTab === 'profile' && (
         <Card>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Информация профиля</h2>
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Profile information</h2>
           <form onSubmit={handleUpdateProfile} className="space-y-4">
             <Input
-              label="Имя"
+              label="Name"
               value={profileData.name}
               onChange={(e) => setProfileData({ ...profileData, name: e.target.value })}
-              placeholder="Ваше имя"
+              placeholder="Your name"
             />
             <Input
               label="Email"
@@ -111,13 +117,13 @@ const Settings = () => {
               required
             />
             <Input
-              label="Компания"
+              label="Company"
               value={profileData.company}
               onChange={(e) => setProfileData({ ...profileData, company: e.target.value })}
-              placeholder="Название компании"
+              placeholder="Company name"
             />
             <Button type="submit" disabled={loading}>
-              {loading ? 'Сохранение...' : 'Сохранить изменения'}
+              {loading ? 'Saving...' : 'Save changes'}
             </Button>
           </form>
         </Card>
@@ -125,32 +131,32 @@ const Settings = () => {
 
       {activeTab === 'password' && (
         <Card>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Изменить пароль</h2>
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Change password</h2>
           <form onSubmit={handleChangePassword} className="space-y-4">
             <Input
-              label="Текущий пароль"
+              label="Current password"
               type="password"
               value={passwordData.currentPassword}
               onChange={(e) => setPasswordData({ ...passwordData, currentPassword: e.target.value })}
               required
             />
             <Input
-              label="Новый пароль"
+              label="New password"
               type="password"
               value={passwordData.newPassword}
               onChange={(e) => setPasswordData({ ...passwordData, newPassword: e.target.value })}
-              placeholder="Минимум 6 символов"
+              placeholder="At least 6 characters"
               required
             />
             <Input
-              label="Подтвердите новый пароль"
+              label="Confirm new password"
               type="password"
               value={passwordData.confirmPassword}
               onChange={(e) => setPasswordData({ ...passwordData, confirmPassword: e.target.value })}
               required
             />
             <Button type="submit" disabled={loading}>
-              {loading ? 'Изменение...' : 'Изменить пароль'}
+              {loading ? 'Updating...' : 'Update password'}
             </Button>
           </form>
         </Card>
@@ -158,90 +164,84 @@ const Settings = () => {
 
       {activeTab === 'notifications' && (
         <Card>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Настройки уведомлений</h2>
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Notification settings</h2>
           <div className="space-y-4">
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+            <div className="flex items-center justify-between rounded-lg bg-gray-50 p-4">
               <div>
-                <h3 className="font-medium text-gray-900">Email отчеты</h3>
-                <p className="text-sm text-gray-600">Получать отчеты о проектах на email</p>
+                <h3 className="font-medium text-gray-900">Email reports</h3>
+                <p className="text-sm text-gray-600">Receive project reports by email.</p>
               </div>
-              abel className="relative inline-flex items-center cursor-pointer">
+              <label className="relative inline-flex cursor-pointer items-center">
                 <input
                   type="checkbox"
                   checked={notifications.emailReports}
                   onChange={(e) => setNotifications({ ...notifications, emailReports: e.target.checked })}
-                  className="sr-only peer"
+                  className="peer sr-only"
                 />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <div className="h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-blue-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300"></div>
               </label>
             </div>
 
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+            <div className="flex items-center justify-between rounded-lg bg-gray-50 p-4">
               <div>
-                <h3 className="font-medium text-gray-900">Еженедельный дайджест</h3>
-                <p className="text-sm text-gray-600">Сводка изменений раз в неделю</p>
+                <h3 className="font-medium text-gray-900">Weekly digest</h3>
+                <p className="text-sm text-gray-600">Get a weekly summary of changes.</p>
               </div>
-              abel className="relative inline-flex items-center cursor-pointer">
+              <label className="relative inline-flex cursor-pointer items-center">
                 <input
                   type="checkbox"
                   checked={notifications.weeklyDigest}
                   onChange={(e) => setNotifications({ ...notifications, weeklyDigest: e.target.checked })}
-                  className="sr-only peer"
+                  className="peer sr-only"
                 />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <div className="h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-blue-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300"></div>
               </label>
             </div>
 
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+            <div className="flex items-center justify-between rounded-lg bg-gray-50 p-4">
               <div>
-                <h3 className="font-medium text-gray-900">Уведомления об аудитах</h3>
-                <p className="text-sm text-gray-600">Получать уведомления при завершении аудита</p>
+                <h3 className="font-medium text-gray-900">Audit alerts</h3>
+                <p className="text-sm text-gray-600">Notify when an audit run is completed.</p>
               </div>
-              abel className="relative inline-flex items-center cursor-pointer">
+              <label className="relative inline-flex cursor-pointer items-center">
                 <input
                   type="checkbox"
                   checked={notifications.auditAlerts}
                   onChange={(e) => setNotifications({ ...notifications, auditAlerts: e.target.checked })}
-                  className="sr-only peer"
+                  className="peer sr-only"
                 />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <div className="h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-blue-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300"></div>
               </label>
             </div>
 
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+            <div className="flex items-center justify-between rounded-lg bg-gray-50 p-4">
               <div>
-                <h3 className="font-medium text-gray-900">Изменения позиций</h3>
-                <p className="text-sm text-gray-600">Уведомления о значительных изменениях позиций</p>
+                <h3 className="font-medium text-gray-900">Keyword position changes</h3>
+                <p className="text-sm text-gray-600">Alert on significant ranking position changes.</p>
               </div>
-              abel className="relative inline-flex items-center cursor-pointer">
+              <label className="relative inline-flex cursor-pointer items-center">
                 <input
                   type="checkbox"
                   checked={notifications.keywordChanges}
                   onChange={(e) => setNotifications({ ...notifications, keywordChanges: e.target.checked })}
-                  className="sr-only peer"
+                  className="peer sr-only"
                 />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <div className="h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-blue-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300"></div>
               </label>
             </div>
 
-            <Button onClick={() => console.log('Save notifications', notifications)}>
-              Сохранить настройки
-            </Button>
+            <Button onClick={() => console.log('Save notifications', notifications)}>Save notification settings</Button>
           </div>
         </Card>
       )}
 
       <Card className="border-red-200">
-        <h2 className="text-xl font-semibold text-red-600 mb-4">Опасная зона</h2>
-        <p className="text-gray-600 mb-4">
-          Удаление аккаунта приведет к безвозвратной потере всех данных и проектов.
-        </p>
-        <Button className="bg-red-600 hover:bg-red-700">
-          Удалить аккаунт
-        </Button>
+        <h2 className="mb-4 text-xl font-semibold text-red-600">Danger zone</h2>
+        <p className="mb-4 text-gray-600">Deleting your account permanently removes all projects and data.</p>
+        <Button className="bg-red-600 hover:bg-red-700">Delete account</Button>
       </Card>
     </div>
-  );
-};
+  )
+}
 
-export default Settings;
+export default Settings

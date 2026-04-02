@@ -1,11 +1,31 @@
 export interface AuditRequest {
   url: string;
+  projectId?: string | number;
+}
+
+export interface AuditIssueCounters {
+  passed: number;
+  warnings: number;
+  errors: number;
+}
+
+export interface AuditDetail {
+  title: string;
+  description: string;
+  status: 'success' | 'warning' | 'error';
+  recommendation?: string;
 }
 
 export interface AuditStatus {
-  uid: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  progress: number;
+  uid?: string;
+  id?: string;
+  url?: string;
+  createdAt?: string;
+  status: 'queued' | 'running' | 'pending' | 'processing' | 'in_progress' | 'completed' | 'failed';
+  progress?: number;
+  score?: number;
+  issues?: AuditIssueCounters;
+  details?: AuditDetail[];
   result?: AuditResult;
   error?: string;
 }

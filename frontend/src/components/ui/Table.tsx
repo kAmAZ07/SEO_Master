@@ -1,7 +1,9 @@
+import { ReactNode } from 'react'
+
 interface TableProps {
-  headers: string[];
-  data: any[][];
-  className?: string;
+  headers: string[]
+  data: ReactNode[][]
+  className?: string
 }
 
 const Table = ({ headers, data, className = '' }: TableProps) => {
@@ -11,7 +13,7 @@ const Table = ({ headers, data, className = '' }: TableProps) => {
         <thead>
           <tr className="border-b border-gray-200">
             {headers.map((header, index) => (
-              <th key={index} className="text-left py-3 px-4 text-sm font-medium text-gray-700">
+              <th key={index} className="px-4 py-3 text-left text-sm font-medium text-gray-700">
                 {header}
               </th>
             ))}
@@ -19,9 +21,9 @@ const Table = ({ headers, data, className = '' }: TableProps) => {
         </thead>
         <tbody>
           {data.map((row, rowIndex) => (
-            <tr key={rowIndex} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+            <tr key={rowIndex} className="border-b border-gray-100 transition-colors hover:bg-gray-50">
               {row.map((cell, cellIndex) => (
-                <td key={cellIndex} className="py-3 px-4 text-sm text-gray-900">
+                <td key={cellIndex} className="px-4 py-3 text-sm text-gray-900">
                   {cell}
                 </td>
               ))}
@@ -30,7 +32,7 @@ const Table = ({ headers, data, className = '' }: TableProps) => {
         </tbody>
       </table>
     </div>
-  );
-};
+  )
+}
 
-export default Table;
+export default Table

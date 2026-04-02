@@ -4,14 +4,14 @@ export const ROUTES = {
   HOME: '/',
   LOGIN: '/login',
   REGISTER: '/register',
-  DASHBOARD: '/',
-  PROJECTS: '/projects',
-  PROJECT_DETAIL: '/projects/:id',
-  AUDIT: '/audit',
-  KEYWORDS: '/keywords',
-  CONTENT: '/content',
-  BACKLINKS: '/backlinks',
-  SETTINGS: '/settings',
+  DASHBOARD: '/app',
+  PROJECTS: '/app/projects',
+  PROJECT_DETAIL: '/app/projects/:id',
+  AUDIT: '/app/audit',
+  KEYWORDS: '/app/keywords',
+  CONTENT: '/app/content',
+  BACKLINKS: '/app/backlinks',
+  SETTINGS: '/app/settings',
 };
 
 export const SEO_SCORE_THRESHOLDS = {
@@ -22,11 +22,11 @@ export const SEO_SCORE_THRESHOLDS = {
 };
 
 export const KEYWORD_DIFFICULTY = {
-  VERY_EASY: { min: 0, max: 20, label: 'Очень легко' },
-  EASY: { min: 21, max: 40, label: 'Легко' },
-  MEDIUM: { min: 41, max: 60, label: 'Средне' },
-  HARD: { min: 61, max: 80, label: 'Сложно' },
-  VERY_HARD: { min: 81, max: 100, label: 'Очень сложно' },
+  VERY_EASY: { min: 0, max: 20, label: 'Very easy' },
+  EASY: { min: 21, max: 40, label: 'Easy' },
+  MEDIUM: { min: 41, max: 60, label: 'Medium' },
+  HARD: { min: 61, max: 80, label: 'Hard' },
+  VERY_HARD: { min: 81, max: 100, label: 'Very hard' },
 };
 
 export const CHART_COLORS = {

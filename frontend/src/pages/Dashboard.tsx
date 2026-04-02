@@ -1,136 +1,128 @@
-import { useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { fetchDashboardStats } from '../store/slices/dashboardSlice';
-import Card from '../components/ui/Card';
-import Loader from '../components/ui/Loader';
+import { useEffect } from 'react'
+import { Link } from 'react-router-dom'
+import { FolderOpenDot, KeyRound, Link2, Radar } from 'lucide-react'
+import { useAppDispatch, useAppSelector } from '../store/hooks'
+import { fetchDashboardStats } from '../store/slices/dashboardSlice'
+import { Project, RecentAudit } from '../types/dashboard'
+import Card from '../components/ui/Card'
+import Loader from '../components/ui/Loader'
 
 const Dashboard = () => {
-  const dispatch = useAppDispatch();
-  const { stats, loading } = useAppSelector((state) => state.dashboard);
+  const dispatch = useAppDispatch()
+  const { stats, loading } = useAppSelector((state) => state.dashboard)
 
   useEffect(() => {
-    dispatch(fetchDashboardStats());
-  }, [dispatch]);
+    dispatch(fetchDashboardStats())
+  }, [dispatch])
 
   if (loading) {
-    return <Loader />;
+    return <Loader />
   }
 
   const statsCards = [
     {
-      title: 'Всего проектов',
+      title: 'Total projects',
       value: stats?.totalProjects || 0,
-      icon: '📁',
-      color: 'blue',
-      link: '/projects',
+      Icon: FolderOpenDot,
+      link: '/app/projects',
     },
     {
-      title: 'Активных проверок',
+      title: 'Active audits',
       value: stats?.activeAudits || 0,
-      icon: '🔍',
-      color: 'green',
-      link: '/audit',
+      Icon: Radar,
+      link: '/app/audit',
     },
     {
-      title: 'Ключевых слов',
+      title: 'Tracked keywords',
       value: stats?.totalKeywords || 0,
-      icon: '🔑',
-      color: 'purple',
-      link: '/keywords',
+      Icon: KeyRound,
+      link: '/app/keywords',
     },
     {
-      title: 'Обратных ссылок',
+      title: 'Backlinks',
       value: stats?.totalBacklinks || 0,
-      icon: '🔗',
-      color: 'orange',
-      link: '/backlinks',
+      Icon: Link2,
+      link: '/app/backlinks',
     },
-  ];
+  ]
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Панель управления</h1>
-        <p className="text-gray-600 mt-1">Обзор ваших SEO проектов</p>
+        <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
+        <p className="mt-1 text-gray-600">Overview of your SEO projects and recent activity.</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
         {statsCards.map((stat) => (
           <Link key={stat.title} to={stat.link}>
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer">
+            <Card className="cursor-pointer transition-shadow hover:shadow-lg">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-gray-600">{stat.title}</p>
-                  <p className="text-3xl font-bold text-gray-900 mt-2">{stat.value}</p>
+                  <p className="mt-2 text-3xl font-bold text-gray-900">{stat.value}</p>
                 </div>
-                <div className={`text-5xl opacity-20`}>{stat.icon}</div>
+                <stat.Icon className="h-9 w-9 text-gray-400" />
               </div>
             </Card>
           </Link>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Последние проекты</h2>
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Recent projects</h2>
           {stats?.recentProjects && stats.recentProjects.length > 0 ? (
             <div className="space-y-3">
-              {stats.recentProjects.map((project: any) => (
+              {stats.recentProjects.map((project: Project) => (
                 <div
                   key={project.id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+                  className="flex items-center justify-between rounded-lg bg-gray-50 p-3 transition-colors hover:bg-gray-100"
                 >
                   <div>
                     <h3 className="font-medium text-gray-900">{project.name}</h3>
                     <p className="text-sm text-gray-600">{project.url}</p>
                   </div>
-                  <Link
-                    to={`/projects/${project.id}`}
-                    className="text-blue-600 hover:text-blue-700 text-sm font-medium"
-                  >
-                    Открыть
+                  <Link to={`/app/projects/${project.id}`} className="text-sm font-medium text-blue-600 hover:text-blue-700">
+                    Open
                   </Link>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-gray-500 text-center py-8">Нет проектов</p>
+            <p className="py-8 text-center text-gray-500">No projects yet.</p>
           )}
         </Card>
 
         <Card>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Последние аудиты</h2>
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Recent audits</h2>
           {stats?.recentAudits && stats.recentAudits.length > 0 ? (
             <div className="space-y-3">
-              {stats.recentAudits.map((audit: any) => (
-                <div
-                  key={audit.id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                >
+              {stats.recentAudits.map((audit: RecentAudit) => (
+                <div key={audit.id} className="flex items-center justify-between rounded-lg bg-gray-50 p-3">
                   <div>
                     <h3 className="font-medium text-gray-900">{audit.url}</h3>
-                    <p className="text-sm text-gray-600">Оценка: {audit.score}/100</p>
+                    <p className="text-sm text-gray-600">Score: {audit.score}/100</p>
                   </div>
                   <span
-                    className={`px-3 py-1 rounded-full text-xs font-medium ${
+                    className={`rounded-full px-3 py-1 text-xs font-medium ${
                       audit.status === 'completed'
                         ? 'bg-green-100 text-green-800'
                         : 'bg-yellow-100 text-yellow-800'
                     }`}
                   >
-                    {audit.status === 'completed' ? 'Завершён' : 'В процессе'}
+                    {audit.status === 'completed' ? 'Completed' : 'In progress'}
                   </span>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-gray-500 text-center py-8">Нет аудитов</p>
+            <p className="py-8 text-center text-gray-500">No audits yet.</p>
           )}
         </Card>
       </div>
     </div>
-  );
-};
+  )
+}
 
-export default Dashboard;
+export default Dashboard

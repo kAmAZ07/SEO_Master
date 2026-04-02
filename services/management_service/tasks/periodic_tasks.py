@@ -1,4 +1,4 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 import httpx
@@ -17,14 +17,10 @@ logger = get_logger(__name__)
     name="services.management_service.tasks.periodic_tasks.daily_ff_score_recalculation"
 )
 def daily_ff_score_recalculation() -> Dict[str, Any]:
-    ffscore_endpoint = "/internal/ff-score/calculate"
+    ffscore_endpoint = "/semantic/ff-score"
     if not settings.SEMANTIC_SERVICE_URL:
         logger.warning("SEMANTIC_SERVICE_URL is not configured")
         return {"status": "skipped", "reason": "semantic_service_url_missing"}
-
-    if not settings.INTERNAL_API_KEY:
-        logger.warning("INTERNAL_API_KEY is not configured")
-        return {"status": "skipped", "reason": "internal_api_key_missing"}
 
     db = SessionLocal()
     try:
@@ -36,17 +32,17 @@ def daily_ff_score_recalculation() -> Dict[str, Any]:
 
         for project in projects:
             metadata = project.metadata or {}
-            payload: Dict[str, Any] = {"project_id": str(project.id)}
-            latest_crawl_id = metadata.get("latest_crawl_id") or metadata.get("crawl_id")
-            if latest_crawl_id:
-                payload["crawl_id"] = latest_crawl_id
 
-            url_value = metadata.get("root_url") or metadata.get("url")
-            if not url_value:
-                if isinstance(project.domain, str) and "://" in project.domain:
-                    url_value = project.domain
-            if url_value:
-                payload["url"] = url_value
+            root_url = metadata.get("root_url") or metadata.get("url")
+            if not root_url:
+                domain = project.domain or ""
+                root_url = domain if "://" in domain else f"https://{domain}"
+
+            payload: Dict[str, Any] = {
+                "project_id": str(project.id),
+                "root_url": root_url,
+                "content_text": metadata.get("last_crawl_text", ""),
+            }
 
             correlation_id = f"ffscore-recalc-{project.id}"
             try:
@@ -55,7 +51,6 @@ def daily_ff_score_recalculation() -> Dict[str, Any]:
                         f"{settings.SEMANTIC_SERVICE_URL}{ffscore_endpoint}",
                         json=payload,
                         headers={
-                            "X-Internal-API-Key": settings.INTERNAL_API_KEY,
                             "X-Correlation-ID": correlation_id,
                         },
                     )

@@ -90,6 +90,26 @@ def _build_patch_ops_from_dict(
     return ops
 
 
+def _build_reverse_patch_ops(ops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    reversed_ops: List[Dict[str, Any]] = []
+    for op in reversed(ops):
+        op_name = str(op.get("op") or "").lower()
+        path = op.get("path")
+        if not path:
+            continue
+
+        if op_name == "add":
+            reversed_ops.append({"op": "remove", "path": path})
+        elif op_name == "remove":
+            if "old_value" in op:
+                reversed_ops.append({"op": "add", "path": path, "value": op.get("old_value")})
+        elif op_name == "replace":
+            if "old_value" in op:
+                reversed_ops.append({"op": "replace", "path": path, "value": op.get("old_value")})
+
+    return reversed_ops
+
+
 def _looks_like_patch(ops: Any) -> bool:
     if not isinstance(ops, list) or not ops:
         return False
@@ -152,6 +172,7 @@ class ClientAPIAdapter:
             "priority": changes_data.get("priority", 5),
             "metadata": {
                 **(changes_data.get("metadata", {})),
+                "deploy_contract": "diff-v1",
                 "correlation_id": correlation_id,
                 "deployed_at": datetime.utcnow().isoformat(),
                 "deployed_from": "management_service",
@@ -305,13 +326,32 @@ class ClientAPIAdapter:
             if not base_path:
                 base_path = "/value"
             op = "replace" if before not in (None, {}, []) else "add"
-            return [{"op": op, "path": base_path, "value": after}]
+            reverse_op = "replace" if after not in (None, {}, []) and before not in (None, {}, []) else "remove"
+            patch_op = {"op": op, "path": base_path, "value": after}
+            if before not in (None, {}, []):
+                patch_op["old_value"] = before
+            if reverse_op == "replace":
+                patch_op["reverse"] = {"op": reverse_op, "path": base_path, "value": before}
+            else:
+                patch_op["reverse"] = {"op": reverse_op, "path": base_path}
+            return [patch_op]
 
         if isinstance(after, dict):
-            return _build_patch_ops_from_dict(before or {}, after, base_path)
+            ops = _build_patch_ops_from_dict(before or {}, after, base_path)
+            for patch_op in ops:
+                path = patch_op.get("path")
+                if not path:
+                    continue
+                key = path.split("/")[-1].replace("~1", "/").replace("~0", "~")
+                if isinstance(before, dict) and key in before:
+                    patch_op["old_value"] = before.get(key)
+            return ops
 
         if base_path:
-            return [{"op": "replace", "path": base_path, "value": after}]
+            op = {"op": "replace", "path": base_path, "value": after}
+            if before not in (None, {}, []):
+                op["old_value"] = before
+            return [op]
 
         return [{"op": "replace", "path": "/value", "value": after}]
 
@@ -333,6 +373,14 @@ class ClientAPIAdapter:
             raise ValueError("entity_id and entity_type are required for HMAC patch")
 
         changes_ops = self._build_json_patch_ops(change_type, changes_data, task)
+        rollback_ops = _build_reverse_patch_ops(changes_ops)
+        metadata = changes_data.get("metadata", {}) or {}
+        metadata = {
+            **metadata,
+            "deploy_contract": "patch-v1",
+            "diff": changes_data.get("changes"),
+            "rollback_changes": rollback_ops,
+        }
 
         payload = {
             "project_id": str(project_id),
@@ -340,7 +388,7 @@ class ClientAPIAdapter:
             "entity_id": entity_id,
             "entity_type": entity_type,
             "changes": changes_ops,
-            "metadata": changes_data.get("metadata", {}) or {},
+            "metadata": metadata,
         }
 
         if correlation_id:

@@ -458,7 +458,9 @@ async def handle_hitl_approved_event(
     payload = event.get("payload", {})
     task_id = payload.get("task_id")
     approved_by = payload.get("approved_by")
-    auto_deploy = payload.get("auto_deploy", True)
+    auto_deploy = payload.get("auto_deploy")
+    if auto_deploy is None:
+        auto_deploy = payload.get("auto_deployed", True)
     notes = payload.get("notes")
     
     if not task_id:

@@ -160,7 +160,7 @@ class HITLApproval(Base):
 
 
 class Changelog(Base):
-    __tablename__ = "changelog"
+    __tablename__ = "management_changelog"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
@@ -187,10 +187,10 @@ class Changelog(Base):
     task = relationship("Task", back_populates="changelogs")
     
     __table_args__ = (
-        Index("idx_changelog_project_id", "project_id"),
-        Index("idx_changelog_task_id", "task_id"),
-        Index("idx_changelog_entity_id", "entity_id"),
-        Index("idx_changelog_applied", "applied"),
-        Index("idx_changelog_created_at", "created_at"),
-        Index("idx_changelog_project_entity", "project_id", "entity_id"),
+        Index("idx_management_changelog_project_id", "project_id"),
+        Index("idx_management_changelog_task_id", "task_id"),
+        Index("idx_management_changelog_entity_id", "entity_id"),
+        Index("idx_management_changelog_applied", "applied"),
+        Index("idx_management_changelog_created_at", "created_at"),
+        Index("idx_management_changelog_project_entity", "project_id", "entity_id"),
     )

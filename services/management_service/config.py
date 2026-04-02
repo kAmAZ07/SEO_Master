@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     
     AUDIT_SERVICE_URL: str = Field(default="http://localhost:8001", env="AUDIT_SERVICE_URL")
     SEMANTIC_SERVICE_URL: str = Field(default="http://localhost:8002", env="SEMANTIC_SERVICE_URL")
-    REPORTING_SERVICE_URL: str = Field(default="http://localhost:8004", env="REPORTING_SERVICE_URL")
-    CLIENT_GATEWAY_URL: str = Field(default="http://localhost:8006", env="CLIENT_GATEWAY_URL")
+    REPORTING_SERVICE_URL: str = Field(default="http://localhost:8003", env="REPORTING_SERVICE_URL")
+    CLIENT_GATEWAY_URL: str = Field(default="http://localhost:8005", env="CLIENT_GATEWAY_URL")
     
     CORS_ORIGINS: List[str] = Field(
         default=["http://localhost:3000", "http://localhost:5173"],
@@ -91,3 +91,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+

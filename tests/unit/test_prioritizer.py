@@ -1,22 +1,18 @@
-﻿import importlib
+import importlib
 import sys
 import types
 import enum
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 
 def _install_prioritizer_stubs():
-    if "app" in sys.modules:
-        return
-
-    app = types.ModuleType("app")
-    core = types.ModuleType("app.core")
-    config = types.ModuleType("app.core.config")
-    logging_mod = types.ModuleType("app.core.logging")
-    db = types.ModuleType("app.db")
-    models = types.ModuleType("app.db.models")
+    sqlalchemy_module = types.ModuleType("sqlalchemy")
+    sqlalchemy_orm_module = types.ModuleType("sqlalchemy.orm")
+    config_module = types.ModuleType("services.management_service.config")
+    db_models_module = types.ModuleType("services.management_service.db.models")
+    logging_module = types.ModuleType("config.logging_config")
 
     class Settings:
         TASK_PRIORITY_IMPACT_WEIGHT = 0.6
@@ -26,49 +22,55 @@ def _install_prioritizer_stubs():
 
     class DummyLogger:
         def info(self, *args, **kwargs):
-            pass
+            return None
+
         def error(self, *args, **kwargs):
-            pass
+            return None
+
+        def warning(self, *args, **kwargs):
+            return None
 
     class TaskType(enum.Enum):
-        UPDATE_META_TAGS = "UPDATE_META_TAGS"
-        UPDATE_SCHEMA_ORG = "UPDATE_SCHEMA_ORG"
-        UPDATE_H1 = "UPDATE_H1"
+        UPDATE_META = "UPDATE_META"
+        UPDATE_CONTENT = "UPDATE_CONTENT"
+        ADD_INTERNAL_LINKS = "ADD_INTERNAL_LINKS"
+        UPDATE_SCHEMA = "UPDATE_SCHEMA"
+        FIX_404 = "FIX_404"
+        UPDATE_TILDA_PAGE = "UPDATE_TILDA_PAGE"
         OPTIMIZE_IMAGES = "OPTIMIZE_IMAGES"
         FIX_BROKEN_LINKS = "FIX_BROKEN_LINKS"
-        IMPROVE_PAGE_SPEED = "IMPROVE_PAGE_SPEED"
-        REWRITE_CONTENT = "REWRITE_CONTENT"
-        ADD_INTERNAL_LINKS = "ADD_INTERNAL_LINKS"
-        UPDATE_CANONICAL = "UPDATE_CANONICAL"
-        FIX_DUPLICATE_CONTENT = "FIX_DUPLICATE_CONTENT"
 
     class TaskStatus(enum.Enum):
         PENDING = "PENDING"
-        QUEUED = "QUEUED"
 
     class Task:
         pass
 
-    config.settings = Settings()
-    logging_mod.logger = DummyLogger()
+    class Session:
+        pass
 
-    models.TaskType = TaskType
-    models.TaskStatus = TaskStatus
-    models.Task = Task
+    sqlalchemy_orm_module.Session = Session
+    sqlalchemy_module.orm = sqlalchemy_orm_module
 
-    sys.modules["app"] = app
-    sys.modules["app.core"] = core
-    sys.modules["app.core.config"] = config
-    sys.modules["app.core.logging"] = logging_mod
-    sys.modules["app.db"] = db
-    sys.modules["app.db.models"] = models
+    config_module.settings = Settings()
+    db_models_module.TaskType = TaskType
+    db_models_module.TaskStatus = TaskStatus
+    db_models_module.Task = Task
+    logging_module.get_logger = lambda *args, **kwargs: DummyLogger()
+
+    sys.modules["sqlalchemy"] = sqlalchemy_module
+    sys.modules["sqlalchemy.orm"] = sqlalchemy_orm_module
+    sys.modules["services.management_service.config"] = config_module
+    sys.modules["services.management_service.db.models"] = db_models_module
+    sys.modules["config.logging_config"] = logging_module
 
 
 def _import_prioritizer():
     _install_prioritizer_stubs()
-    if "services.management_service.prioritizer" in sys.modules:
-        return importlib.reload(sys.modules["services.management_service.prioritizer"])
-    return importlib.import_module("services.management_service.prioritizer")
+    module_name = "services.management_service.prioritizer"
+    if module_name in sys.modules:
+        return importlib.reload(sys.modules[module_name])
+    return importlib.import_module(module_name)
 
 
 class DummyTask:
@@ -87,38 +89,39 @@ def test_calculate_impact():
 
 def test_calculate_priority_bounds():
     prioritizer = _import_prioritizer()
-    pr = prioritizer.calculate_priority(
+    priority = prioritizer.calculate_priority(
         current_ffscore=40,
         expected_ffscore=70,
-        task_type=prioritizer.TaskType.UPDATE_META_TAGS,
+        task_type=prioritizer.TaskType.UPDATE_META,
     )
-    assert 0.0 <= pr <= 1.0
+    assert 0.0 <= priority <= 1.0
 
 
 def test_should_auto_approve_true_for_low_risk():
     prioritizer = _import_prioritizer()
     task = DummyTask(
-        prioritizer.TaskType.UPDATE_META_TAGS,
+        prioritizer.TaskType.UPDATE_META,
         {"impact": 0.2, "effort": 0.3},
-        datetime.utcnow(),
+        datetime.now(timezone.utc),
     )
     assert prioritizer.should_auto_approve(task) is True
 
 
 def test_prioritize_tasks_sorts_by_priority():
     prioritizer = _import_prioritizer()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     task_high = DummyTask(
-        prioritizer.TaskType.UPDATE_META_TAGS,
+        prioritizer.TaskType.UPDATE_META,
         {"current_ffscore": 30, "expected_ffscore": 80},
         now - timedelta(minutes=5),
     )
     task_low = DummyTask(
-        prioritizer.TaskType.UPDATE_META_TAGS,
+        prioritizer.TaskType.UPDATE_META,
         {"current_ffscore": 70, "expected_ffscore": 75},
         now,
     )
 
     ordered = prioritizer.prioritize_tasks([task_low, task_high])
     assert ordered[0] is task_high
+

@@ -270,7 +270,7 @@ CREATE TRIGGER update_semantic_events_updated_at BEFORE UPDATE ON semantic_schem
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS reporting_schema.gsc_data (
-    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    id VARCHAR(36) NOT NULL DEFAULT uuid_generate_v4()::text,
     project_id VARCHAR(36) NOT NULL,
     date DATE NOT NULL,
     query VARCHAR(512),
@@ -281,7 +281,8 @@ CREATE TABLE IF NOT EXISTS reporting_schema.gsc_data (
     position DOUBLE PRECISION,
     raw_data JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    PRIMARY KEY (date, id)
 ) PARTITION BY RANGE (date);
 
 CREATE INDEX idx_gsc_project_id ON reporting_schema.gsc_data(project_id);
@@ -305,7 +306,7 @@ CREATE TRIGGER update_gsc_data_updated_at BEFORE UPDATE ON reporting_schema.gsc_
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS reporting_schema.ga4_data (
-    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    id VARCHAR(36) NOT NULL DEFAULT uuid_generate_v4()::text,
     project_id VARCHAR(36) NOT NULL,
     date DATE NOT NULL,
     page_path VARCHAR(2048),
@@ -318,7 +319,8 @@ CREATE TABLE IF NOT EXISTS reporting_schema.ga4_data (
     revenue DOUBLE PRECISION DEFAULT 0.0,
     raw_data JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    PRIMARY KEY (date, id)
 ) PARTITION BY RANGE (date);
 
 CREATE INDEX idx_ga4_project_id ON reporting_schema.ga4_data(project_id);
@@ -341,7 +343,7 @@ CREATE TRIGGER update_ga4_data_updated_at BEFORE UPDATE ON reporting_schema.ga4_
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS reporting_schema.yandex_webmaster_data (
-    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    id VARCHAR(36) NOT NULL DEFAULT uuid_generate_v4()::text,
     project_id VARCHAR(36) NOT NULL,
     date DATE NOT NULL,
     query VARCHAR(512),
@@ -352,7 +354,8 @@ CREATE TABLE IF NOT EXISTS reporting_schema.yandex_webmaster_data (
     position DOUBLE PRECISION,
     raw_data JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    PRIMARY KEY (date, id)
 ) PARTITION BY RANGE (date);
 
 CREATE INDEX idx_ym_project_id ON reporting_schema.yandex_webmaster_data(project_id);

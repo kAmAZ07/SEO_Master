@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Text, JSON, Float, Date, ForeignKey, Index, BigInteger, Boolean, DateTime
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-from database_config import Base
+from config.database_config import Base
 from pydantic import BaseModel, Field, validator, EmailStr
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
@@ -178,7 +178,7 @@ class FFScore(Base, TimestampMixin, UUIDMixin):
     familiarity_score = Column(Float, nullable=False)
     quality_score = Column(Float, nullable=False)
     calculated_at = Column(DateTime(timezone=True), server_default=func.now())
-    metadata = Column(JSON, nullable=True)
+    metadata_json = Column("metadata", JSON, nullable=True)
 
 
 class EEATScore(Base, TimestampMixin, UUIDMixin):

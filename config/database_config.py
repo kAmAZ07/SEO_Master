@@ -1,15 +1,11 @@
 import os
-from sqlalchemy import create_engine, event
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, scoped_session
-from sqlalchemy.pool import QueuePool
 from contextlib import contextmanager
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://user:password@postgres:5432/seo_platform"
-)
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
+from sqlalchemy.pool import QueuePool
 
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@postgres:5432/seo_platform")
 ASYNC_DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
 
 engine = create_engine(
@@ -20,24 +16,26 @@ engine = create_engine(
     pool_pre_ping=True,
     pool_recycle=3600,
     echo=os.getenv("SQL_ECHO", "false").lower() == "true",
-    connect_args={
-        "connect_timeout": 10,
-        "options": "-c timezone=Europe/Moscow"
-    }
+    connect_args={"connect_timeout": 10, "options": "-c timezone=Europe/Moscow"},
 )
 
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
-)
-
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Session = scoped_session(SessionLocal)
-
 Base = declarative_base()
 
-@contextmanager
+
 def get_db():
+    """FastAPI dependency: yields a DB session and always closes it."""
+    db = Session()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@contextmanager
+def get_db_context():
+    """Context-manager helper for scripts/background code."""
     db = Session()
     try:
         yield db
@@ -48,15 +46,13 @@ def get_db():
     finally:
         db.close()
 
+
 def get_db_dependency():
-    db = Session()
-    try:
-        yield db
-    finally:
-        db.close()
+    yield from get_db()
+
 
 @event.listens_for(engine, "connect")
-def set_search_path(dbapi_conn, connection_record):
+def set_search_path(dbapi_conn, _connection_record):
     existing_autocommit = dbapi_conn.autocommit
     dbapi_conn.autocommit = True
     cursor = dbapi_conn.cursor()
@@ -64,11 +60,14 @@ def set_search_path(dbapi_conn, connection_record):
     cursor.close()
     dbapi_conn.autocommit = existing_autocommit
 
+
 def init_db():
     Base.metadata.create_all(bind=engine)
 
+
 def drop_db():
     Base.metadata.drop_all(bind=engine)
+
 
 class DatabaseConfig:
     SQLALCHEMY_DATABASE_URI = DATABASE_URL
@@ -78,19 +77,20 @@ class DatabaseConfig:
     SQLALCHEMY_MAX_OVERFLOW = 40
     SQLALCHEMY_POOL_RECYCLE = 3600
     SQLALCHEMY_POOL_PRE_PING = True
-    
+
     ALEMBIC_CONFIG = "alembic.ini"
-    
+
     DB_SCHEMAS = {
         "audit": "audit_schema",
         "semantic": "semantic_schema",
         "reporting": "reporting_schema",
-        "shared": "public"
+        "shared": "public",
     }
 
-if os.getenv('ENVIRONMENT') == 'production':
+
+if os.getenv("ENVIRONMENT") == "production":
     engine.pool._use_threadlocal = True
-    
+
     DATABASE_URL_REPLICA = os.getenv("DATABASE_URL_REPLICA")
     if DATABASE_URL_REPLICA:
         replica_engine = create_engine(
@@ -99,5 +99,5 @@ if os.getenv('ENVIRONMENT') == 'production':
             pool_size=10,
             max_overflow=20,
             pool_pre_ping=True,
-            pool_recycle=3600
+            pool_recycle=3600,
         )

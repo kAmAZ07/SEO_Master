@@ -1,5 +1,11 @@
 import api from './axiosConfig'
-import { User, LoginCredentials, RegisterData } from '@/types/user'
+import {
+  ChangePasswordPayload,
+  LoginCredentials,
+  RegisterData,
+  UpdateProfilePayload,
+  User,
+} from '@/types/user'
 
 interface AuthResponse {
   user: User
@@ -19,6 +25,15 @@ export const register = async (data: RegisterData): Promise<AuthResponse> => {
 export const getCurrentUser = async (): Promise<User> => {
   const response = await api.get('/auth/me')
   return response.data
+}
+
+export const updateProfile = async (payload: UpdateProfilePayload): Promise<User> => {
+  const response = await api.patch('/auth/profile', payload)
+  return response.data
+}
+
+export const changePassword = async (payload: ChangePasswordPayload): Promise<void> => {
+  await api.post('/auth/change-password', payload)
 }
 
 export const logout = async (): Promise<void> => {

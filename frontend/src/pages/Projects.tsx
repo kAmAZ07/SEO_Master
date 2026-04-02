@@ -1,81 +1,72 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { fetchProjects, createProject, deleteProject } from '../store/slices/dashboardSlice';
-import Card from '../components/ui/Card';
-import Button from '../components/ui/Button';
-import Input from '../components/ui/Input';
-import Loader from '../components/ui/Loader';
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { useAppDispatch, useAppSelector } from '../store/hooks'
+import { createProject, deleteProject, fetchProjects } from '../store/slices/dashboardSlice'
+import { Project } from '../types/dashboard'
+import Card from '../components/ui/Card'
+import Button from '../components/ui/Button'
+import Input from '../components/ui/Input'
+import Loader from '../components/ui/Loader'
 
 const Projects = () => {
-  const dispatch = useAppDispatch();
-  const { projects, loading } = useAppSelector((state) => state.dashboard);
-  const [showModal, setShowModal] = useState(false);
-  const [newProject, setNewProject] = useState({ name: '', url: '', description: '' });
+  const dispatch = useAppDispatch()
+  const { projects, loading } = useAppSelector((state) => state.dashboard)
+  const [showModal, setShowModal] = useState(false)
+  const [newProject, setNewProject] = useState({ name: '', url: '', description: '' })
 
   useEffect(() => {
-    dispatch(fetchProjects());
-  }, [dispatch]);
+    dispatch(fetchProjects())
+  }, [dispatch])
 
   const handleCreateProject = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await dispatch(createProject(newProject));
-    setNewProject({ name: '', url: '', description: '' });
-    setShowModal(false);
-  };
+    e.preventDefault()
+    await dispatch(createProject(newProject))
+    setNewProject({ name: '', url: '', description: '' })
+    setShowModal(false)
+  }
 
-  const handleDeleteProject = async (id: number) => {
-    if (window.confirm('Вы уверены, что хотите удалить этот проект?')) {
-      await dispatch(deleteProject(id));
+  const handleDeleteProject = async (id: string) => {
+    if (window.confirm('Are you sure you want to delete this project?')) {
+      await dispatch(deleteProject(id))
     }
-  };
+  }
 
   if (loading && !projects.length) {
-    return <Loader />;
+    return <Loader />
   }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Мои проекты</h1>
-          <p className="text-gray-600 mt-1">Управление вашими SEO проектами</p>
+          <h1 className="text-3xl font-bold text-gray-900">Projects</h1>
+          <p className="mt-1 text-gray-600">Manage your SEO projects and workspaces.</p>
         </div>
-        <Button onClick={() => setShowModal(true)}>
-          + Создать проект
-        </Button>
+        <Button onClick={() => setShowModal(true)}>+ Create project</Button>
       </div>
 
-      {projects && projects.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {projects.map((project: any) => (
-            <Card key={project.id} className="hover:shadow-lg transition-shadow">
+      {projects.length > 0 ? (
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {projects.map((project: Project) => (
+            <Card key={project.id} className="transition-shadow hover:shadow-lg">
               <div className="space-y-4">
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <h3 className="text-lg font-semibold text-gray-900">{project.name}</h3>
-                    <p className="text-sm text-gray-600 mt-1">{project.url}</p>
-                    {project.description && (
-                      <p className="text-sm text-gray-500 mt-2">{project.description}</p>
-                    )}
+                    <p className="mt-1 text-sm text-gray-600">{project.url}</p>
+                    {project.description && <p className="mt-2 text-sm text-gray-500">{project.description}</p>}
                   </div>
-                  <button
-                    onClick={() => handleDeleteProject(project.id)}
-                    className="text-red-600 hover:text-red-700 text-sm"
-                  >
-                    ✕
+                  <button onClick={() => handleDeleteProject(project.id)} className="text-sm text-red-600 hover:text-red-700">
+                    Delete
                   </button>
                 </div>
-                
-                <div className="flex items-center justify-between pt-4 border-t border-gray-200">
+
+                <div className="flex items-center justify-between border-t border-gray-200 pt-4">
                   <span className="text-xs text-gray-500">
-                    Создан: {new Date(project.createdAt).toLocaleDateString('ru-RU')}
+                    Created: {project.createdAt ? new Date(project.createdAt).toLocaleDateString('ru-RU') : '-'}
                   </span>
-                  <Link
-                    to={`/projects/${project.id}`}
-                    className="text-blue-600 hover:text-blue-700 text-sm font-medium"
-                  >
-                    Открыть →
+                  <Link to={`/app/projects/${project.id}`} className="text-sm font-medium text-blue-600 hover:text-blue-700">
+                    Open
                   </Link>
                 </div>
               </div>
@@ -83,26 +74,26 @@ const Projects = () => {
           ))}
         </div>
       ) : (
-        <Card className="text-center py-12">
-          <p className="text-gray-500 mb-4">У вас пока нет проектов</p>
-          <Button onClick={() => setShowModal(true)}>Создать первый проект</Button>
+        <Card className="py-12 text-center">
+          <p className="mb-4 text-gray-500">No projects yet.</p>
+          <Button onClick={() => setShowModal(true)}>Create your first project</Button>
         </Card>
       )}
 
       {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">Новый проект</h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="w-full max-w-md rounded-lg bg-white p-6">
+            <h2 className="mb-4 text-2xl font-bold text-gray-900">New project</h2>
             <form onSubmit={handleCreateProject} className="space-y-4">
               <Input
-                label="Название проекта"
+                label="Project name"
                 value={newProject.name}
                 onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
-                placeholder="Мой сайт"
+                placeholder="My website"
                 required
               />
               <Input
-                label="URL сайта"
+                label="Website URL"
                 type="url"
                 value={newProject.url}
                 onChange={(e) => setNewProject({ ...newProject, url: e.target.value })}
@@ -110,23 +101,25 @@ const Projects = () => {
                 required
               />
               <div>
-                abel className="block text-sm font-medium text-gray-700 mb-1">
-                  Описание (опционально)
-                </label>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Description (optional)</label>
                 <textarea
                   value={newProject.description}
                   onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-transparent focus:ring-2 focus:ring-blue-500"
                   rows={3}
-                  placeholder="Краткое описание проекта"
+                  placeholder="Short project description"
                 />
               </div>
               <div className="flex gap-3 pt-4">
-                <Button type="button" onClick={() => setShowModal(false)} className="flex-1 bg-gray-200 text-gray-800 hover:bg-gray-300">
-                  Отмена
+                <Button
+                  type="button"
+                  onClick={() => setShowModal(false)}
+                  className="flex-1 bg-gray-200 text-gray-800 hover:bg-gray-300"
+                >
+                  Cancel
                 </Button>
                 <Button type="submit" className="flex-1">
-                  Создать
+                  Create
                 </Button>
               </div>
             </form>
@@ -134,7 +127,7 @@ const Projects = () => {
         </div>
       )}
     </div>
-  );
-};
+  )
+}
 
-export default Projects;
+export default Projects

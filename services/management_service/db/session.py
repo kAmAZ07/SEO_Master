@@ -9,7 +9,7 @@ from config.logging_config import get_logger
 logger = get_logger(__name__)
 
 engine = create_engine(
-    settings.DATABASE_URL,
+    str(settings.DATABASE_URL),
     poolclass=QueuePool,
     pool_size=20,
     max_overflow=40,
@@ -84,3 +84,4 @@ def get_db_health() -> dict:
             "database": "disconnected",
             "error": str(exc),
         }
+

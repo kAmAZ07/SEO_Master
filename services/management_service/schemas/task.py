@@ -1,10 +1,12 @@
 # services/management_service/schemas/task.py
 
-from typing import Optional, Dict, Any, List, TypedDict
 from datetime import datetime
-from pydantic import BaseModel, Field, UUID4
+from typing import Any, Dict, List, Optional
 
-from services.management_service.db.models import TaskType, TaskStatus
+from pydantic import BaseModel, Field, UUID4
+from typing_extensions import TypedDict
+
+from services.management_service.db.models import TaskStatus, TaskType
 
 
 class TaskMetadata(TypedDict, total=False):
@@ -40,7 +42,7 @@ class TaskBase(BaseModel):
     impact_score: Optional[float] = Field(0.5, ge=0.0, le=1.0)
     effort_score: Optional[float] = Field(0.5, ge=0.0, le=1.0)
     metadata: TaskMetadata = Field(default_factory=dict)
-    
+
     class Config:
         use_enum_values = True
 
@@ -59,7 +61,7 @@ class TaskUpdate(BaseModel):
     effort_score: Optional[float] = Field(None, ge=0.0, le=1.0)
     metadata: Optional[TaskMetadata] = None
     assigned_to: Optional[str] = None
-    
+
     class Config:
         use_enum_values = True
 
@@ -67,7 +69,7 @@ class TaskUpdate(BaseModel):
 class TaskStatusUpdate(BaseModel):
     status: TaskStatus
     metadata: Optional[TaskMetadata] = None
-    
+
     class Config:
         use_enum_values = True
 
@@ -90,7 +92,7 @@ class TaskResponse(BaseModel):
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
     deployed_at: Optional[datetime]
-    
+
     class Config:
         from_attributes = True
         use_enum_values = True
@@ -101,7 +103,7 @@ class TaskListResponse(BaseModel):
     total: int
     page: int
     page_size: int
-    
+
     class Config:
         from_attributes = True
 
@@ -110,16 +112,16 @@ class TaskPrioritizationRequest(BaseModel):
     project_id: UUID4
     max_tasks: Optional[int] = Field(10, ge=1, le=100)
     task_types: Optional[List[TaskType]] = None
-    
+
     class Config:
         use_enum_values = True
 
 
 class TaskPrioritizationResponse(BaseModel):
     tasks: List[TaskResponse]
-    prioritization_method: str = "Impact x Effort"
+    prioritization_method: str = 'Impact x Effort'
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    
+
     class Config:
         from_attributes = True
 
@@ -136,6 +138,6 @@ class TaskDeploymentResponse(BaseModel):
     change_id: Optional[str]
     deployed_at: Optional[datetime]
     error: Optional[str]
-    
+
     class Config:
         from_attributes = True

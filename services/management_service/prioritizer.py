@@ -3,19 +3,19 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from config.logging_config import get_logger
 from services.management_service.config import settings
 from services.management_service.db.models import Task, TaskStatus, TaskType
-from config.logging_config import get_logger
 
 
 logger = get_logger(__name__)
 
 
 class UrgencyLevel(str, Enum):
-    CRITICAL = "critical"
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
+    CRITICAL = 'critical'
+    HIGH = 'high'
+    MEDIUM = 'medium'
+    LOW = 'low'
 
 
 class EffortLevel(int, Enum):
@@ -36,6 +36,21 @@ TASK_TYPE_EFFORT_MAP: Dict[TaskType, EffortLevel] = {
     TaskType.OPTIMIZE_IMAGES: EffortLevel.MEDIUM,
     TaskType.FIX_BROKEN_LINKS: EffortLevel.LOW,
 }
+
+
+def _task_metadata(task: Task) -> Dict[str, Any]:
+    if hasattr(task, 'meta') and getattr(task, 'meta') is not None:
+        return getattr(task, 'meta')
+    if hasattr(task, 'metadata') and getattr(task, 'metadata') is not None:
+        return getattr(task, 'metadata')
+    return {}
+
+
+def _set_task_metadata(task: Task, metadata: Dict[str, Any]) -> None:
+    if hasattr(task, 'meta'):
+        task.meta = metadata
+    else:
+        task.metadata = metadata
 
 
 def calculate_combined_score(
@@ -111,13 +126,13 @@ def get_urgency_level(
 def calculate_effort(task_type: TaskType, metadata: Optional[Dict[str, Any]] = None) -> float:
     effort_level = TASK_TYPE_EFFORT_MAP.get(task_type, EffortLevel.MEDIUM)
 
-    if metadata and "custom_effort" in metadata:
+    if metadata and 'custom_effort' in metadata:
         try:
-            effort_level = EffortLevel(int(metadata["custom_effort"]))
+            effort_level = EffortLevel(int(metadata['custom_effort']))
         except Exception:
             logger.warning(
-                "Invalid custom_effort value, fallback to default",
-                extra={"task_type": task_type.value, "custom_effort": metadata.get("custom_effort")},
+                'Invalid custom_effort value, fallback to default',
+                extra={'task_type': task_type.value, 'custom_effort': metadata.get('custom_effort')},
             )
 
     return effort_level.value / 5.0
@@ -148,13 +163,13 @@ def calculate_priority(
 
 
 def calculate_task_priority(task: Task) -> float:
-    metadata = task.meta or {}
+    metadata = _task_metadata(task)
 
     return calculate_priority(
-        current_ffscore=metadata.get("current_ffscore"),
-        expected_ffscore=metadata.get("expected_ffscore"),
-        current_eeat=metadata.get("current_eeat"),
-        expected_eeat=metadata.get("expected_eeat"),
+        current_ffscore=metadata.get('current_ffscore'),
+        expected_ffscore=metadata.get('expected_ffscore'),
+        current_eeat=metadata.get('current_eeat'),
+        expected_eeat=metadata.get('expected_eeat'),
         task_type=task.task_type,
         metadata=metadata,
     )
@@ -164,34 +179,37 @@ def prioritize_tasks(tasks: List[Task]) -> List[Task]:
     prioritized: List[Task] = []
 
     for task in tasks:
-        metadata = task.meta or {}
+        metadata = _task_metadata(task)
 
         priority_score = calculate_task_priority(task)
         impact = calculate_impact(
-            metadata.get("current_ffscore"),
-            metadata.get("expected_ffscore"),
-            metadata.get("current_eeat"),
-            metadata.get("expected_eeat"),
+            metadata.get('current_ffscore'),
+            metadata.get('expected_ffscore'),
+            metadata.get('current_eeat'),
+            metadata.get('expected_eeat'),
         )
         urgency = calculate_urgency(
-            metadata.get("current_ffscore"),
-            metadata.get("current_eeat"),
+            metadata.get('current_ffscore'),
+            metadata.get('current_eeat'),
         )
         urgency_level = get_urgency_level(
-            metadata.get("current_ffscore"),
-            metadata.get("current_eeat"),
+            metadata.get('current_ffscore'),
+            metadata.get('current_eeat'),
         )
         effort = calculate_effort(task.task_type, metadata)
 
         task.priority_score = priority_score
-        task.meta = {
-            **metadata,
-            "priority_score": priority_score,
-            "impact": impact,
-            "urgency": urgency,
-            "urgency_level": urgency_level.value,
-            "effort": effort,
-        }
+        _set_task_metadata(
+            task,
+            {
+                **metadata,
+                'priority_score': priority_score,
+                'impact': impact,
+                'urgency': urgency,
+                'urgency_level': urgency_level.value,
+                'effort': effort,
+            },
+        )
         prioritized.append(task)
 
     return sorted(
@@ -209,7 +227,7 @@ def prioritize_project_tasks(db: Session, project_id: str, limit: Optional[int] 
 
     tasks = query.all()
     if not tasks:
-        logger.info("No tasks to prioritize", extra={"project_id": project_id})
+        logger.info('No tasks to prioritize', extra={'project_id': project_id})
         return []
 
     prioritized_tasks = prioritize_tasks(tasks)
@@ -218,11 +236,11 @@ def prioritize_project_tasks(db: Session, project_id: str, limit: Optional[int] 
     db.commit()
 
     logger.info(
-        "Tasks prioritized",
+        'Tasks prioritized',
         extra={
-            "project_id": project_id,
-            "tasks_count": len(prioritized_tasks),
-            "top_priority": prioritized_tasks[0].priority_score if prioritized_tasks else None,
+            'project_id': project_id,
+            'tasks_count': len(prioritized_tasks),
+            'top_priority': prioritized_tasks[0].priority_score if prioritized_tasks else None,
         },
     )
 
@@ -252,11 +270,8 @@ def should_auto_approve(task: Task) -> bool:
     if task.task_type not in low_risk_types:
         return False
 
-    metadata = task.meta or {}
-    impact = float(metadata.get("impact", 0.0) or 0.0)
-    effort = float(metadata.get("effort", 1.0) or 1.0)
+    metadata = _task_metadata(task)
+    impact = float(metadata.get('impact', 0.0) or 0.0)
+    effort = float(metadata.get('effort', 1.0) or 1.0)
 
     return impact <= 0.3 and effort <= 0.4
-
-
-

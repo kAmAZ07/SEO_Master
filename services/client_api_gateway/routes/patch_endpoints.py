@@ -1,8 +1,8 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field, root_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
 from services.client_api_gateway.auth import HMACAuthContext, hmac_auth
@@ -14,12 +14,15 @@ router = APIRouter(prefix='/api/client', tags=['client'])
 
 
 class JsonPatchOperation(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     op: Literal['add', 'remove', 'replace', 'move', 'copy', 'test']
     path: str
     from_: Optional[str] = Field(None, alias='from')
     value: Optional[Any] = None
 
-    @root_validator(pre=True)
+    @model_validator(mode='before')
+    @classmethod
     def validate_operation(cls, values):
         op = values.get('op')
         if op in ('add', 'replace', 'test') and 'value' not in values:
@@ -28,16 +31,13 @@ class JsonPatchOperation(BaseModel):
             raise ValueError(f"from is required for op '{op}'")
         return values
 
-    class Config:
-        allow_population_by_field_name = True
-
 
 class PatchRequest(BaseModel):
     project_id: str = Field(..., min_length=1)
     task_id: Optional[str] = None
     entity_id: str = Field(..., min_length=1)
     entity_type: str = Field(..., min_length=1)
-    changes: List[JsonPatchOperation] = Field(..., min_items=1)
+    changes: List[JsonPatchOperation] = Field(..., min_length=1)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     correlation_id: Optional[str] = None
 
@@ -62,7 +62,7 @@ async def _handle_patch(
             detail='Project ID mismatch',
         )
 
-    changes_payload = [op.dict(by_alias=True) for op in payload.changes]
+    changes_payload = [op.model_dump(by_alias=True) for op in payload.changes]
 
     log_entry = log_deployment(
         db=db,
@@ -100,9 +100,9 @@ async def _handle_patch(
         else:
             log_entry.status = 'received'
 
-        merged_metadata = dict(log_entry.metadata or {})
+        merged_metadata = dict(log_entry.meta or {})
         merged_metadata['dispatch'] = dispatch_result
-        log_entry.metadata = merged_metadata
+        log_entry.meta = merged_metadata
 
         db.add(log_entry)
         db.commit()

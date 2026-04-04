@@ -45,7 +45,7 @@ class TaskCreatedEvent(BaseModel):
             project_id=project_id,
             task_type=task_type,
             url=url,
-            meta=metadata or {},
+            metadata=metadata or {},
             correlation_id=correlation_id,
         )
         return cls(
@@ -78,7 +78,7 @@ async def publish_task_created_event(
         project_id=project_id,
         task_type=task_type_value,
         url=url,
-        meta=metadata,
+        metadata=metadata,
         correlation_id=correlation_id,
     )
 
@@ -111,4 +111,3 @@ async def publish_task_created_event(
             extra={"task_id": task_id, "correlation_id": correlation_id},
         )
         raise
-

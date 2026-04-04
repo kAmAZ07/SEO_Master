@@ -19,11 +19,7 @@ from services.management_service.schemas.hitl import (
 )
 from services.management_service.client_api_adapter import deploy_task_changes
 from services.management_service.events.hitl_approved import publish_hitl_approved_event
-<<<<<<< HEAD
 from config.logging_config import get_logger
-=======
-from config.loggingconfig import get_logger
->>>>>>> b1c8d319cacd3de5d12893d9b89864aee6368263
 from prometheus_client import Counter, Histogram
 
 logger = get_logger(__name__)
@@ -462,7 +458,9 @@ async def handle_hitl_approved_event(
     payload = event.get("payload", {})
     task_id = payload.get("task_id")
     approved_by = payload.get("approved_by")
-    auto_deploy = payload.get("auto_deploy", True)
+    auto_deploy = payload.get("auto_deploy")
+    if auto_deploy is None:
+        auto_deploy = payload.get("auto_deployed", True)
     notes = payload.get("notes")
     
     if not task_id:

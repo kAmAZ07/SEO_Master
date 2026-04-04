@@ -1,9 +1,11 @@
-﻿import uuid
-from unittest.mock import MagicMock
+import asyncio
+import uuid
 
 import pytest
 
-from services.management_service.db.models import Task, TaskType, TaskStatus, HITLApproval, HITLStatus
+pytest.importorskip("sqlalchemy")
+
+from services.management_service.db.models import HITLApproval, HITLStatus, Task, TaskStatus, TaskType
 from services.management_service.schemas.hitl import HITLApprovalCreate, HITLDecision
 from services.management_service import hitl_handler as hitl_module
 
@@ -86,41 +88,43 @@ def test_create_hitl_approval_creates_record():
     assert task.status == TaskStatus.PENDING
 
 
-@pytest.mark.asyncio
-async def test_approve_task_without_autodeploy(monkeypatch):
-    task = _make_task()
-    approval = HITLApproval(
-        task_id=task.id,
-        project_id=task.project_id,
-        status=HITLStatus.PENDING,
-        diff_data={"before": {}, "after": {}},
-    )
-    db = DbStub(task=task, approval=approval)
-    handler = hitl_module.HITLHandler(db)
+def test_approve_task_without_autodeploy(monkeypatch):
+    async def _run():
+        task = _make_task()
+        approval = HITLApproval(
+            task_id=task.id,
+            project_id=task.project_id,
+            status=HITLStatus.PENDING,
+            diff_data={"before": {}, "after": {}},
+        )
+        db = DbStub(task=task, approval=approval)
+        handler = hitl_module.HITLHandler(db)
 
-    async def fake_deploy(*args, **kwargs):
-        raise AssertionError("deploy_task_changes should not be called")
+        async def fake_deploy(*args, **kwargs):
+            raise AssertionError("deploy_task_changes should not be called")
 
-    async def fake_publish(*args, **kwargs):
-        return None
+        async def fake_publish(*args, **kwargs):
+            return None
 
-    monkeypatch.setattr(hitl_module, "deploy_task_changes", fake_deploy)
-    monkeypatch.setattr(hitl_module, "publish_hitl_approved_event", fake_publish)
+        monkeypatch.setattr(hitl_module, "deploy_task_changes", fake_deploy)
+        monkeypatch.setattr(hitl_module, "publish_hitl_approved_event", fake_publish)
 
-    decision = HITLDecision(auto_deploy=False)
-    result = await handler.approve_task(
-        task_id=str(task.id),
-        approved_by="user-1",
-        decision=decision,
-        correlation_id="corr-2",
-    )
+        decision = HITLDecision(auto_deploy=False)
+        result = await handler.approve_task(
+            task_id=str(task.id),
+            approved_by="user-1",
+            decision=decision,
+            correlation_id="corr-2",
+        )
 
-    assert result["status"] == "approved"
-    assert task.status == TaskStatus.APPROVED
-    assert approval.status == HITLStatus.APPROVED
+        assert result["status"] == "approved"
+        assert task.status == TaskStatus.APPROVED
+        assert approval.status == HITLStatus.APPROVED
+
+    asyncio.run(_run())
 
 
-def test_reject_task_sets_status(monkeypatch):
+def test_reject_task_sets_status():
     task = _make_task()
     approval = HITLApproval(
         task_id=task.id,

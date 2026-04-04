@@ -148,7 +148,7 @@ def calculate_priority(
 
 
 def calculate_task_priority(task: Task) -> float:
-    metadata = task.metadata or {}
+    metadata = task.meta or {}
 
     return calculate_priority(
         current_ffscore=metadata.get("current_ffscore"),
@@ -164,7 +164,7 @@ def prioritize_tasks(tasks: List[Task]) -> List[Task]:
     prioritized: List[Task] = []
 
     for task in tasks:
-        metadata = task.metadata or {}
+        metadata = task.meta or {}
 
         priority_score = calculate_task_priority(task)
         impact = calculate_impact(
@@ -184,7 +184,7 @@ def prioritize_tasks(tasks: List[Task]) -> List[Task]:
         effort = calculate_effort(task.task_type, metadata)
 
         task.priority_score = priority_score
-        task.metadata = {
+        task.meta = {
             **metadata,
             "priority_score": priority_score,
             "impact": impact,
@@ -252,8 +252,11 @@ def should_auto_approve(task: Task) -> bool:
     if task.task_type not in low_risk_types:
         return False
 
-    metadata = task.metadata or {}
+    metadata = task.meta or {}
     impact = float(metadata.get("impact", 0.0) or 0.0)
     effort = float(metadata.get("effort", 1.0) or 1.0)
 
     return impact <= 0.3 and effort <= 0.4
+
+
+

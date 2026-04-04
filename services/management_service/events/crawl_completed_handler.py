@@ -1,4 +1,4 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
@@ -35,8 +35,8 @@ def handle_crawl_completed_event(
         task = db.query(Task).filter(Task.id == task_id).first()
         if not task:
             raise ValueError(f"Task {task_id} not found")
-        task.metadata = {
-            **(task.metadata or {}),
+        task.meta = {
+            **(task.meta or {}),
             "crawl_id": crawl_id,
             "audit_result_id": audit_id,
             "audit_summary": summary,
@@ -51,8 +51,8 @@ def handle_crawl_completed_event(
     if project_id:
         project = db.query(Project).filter(Project.id == project_id).first()
         if project:
-            project.metadata = {
-                **(project.metadata or {}),
+            project.meta = {
+                **(project.meta or {}),
                 "latest_crawl_id": crawl_id,
                 "latest_audit_id": audit_id,
                 "audit_summary": summary,
@@ -84,3 +84,4 @@ def handle_crawl_completed_event(
         "updated_tasks": updated_tasks,
         "updated_project": updated_project,
     }
+

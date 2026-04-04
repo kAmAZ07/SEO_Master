@@ -73,7 +73,7 @@ class HITLHandler:
             diff_data=approval_data.diff_data,
             impact_score=approval_data.impact_score,
             recommendation=approval_data.recommendation,
-            metadata={
+            meta={
                 "correlation_id": correlation_id,
                 "created_by": "management_service"
             }
@@ -130,14 +130,14 @@ class HITLHandler:
             hitl_approval.approved_at = datetime.utcnow()
             
             if decision.notes:
-                hitl_approval.metadata = {
-                    **(hitl_approval.metadata or {}),
+                hitl_approval.meta = {
+                    **(hitl_approval.meta or {}),
                     "approval_notes": decision.notes
                 }
             
             task.status = TaskStatus.APPROVED
-            task.metadata = {
-                **(task.metadata or {}),
+            task.meta = {
+                **(task.meta or {}),
                 "approved_by": approved_by,
                 "approved_at": datetime.utcnow().isoformat()
             }
@@ -242,14 +242,14 @@ class HITLHandler:
         hitl_approval.rejection_reason = decision.rejection_reason or "No reason provided"
         
         if decision.notes:
-            hitl_approval.metadata = {
-                **(hitl_approval.metadata or {}),
+            hitl_approval.meta = {
+                **(hitl_approval.meta or {}),
                 "rejection_notes": decision.notes
             }
         
         task.status = TaskStatus.REJECTED
-        task.metadata = {
-            **(task.metadata or {}),
+        task.meta = {
+            **(task.meta or {}),
             "rejected_by": rejected_by,
             "rejected_at": datetime.utcnow().isoformat(),
             "rejection_reason": decision.rejection_reason
@@ -562,3 +562,4 @@ def create_hitl_approval_for_task(
         approval_data=approval_data,
         correlation_id=correlation_id
     )
+

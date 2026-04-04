@@ -266,7 +266,7 @@ class OptimizationSaga:
             diff_data={"before": old_content, "after": new_content},
             impact_score=self.context.get("ffscore"),
             recommendation="Review generated SEO changes before deployment",
-            metadata={
+            meta={
                 "saga_id": self.saga_id,
                 "correlation_id": self.correlation_id,
                 "url": self.url,
@@ -448,12 +448,12 @@ class OptimizationSaga:
         if not task:
             return
 
-        metadata = task.metadata or {}
+        metadata = task.meta or {}
         metadata["saga_state"] = self.state.value
         metadata["saga_id"] = self.saga_id
         metadata["saga_correlation_id"] = self.correlation_id
         metadata["saga_context"] = self.context
-        task.metadata = metadata
+        task.meta = metadata
         task.updated_at = datetime.utcnow()
         db.commit()
 
@@ -485,3 +485,5 @@ class OptimizationSaga:
 async def run_optimization_cycle(project_id: str, url: str, task_id: Optional[str] = None) -> bool:
     saga = OptimizationSaga(project_id, url, task_id)
     return await saga.execute()
+
+

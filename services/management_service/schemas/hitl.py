@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, UUID4
+from pydantic import BaseModel, ConfigDict, Field, UUID4
 from typing_extensions import TypedDict
 
 from services.management_service.db.models import HITLStatus
@@ -13,6 +13,8 @@ class HITLDiffData(TypedDict, total=False):
 
 
 class HITLApprovalBase(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+
     task_id: UUID4
     project_id: Optional[UUID4] = None
     diff_data: HITLDiffData
@@ -20,15 +22,14 @@ class HITLApprovalBase(BaseModel):
     recommendation: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
-    class Config:
-        use_enum_values = True
-
 
 class HITLApprovalCreate(HITLApprovalBase):
     pass
 
 
 class HITLApprovalResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
+
     id: UUID4
     task_id: UUID4
     project_id: UUID4
@@ -45,10 +46,6 @@ class HITLApprovalResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
-        use_enum_values = True
-
 
 class HITLDecision(BaseModel):
     auto_deploy: bool = True
@@ -57,13 +54,12 @@ class HITLDecision(BaseModel):
 
 
 class HITLApprovalListResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     approvals: List[HITLApprovalResponse]
     total: int
     page: int
     page_size: int
-
-    class Config:
-        from_attributes = True
 
 
 class HITLBatchApproveRequest(BaseModel):

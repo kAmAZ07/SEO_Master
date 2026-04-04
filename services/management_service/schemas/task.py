@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, UUID4
+from pydantic import BaseModel, ConfigDict, Field, UUID4
 from typing_extensions import TypedDict
 
 from services.management_service.db.models import TaskStatus, TaskType
@@ -34,6 +34,8 @@ class TaskMetadata(TypedDict, total=False):
 
 
 class TaskBase(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+
     project_id: UUID4
     task_type: TaskType
     url: str = Field(..., max_length=2048)
@@ -43,15 +45,14 @@ class TaskBase(BaseModel):
     effort_score: Optional[float] = Field(0.5, ge=0.0, le=1.0)
     metadata: TaskMetadata = Field(default_factory=dict)
 
-    class Config:
-        use_enum_values = True
-
 
 class TaskCreate(TaskBase):
     pass
 
 
 class TaskUpdate(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+
     task_type: Optional[TaskType] = None
     status: Optional[TaskStatus] = None
     url: Optional[str] = Field(None, max_length=2048)
@@ -62,19 +63,17 @@ class TaskUpdate(BaseModel):
     metadata: Optional[TaskMetadata] = None
     assigned_to: Optional[str] = None
 
-    class Config:
-        use_enum_values = True
-
 
 class TaskStatusUpdate(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+
     status: TaskStatus
     metadata: Optional[TaskMetadata] = None
 
-    class Config:
-        use_enum_values = True
-
 
 class TaskResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
+
     id: UUID4
     project_id: UUID4
     task_type: TaskType
@@ -93,37 +92,30 @@ class TaskResponse(BaseModel):
     completed_at: Optional[datetime]
     deployed_at: Optional[datetime]
 
-    class Config:
-        from_attributes = True
-        use_enum_values = True
-
 
 class TaskListResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     tasks: List[TaskResponse]
     total: int
     page: int
     page_size: int
 
-    class Config:
-        from_attributes = True
-
 
 class TaskPrioritizationRequest(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+
     project_id: UUID4
     max_tasks: Optional[int] = Field(10, ge=1, le=100)
     task_types: Optional[List[TaskType]] = None
 
-    class Config:
-        use_enum_values = True
-
 
 class TaskPrioritizationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     tasks: List[TaskResponse]
     prioritization_method: str = 'Impact x Effort'
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-
-    class Config:
-        from_attributes = True
 
 
 class TaskDeploymentRequest(BaseModel):
@@ -133,11 +125,10 @@ class TaskDeploymentRequest(BaseModel):
 
 
 class TaskDeploymentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     task_id: UUID4
     deployment_status: str
     change_id: Optional[str]
     deployed_at: Optional[datetime]
     error: Optional[str]
-
-    class Config:
-        from_attributes = True

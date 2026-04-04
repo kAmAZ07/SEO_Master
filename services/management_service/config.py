@@ -12,56 +12,54 @@ class Settings(BaseSettings):
         extra='ignore',
     )
 
-    ENVIRONMENT: str = Field(default='development', env='ENVIRONMENT')
+    ENVIRONMENT: str = 'development'
 
-    HOST: str = Field(default='0.0.0.0', env='HOST')
-    PORT: int = Field(default=8004, env='PORT')
+    HOST: str = '0.0.0.0'
+    PORT: int = 8004
 
-    LOG_LEVEL: str = Field(default='INFO', env='LOG_LEVEL')
+    LOG_LEVEL: str = 'INFO'
 
-    DATABASE_URL: PostgresDsn = Field(..., env='DATABASE_URL')
+    DATABASE_URL: PostgresDsn
+    REDIS_URL: RedisDsn
 
-    REDIS_URL: RedisDsn = Field(..., env='REDIS_URL')
+    RABBITMQ_HOST: str = 'localhost'
+    RABBITMQ_PORT: int = 5672
+    RABBITMQ_USER: str = 'guest'
+    RABBITMQ_PASSWORD: str = 'guest'
+    RABBITMQ_VHOST: str = '/'
 
-    RABBITMQ_HOST: str = Field(default='localhost', env='RABBITMQ_HOST')
-    RABBITMQ_PORT: int = Field(default=5672, env='RABBITMQ_PORT')
-    RABBITMQ_USER: str = Field(default='guest', env='RABBITMQ_USER')
-    RABBITMQ_PASSWORD: str = Field(default='guest', env='RABBITMQ_PASSWORD')
-    RABBITMQ_VHOST: str = Field(default='/', env='RABBITMQ_VHOST')
-
-    AUDIT_SERVICE_URL: str = Field(default='http://localhost:8001', env='AUDIT_SERVICE_URL')
-    SEMANTIC_SERVICE_URL: str = Field(default='http://localhost:8002', env='SEMANTIC_SERVICE_URL')
-    REPORTING_SERVICE_URL: str = Field(default='http://localhost:8003', env='REPORTING_SERVICE_URL')
-    CLIENT_GATEWAY_URL: str = Field(default='http://localhost:8005', env='CLIENT_GATEWAY_URL')
+    AUDIT_SERVICE_URL: str = 'http://localhost:8001'
+    SEMANTIC_SERVICE_URL: str = 'http://localhost:8002'
+    REPORTING_SERVICE_URL: str = 'http://localhost:8003'
+    CLIENT_GATEWAY_URL: str = 'http://localhost:8005'
 
     CORS_ORIGINS: Annotated[List[str], NoDecode] = Field(
         default=['http://localhost:3000', 'http://localhost:5173'],
-        env='CORS_ORIGINS',
     )
 
-    INTERNAL_API_KEY: str = Field(..., env='INTERNAL_API_KEY')
+    INTERNAL_API_KEY: str
 
-    DEFAULT_CRAWL_SCHEDULE: str = Field(default='0 2 * * *', env='DEFAULT_CRAWL_SCHEDULE')
-    DEFAULT_FFSCORE_SCHEDULE: str = Field(default='0 3 * * *', env='DEFAULT_FFSCORE_SCHEDULE')
+    DEFAULT_CRAWL_SCHEDULE: str = '0 2 * * *'
+    DEFAULT_FFSCORE_SCHEDULE: str = '0 3 * * *'
 
-    TASK_PRIORITY_IMPACT_WEIGHT: float = Field(default=0.6, env='TASK_PRIORITY_IMPACT_WEIGHT')
-    TASK_PRIORITY_URGENCY_WEIGHT: float = Field(default=0.3, env='TASK_PRIORITY_URGENCY_WEIGHT')
-    TASK_PRIORITY_EFFORT_WEIGHT: float = Field(default=0.1, env='TASK_PRIORITY_EFFORT_WEIGHT')
+    TASK_PRIORITY_IMPACT_WEIGHT: float = 0.6
+    TASK_PRIORITY_URGENCY_WEIGHT: float = 0.3
+    TASK_PRIORITY_EFFORT_WEIGHT: float = 0.1
 
-    HITL_AUTO_APPROVE_LOW_RISK: bool = Field(default=False, env='HITL_AUTO_APPROVE_LOW_RISK')
-    HITL_TIMEOUT_HOURS: int = Field(default=72, env='HITL_TIMEOUT_HOURS')
+    HITL_AUTO_APPROVE_LOW_RISK: bool = False
+    HITL_TIMEOUT_HOURS: int = 72
 
-    MAX_CONCURRENT_TASKS_PER_PROJECT: int = Field(default=5, env='MAX_CONCURRENT_TASKS_PER_PROJECT')
+    MAX_CONCURRENT_TASKS_PER_PROJECT: int = 5
 
-    SAGA_TIMEOUT_MINUTES: int = Field(default=30, env='SAGA_TIMEOUT_MINUTES')
-    SAGA_RETRY_MAX_ATTEMPTS: int = Field(default=3, env='SAGA_RETRY_MAX_ATTEMPTS')
+    SAGA_TIMEOUT_MINUTES: int = 30
+    SAGA_RETRY_MAX_ATTEMPTS: int = 3
 
-    CELERY_BROKER_URL: Optional[str] = Field(default=None, env='CELERY_BROKER_URL')
-    CELERY_RESULT_BACKEND: Optional[str] = Field(default=None, env='CELERY_RESULT_BACKEND')
-    CELERY_TASK_ALWAYS_EAGER: bool = Field(default=False, env='CELERY_TASK_ALWAYS_EAGER')
+    CELERY_BROKER_URL: Optional[str] = None
+    CELERY_RESULT_BACKEND: Optional[str] = None
+    CELERY_TASK_ALWAYS_EAGER: bool = False
 
-    SERVICE_REQUEST_TIMEOUT: int = Field(default=30, env='SERVICE_REQUEST_TIMEOUT')
-    SERVICE_REQUEST_RETRIES: int = Field(default=3, env='SERVICE_REQUEST_RETRIES')
+    SERVICE_REQUEST_TIMEOUT: int = 30
+    SERVICE_REQUEST_RETRIES: int = 3
 
     @field_validator('CORS_ORIGINS', mode='before')
     @classmethod
@@ -94,6 +92,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
-
-

@@ -47,6 +47,7 @@ class PatchResponse(BaseModel):
     status: str
     change_type: str
     received_at: str
+    warnings: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 async def _handle_patch(

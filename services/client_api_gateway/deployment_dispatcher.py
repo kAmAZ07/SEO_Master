@@ -132,6 +132,16 @@ def _build_wordpress_signature(secret: str, timestamp: str, method: str, path: s
     body_hash = hashlib.sha256(body or b"").hexdigest()
     message = f"{timestamp}{method.upper()}{path}{body_hash}".encode("utf-8")
     return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+def _warnings_from_result(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    warnings = result.get('warnings')
+    if isinstance(warnings, list):
+        return warnings
+    nested_result = result.get('result')
+    if isinstance(nested_result, dict):
+        nested_warnings = nested_result.get('warnings')
+        if isinstance(nested_warnings, list):
+            return nested_warnings
+    return []
 
 
 async def _dispatch_to_wordpress(
@@ -189,6 +199,7 @@ async def _dispatch_to_wordpress(
         "platform": "wordpress",
         "target_path": path,
         "response": result,
+        "warnings": _warnings_from_result(result),
     }
 
 
@@ -235,6 +246,7 @@ async def _dispatch_to_tilda(
         "platform": "tilda",
         "target_path": path,
         "response": result,
+        "warnings": _warnings_from_result(result),
     }
 
 

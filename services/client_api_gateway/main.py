@@ -36,12 +36,14 @@ class InternalDeployResponse(BaseModel):
     change_id: str
     deployment_id: str
     status: str
+    warnings: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class InternalRollbackResponse(BaseModel):
     deployment_id: str
     rollback_status: str
     status: str
+    warnings: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 def _require_internal_api_key(
@@ -216,6 +218,7 @@ async def internal_deploy(
         change_id=str(log_entry.id),
         deployment_id=str(log_entry.id),
         status=log_entry.status,
+        warnings=dispatch_result.get('warnings') or [],
     )
 
 
@@ -238,6 +241,7 @@ async def get_pending_changes(
 
     results = []
     for log in logs:
+        dispatch_meta = (log.meta or {}).get('dispatch', {}) if isinstance(log.meta, dict) else {}
         results.append(
             {
                 'change_id': str(log.id),
@@ -251,6 +255,7 @@ async def get_pending_changes(
                 'created_at': log.created_at.isoformat() if log.created_at else None,
                 'applied_at': log.applied_at.isoformat() if log.applied_at else None,
                 'correlation_id': log.correlation_id,
+                'warnings': dispatch_meta.get('warnings') or [],
             }
         )
 

@@ -1,182 +1,229 @@
-import { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { analyzeContent, fetchOptimizedPages } from '../store/slices/dashboardSlice';
-import Card from '../components/ui/Card';
-import Button from '../components/ui/Button';
-import Input from '../components/ui/Input';
-import Loader from '../components/ui/Loader';
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import api from '../api/axiosConfig'
+import { getApiErrorMessage } from '../api/authAPI'
+import Card from '../components/ui/Card'
+import Button from '../components/ui/Button'
+import Input from '../components/ui/Input'
+import Loader from '../components/ui/Loader'
+
+interface ContentIssue {
+  title: string
+  description: string
+}
+
+interface ContentRecommendation {
+  title: string
+  description: string
+}
+
+interface ContentAnalysisResult {
+  score: number
+  wordCount: number
+  keywordDensity: number
+  uniqueness: number
+  recommendations: ContentRecommendation[]
+  issues: ContentIssue[]
+}
+
+interface OptimizedPageHistoryItem {
+  id: string
+  url: string
+  keyword: string
+  score: number
+  analyzedAt: string
+}
 
 const ContentOptimization = () => {
-  const [searchParams] = useSearchParams();
-  const projectId = searchParams.get('project');
-  
-  const dispatch = useAppDispatch();
-  const { contentAnalysis, optimizedPages, loading } = useAppSelector((state) => state.dashboard);
-  const [url, setUrl] = useState('');
-  const [targetKeyword, setTargetKeyword] = useState('');
-  const [content, setContent] = useState('');
+  const [searchParams] = useSearchParams()
+  const projectId = searchParams.get('project') || undefined
+
+  const [url, setUrl] = useState('')
+  const [targetKeyword, setTargetKeyword] = useState('')
+  const [content, setContent] = useState('')
+  const [analysis, setAnalysis] = useState<ContentAnalysisResult | null>(null)
+  const [history, setHistory] = useState<OptimizedPageHistoryItem[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const loadHistory = async () => {
+    try {
+      const response = await api.get('/content/optimized', { params: projectId ? { projectId } : undefined })
+      setHistory(response.data || [])
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, 'Failed to load content analysis history.'))
+    }
+  }
 
   useEffect(() => {
-    if (projectId) {
-      dispatch(fetchOptimizedPages(Number(projectId)));
-    }
-  }, [dispatch, projectId]);
+    void loadHistory()
+  }, [projectId])
 
-  const handleAnalyze = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await dispatch(analyzeContent({ url, targetKeyword, content, projectId: projectId ? Number(projectId) : undefined }));
-  };
+  const handleAnalyze = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setLoading(true)
+    setError('')
+
+    try {
+      const response = await api.post('/content/analyze', {
+        url,
+        targetKeyword,
+        content,
+        projectId,
+      })
+      setAnalysis(response.data)
+      await loadHistory()
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, 'Failed to analyze the content.'))
+    } finally {
+      setLoading(false)
+    }
+  }
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Оптимизация контента</h1>
-        <p className="text-gray-600 mt-1">Анализ и улучшение текстов для поисковых систем</p>
+        <h1 className="text-3xl font-bold text-gray-900">Content optimization</h1>
+        <p className="mt-1 text-gray-600">Review content quality, keyword usage, and structural hints before publishing changes.</p>
       </div>
 
-      <Card>
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">Анализировать контент</h2>
-        <form onSubmit={handleAnalyze} className="space-y-4">
+      {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+
+      <Card className="p-6">
+        <h2 className="text-xl font-semibold text-gray-900">Analyze a page draft</h2>
+        <form onSubmit={handleAnalyze} className="mt-4 space-y-4">
           <Input
-            label="URL страницы"
+            label="Page URL"
             type="url"
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(event) => setUrl(event.target.value)}
             placeholder="https://example.com/page"
             required
           />
           <Input
-            label="Целевое ключевое слово"
+            label="Target keyword"
             value={targetKeyword}
-            onChange={(e) => setTargetKeyword(e.target.value)}
-            placeholder="ключевое слово"
+            onChange={(event) => setTargetKeyword(event.target.value)}
+            placeholder="technical SEO audit"
             required
           />
-          <div>
-            abel className="block text-sm font-medium text-gray-700 mb-1">
-              Текст для анализа
+          <div className="space-y-1.5">
+            <label htmlFor="content-body" className="block text-sm font-medium text-gray-700">
+              Content draft
             </label>
             <textarea
+              id="content-body"
               value={content}
-              onChange={(e) => setContent(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              rows={8}
-              placeholder="Вставьте текст страницы..."
+              onChange={(event) => setContent(event.target.value)}
+              className="min-h-[220px] w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              placeholder="Paste the article or landing-page copy you want to review."
               required
             />
           </div>
-          <Button type="submit" disabled={loading}>
-            {loading ? 'Анализ...' : 'Проанализировать'}
+          <Button type="submit" disabled={loading || !content.trim()}>
+            {loading ? 'Analyzing...' : 'Analyze content'}
           </Button>
         </form>
       </Card>
 
       {loading && <Loader />}
 
-      {contentAnalysis && (
-        <Card>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Результаты анализа</h2>
-          
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-gray-700">SEO-оценка контента</span>
-              <span className={`text-2xl font-bold ${
-                contentAnalysis.score >= 80 ? 'text-green-600' :
-                contentAnalysis.score >= 50 ? 'text-yellow-600' :
-                'text-red-600'
-              }`}>
-                {contentAnalysis.score}/100
-              </span>
+      {analysis && (
+        <Card className="p-6">
+          <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900">Analysis result</h2>
+              <p className="mt-1 text-sm text-gray-600">The score combines content depth, keyword coverage, structure, and uniqueness.</p>
             </div>
-            <div className="w-full bg-gray-200 rounded-full h-3">
-              <div
-                className={`h-3 rounded-full transition-all ${
-                  contentAnalysis.score >= 80 ? 'bg-green-600' :
-                  contentAnalysis.score >= 50 ? 'bg-yellow-600' :
-                  'bg-red-600'
-                }`}
-                style={{ width: `${contentAnalysis.score}%` }}
-              />
+            <div className="text-right">
+              <p className="text-xs uppercase tracking-wide text-gray-400">Score</p>
+              <p className="text-4xl font-bold text-gray-900">{analysis.score}/100</p>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <p className="text-sm text-gray-600">Количество слов</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{contentAnalysis.wordCount}</p>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="rounded-lg bg-gray-50 p-4">
+              <p className="text-xs uppercase tracking-wide text-gray-400">Word count</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">{analysis.wordCount}</p>
             </div>
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <p className="text-sm text-gray-600">Плотность ключевых слов</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{contentAnalysis.keywordDensity}%</p>
+            <div className="rounded-lg bg-gray-50 p-4">
+              <p className="text-xs uppercase tracking-wide text-gray-400">Keyword density</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">{analysis.keywordDensity}%</p>
             </div>
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <p className="text-sm text-gray-600">Уникальность</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{contentAnalysis.uniqueness}%</p>
+            <div className="rounded-lg bg-gray-50 p-4">
+              <p className="text-xs uppercase tracking-wide text-gray-400">Estimated uniqueness</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">{analysis.uniqueness}%</p>
             </div>
           </div>
 
-          {contentAnalysis.recommendations && contentAnalysis.recommendations.length > 0 && (
-            <div className="space-y-3">
-              <h3 className="font-semibold text-gray-900">Рекомендации по улучшению</h3>
-              {contentAnalysis.recommendations.map((rec: any, index: number) => (
-                <div key={index} className="flex items-start gap-3 p-3 bg-blue-50 rounded-lg">
-                  <span className="text-blue-600 text-xl">💡</span>
-                  <div className="flex-1">
-                    <h4 className="font-medium text-gray-900">{rec.title}</h4>
-                    <p className="text-sm text-gray-600 mt-1">{rec.description}</p>
-                  </div>
+          <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <div>
+              <h3 className="mb-3 text-lg font-semibold text-gray-900">Recommendations</h3>
+              {analysis.recommendations.length ? (
+                <div className="space-y-3">
+                  {analysis.recommendations.map((item, index) => (
+                    <div key={`${item.title}-${index}`} className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                      <p className="font-medium text-gray-900">{item.title}</p>
+                      <p className="mt-1 text-sm text-gray-700">{item.description}</p>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                <p className="text-sm text-gray-500">No major recommendations were generated for this draft.</p>
+              )}
             </div>
-          )}
-
-          {contentAnalysis.issues && contentAnalysis.issues.length > 0 && (
-            <div className="space-y-3 mt-4">
-              <h3 className="font-semibold text-gray-900">Обнаруженные проблемы</h3>
-              {contentAnalysis.issues.map((issue: any, index: number) => (
-                <div key={index} className="flex items-start gap-3 p-3 bg-red-50 rounded-lg">
-                  <span className="text-red-600 text-xl">⚠️</span>
-                  <div className="flex-1">
-                    <h4 className="font-medium text-gray-900">{issue.title}</h4>
-                    <p className="text-sm text-gray-600 mt-1">{issue.description}</p>
-                  </div>
+            <div>
+              <h3 className="mb-3 text-lg font-semibold text-gray-900">Detected issues</h3>
+              {analysis.issues.length ? (
+                <div className="space-y-3">
+                  {analysis.issues.map((item, index) => (
+                    <div key={`${item.title}-${index}`} className="rounded-lg border border-red-200 bg-red-50 p-4">
+                      <p className="font-medium text-gray-900">{item.title}</p>
+                      <p className="mt-1 text-sm text-gray-700">{item.description}</p>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                <p className="text-sm text-gray-500">No critical issues detected in the current draft.</p>
+              )}
             </div>
-          )}
+          </div>
         </Card>
       )}
 
-      {optimizedPages && optimizedPages.length > 0 && (
-        <Card>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">История оптимизации</h2>
+      <Card className="p-6">
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-semibold text-gray-900">Recent analyses</h2>
+            <p className="mt-1 text-sm text-gray-600">Stored in-memory for the current project bucket in local dev mode.</p>
+          </div>
+          <Button type="button" variant="outline" onClick={() => void loadHistory()} disabled={loading}>
+            Refresh
+          </Button>
+        </div>
+
+        {history.length ? (
           <div className="space-y-3">
-            {optimizedPages.map((page: any) => (
-              <div key={page.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
-                <div className="flex-1">
-                  <p className="font-medium text-gray-900">{page.url}</p>
-                  <p className="text-sm text-gray-600">Ключевое слово: {page.keyword}</p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {new Date(page.analyzedAt).toLocaleString('ru-RU')}
-                  </p>
+            {history.map((item) => (
+              <div key={item.id} className="flex flex-col gap-2 rounded-lg border border-gray-200 px-4 py-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="font-medium text-gray-900">{item.url || 'Untitled draft'}</p>
+                  <p className="mt-1 text-sm text-gray-600">Keyword: {item.keyword || 'Not specified'}</p>
+                  <p className="mt-1 text-xs text-gray-400">{new Date(item.analyzedAt).toLocaleString()}</p>
                 </div>
-                <div className="flex items-center gap-4">
-                  <span className={`text-xl font-bold ${
-                    page.score >= 80 ? 'text-green-600' :
-                    page.score >= 50 ? 'text-yellow-600' :
-                    'text-red-600'
-                  }`}>
-                    {page.score}
-                  </span>
+                <div className="text-right">
+                  <p className="text-xs uppercase tracking-wide text-gray-400">Score</p>
+                  <p className="text-2xl font-bold text-gray-900">{item.score}</p>
                 </div>
               </div>
             ))}
           </div>
-        </Card>
-      )}
+        ) : (
+          <p className="text-sm text-gray-500">No analysis history yet.</p>
+        )}
+      </Card>
     </div>
-  );
-};
+  )
+}
 
-export default ContentOptimization;
+export default ContentOptimization

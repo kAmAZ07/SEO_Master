@@ -1,9 +1,59 @@
+import axios from 'axios'
 import api from './axiosConfig'
 import { User, LoginCredentials, RegisterData } from '@/types/user'
 
-interface AuthResponse {
+export interface AuthResponse {
+  success?: boolean
   user: User
   token: string
+  refreshToken?: string
+}
+
+export interface UpdateProfilePayload {
+  name?: string
+  email?: string
+  company?: string
+}
+
+export interface ChangePasswordPayload {
+  currentPassword: string
+  newPassword: string
+}
+
+export const getApiErrorMessage = (error: unknown, fallback: string): string => {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail
+
+    if (typeof detail === 'string' && detail.trim()) {
+      return detail
+    }
+
+    if (detail && typeof detail === 'object') {
+      if (typeof detail.message === 'string' && detail.message.trim()) {
+        return detail.message
+      }
+      if (typeof detail.error === 'string' && detail.error.trim()) {
+        return detail.error
+      }
+    }
+
+    if (Array.isArray(detail) && detail.length > 0) {
+      const firstItem = detail[0]
+      if (typeof firstItem?.msg === 'string' && firstItem.msg.trim()) {
+        return firstItem.msg
+      }
+    }
+
+    if (typeof error.message === 'string' && error.message.trim() && error.message !== 'Network Error') {
+      return error.message
+    }
+  }
+
+  if (error instanceof Error && error.message.trim()) {
+    return error.message
+  }
+
+  return fallback
 }
 
 export const login = async (credentials: LoginCredentials): Promise<AuthResponse> => {
@@ -18,6 +68,16 @@ export const register = async (data: RegisterData): Promise<AuthResponse> => {
 
 export const getCurrentUser = async (): Promise<User> => {
   const response = await api.get('/auth/me')
+  return response.data
+}
+
+export const updateProfile = async (data: UpdateProfilePayload): Promise<User> => {
+  const response = await api.patch('/auth/profile', data)
+  return response.data
+}
+
+export const changePassword = async (data: ChangePasswordPayload): Promise<{ success: boolean }> => {
+  const response = await api.post('/auth/change-password', data)
   return response.data
 }
 

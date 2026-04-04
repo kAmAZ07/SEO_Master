@@ -1,247 +1,254 @@
-import { useState } from 'react';
-import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { updateProfile, changePassword } from '../store/slices/authSlice';
-import Card from '../components/ui/Card';
-import Button from '../components/ui/Button';
-import Input from '../components/ui/Input';
+import { useMemo, useState } from 'react'
+import { useAppDispatch, useAppSelector } from '../store/hooks'
+import { updateProfile, changePassword, clearError } from '../store/slices/authSlice'
+import Card from '../components/ui/Card'
+import Button from '../components/ui/Button'
+import Input from '../components/ui/Input'
+import { validatePassword } from '../utils/validation'
 
 const Settings = () => {
-  const dispatch = useAppDispatch();
-  const { user, loading } = useAppSelector((state) => state.auth);
-  
+  const dispatch = useAppDispatch()
+  const { user, loading, error } = useAppSelector((state) => state.auth)
+
   const [profileData, setProfileData] = useState({
     name: user?.name || '',
     email: user?.email || '',
     company: user?.company || '',
-  });
+  })
 
   const [passwordData, setPasswordData] = useState({
     currentPassword: '',
     newPassword: '',
     confirmPassword: '',
-  });
+  })
 
   const [notifications, setNotifications] = useState({
     emailReports: true,
     weeklyDigest: true,
     auditAlerts: true,
     keywordChanges: false,
-  });
+  })
 
-  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'notifications'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'notifications'>('profile')
+  const [localPasswordError, setLocalPasswordError] = useState('')
 
-  const handleUpdateProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await dispatch(updateProfile(profileData));
-  };
+  const passwordValidation = useMemo(
+    () => validatePassword(passwordData.newPassword),
+    [passwordData.newPassword],
+  )
 
-  const handleChangePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleUpdateProfile = async (event: React.FormEvent) => {
+    event.preventDefault()
+    await dispatch(updateProfile(profileData))
+  }
+
+  const handleChangePassword = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setLocalPasswordError('')
+
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      alert('Пароли не совпадают');
-      return;
+      setLocalPasswordError('Passwords do not match.')
+      return
     }
-    if (passwordData.newPassword.length < 6) {
-      alert('Пароль должен содержать минимум 6 символов');
-      return;
+
+    if (!passwordValidation.valid) {
+      setLocalPasswordError(passwordValidation.message ?? 'Password is invalid.')
+      return
     }
-    await dispatch(changePassword({
-      currentPassword: passwordData.currentPassword,
-      newPassword: passwordData.newPassword,
-    }));
-    setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-  };
+
+    const result = await dispatch(
+      changePassword({
+        currentPassword: passwordData.currentPassword,
+        newPassword: passwordData.newPassword,
+      }),
+    )
+
+    if (changePassword.fulfilled.match(result)) {
+      setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' })
+    }
+  }
+
+  const tabButtonClass = (tab: 'profile' | 'password' | 'notifications') =>
+    `px-4 py-2 font-medium transition-colors ${
+      activeTab === tab ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600 hover:text-gray-900'
+    }`
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Настройки</h1>
-        <p className="text-gray-600 mt-1">Управление вашим аккаунтом и настройками</p>
+        <h1 className="text-3xl font-bold text-gray-900">Settings</h1>
+        <p className="mt-1 text-gray-600">Manage your profile, password, and notifications.</p>
       </div>
 
       <div className="flex gap-4 border-b border-gray-200">
-        <button
-          onClick={() => setActiveTab('profile')}
-          className={`px-4 py-2 font-medium transition-colors ${
-            activeTab === 'profile'
-              ? 'text-blue-600 border-b-2 border-blue-600'
-              : 'text-gray-600 hover:text-gray-900'
-          }`}
-        >
-          Профиль
+        <button type="button" onClick={() => setActiveTab('profile')} className={tabButtonClass('profile')}>
+          Profile
         </button>
-        <button
-          onClick={() => setActiveTab('password')}
-          className={`px-4 py-2 font-medium transition-colors ${
-            activeTab === 'password'
-              ? 'text-blue-600 border-b-2 border-blue-600'
-              : 'text-gray-600 hover:text-gray-900'
-          }`}
-        >
-          Безопасность
+        <button type="button" onClick={() => setActiveTab('password')} className={tabButtonClass('password')}>
+          Security
         </button>
-        <button
-          onClick={() => setActiveTab('notifications')}
-          className={`px-4 py-2 font-medium transition-colors ${
-            activeTab === 'notifications'
-              ? 'text-blue-600 border-b-2 border-blue-600'
-              : 'text-gray-600 hover:text-gray-900'
-          }`}
-        >
-          Уведомления
+        <button type="button" onClick={() => setActiveTab('notifications')} className={tabButtonClass('notifications')}>
+          Notifications
         </button>
       </div>
 
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
       {activeTab === 'profile' && (
-        <Card>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Информация профиля</h2>
+        <Card className="p-6">
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Profile information</h2>
           <form onSubmit={handleUpdateProfile} className="space-y-4">
             <Input
-              label="Имя"
+              label="Name"
               value={profileData.name}
-              onChange={(e) => setProfileData({ ...profileData, name: e.target.value })}
-              placeholder="Ваше имя"
+              onChange={(event) => {
+                dispatch(clearError())
+                setProfileData({ ...profileData, name: event.target.value })
+              }}
+              placeholder="Your name"
             />
             <Input
               label="Email"
               type="email"
               value={profileData.email}
-              onChange={(e) => setProfileData({ ...profileData, email: e.target.value })}
+              onChange={(event) => {
+                dispatch(clearError())
+                setProfileData({ ...profileData, email: event.target.value })
+              }}
               placeholder="email@example.com"
               required
             />
             <Input
-              label="Компания"
+              label="Company"
               value={profileData.company}
-              onChange={(e) => setProfileData({ ...profileData, company: e.target.value })}
-              placeholder="Название компании"
+              onChange={(event) => setProfileData({ ...profileData, company: event.target.value })}
+              placeholder="Company name"
             />
             <Button type="submit" disabled={loading}>
-              {loading ? 'Сохранение...' : 'Сохранить изменения'}
+              {loading ? 'Saving...' : 'Save changes'}
             </Button>
           </form>
         </Card>
       )}
 
       {activeTab === 'password' && (
-        <Card>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Изменить пароль</h2>
+        <Card className="p-6">
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Change password</h2>
           <form onSubmit={handleChangePassword} className="space-y-4">
+            {localPasswordError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {localPasswordError}
+              </div>
+            )}
+
             <Input
-              label="Текущий пароль"
+              label="Current password"
               type="password"
               value={passwordData.currentPassword}
-              onChange={(e) => setPasswordData({ ...passwordData, currentPassword: e.target.value })}
+              onChange={(event) => {
+                dispatch(clearError())
+                setLocalPasswordError('')
+                setPasswordData({ ...passwordData, currentPassword: event.target.value })
+              }}
               required
             />
             <Input
-              label="Новый пароль"
+              label="New password"
               type="password"
               value={passwordData.newPassword}
-              onChange={(e) => setPasswordData({ ...passwordData, newPassword: e.target.value })}
-              placeholder="Минимум 6 символов"
+              onChange={(event) => {
+                dispatch(clearError())
+                setLocalPasswordError('')
+                setPasswordData({ ...passwordData, newPassword: event.target.value })
+              }}
+              placeholder="At least 8 characters"
+              error={passwordData.newPassword && !passwordValidation.valid ? passwordValidation.message : undefined}
+              hint={passwordData.newPassword ? passwordValidation.message : 'Use at least 8 characters.'}
               required
             />
             <Input
-              label="Подтвердите новый пароль"
+              label="Confirm new password"
               type="password"
               value={passwordData.confirmPassword}
-              onChange={(e) => setPasswordData({ ...passwordData, confirmPassword: e.target.value })}
+              onChange={(event) => {
+                dispatch(clearError())
+                setLocalPasswordError('')
+                setPasswordData({ ...passwordData, confirmPassword: event.target.value })
+              }}
+              error={
+                passwordData.confirmPassword && passwordData.newPassword !== passwordData.confirmPassword
+                  ? 'Passwords do not match.'
+                  : undefined
+              }
               required
             />
             <Button type="submit" disabled={loading}>
-              {loading ? 'Изменение...' : 'Изменить пароль'}
+              {loading ? 'Updating...' : 'Update password'}
             </Button>
           </form>
         </Card>
       )}
 
       {activeTab === 'notifications' && (
-        <Card>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Настройки уведомлений</h2>
+        <Card className="p-6">
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Notification settings</h2>
           <div className="space-y-4">
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-              <div>
-                <h3 className="font-medium text-gray-900">Email отчеты</h3>
-                <p className="text-sm text-gray-600">Получать отчеты о проектах на email</p>
+            {[
+              {
+                key: 'emailReports',
+                title: 'Email reports',
+                description: 'Receive project summaries by email.',
+              },
+              {
+                key: 'weeklyDigest',
+                title: 'Weekly digest',
+                description: 'Get a weekly summary of important changes.',
+              },
+              {
+                key: 'auditAlerts',
+                title: 'Audit alerts',
+                description: 'Receive a notice when an audit finishes.',
+              },
+              {
+                key: 'keywordChanges',
+                title: 'Keyword movement alerts',
+                description: 'Track significant position changes for monitored keywords.',
+              },
+            ].map((item) => (
+              <div key={item.key} className="flex items-center justify-between rounded-lg bg-gray-50 p-4">
+                <div>
+                  <h3 className="font-medium text-gray-900">{item.title}</h3>
+                  <p className="text-sm text-gray-600">{item.description}</p>
+                </div>
+                <label className="relative inline-flex cursor-pointer items-center">
+                  <input
+                    type="checkbox"
+                    checked={notifications[item.key as keyof typeof notifications]}
+                    onChange={(event) =>
+                      setNotifications({
+                        ...notifications,
+                        [item.key]: event.target.checked,
+                      })
+                    }
+                    className="peer sr-only"
+                  />
+                  <div className="h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-blue-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300" />
+                </label>
               </div>
-              abel className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={notifications.emailReports}
-                  onChange={(e) => setNotifications({ ...notifications, emailReports: e.target.checked })}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-            </div>
+            ))}
 
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-              <div>
-                <h3 className="font-medium text-gray-900">Еженедельный дайджест</h3>
-                <p className="text-sm text-gray-600">Сводка изменений раз в неделю</p>
-              </div>
-              abel className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={notifications.weeklyDigest}
-                  onChange={(e) => setNotifications({ ...notifications, weeklyDigest: e.target.checked })}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-            </div>
-
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-              <div>
-                <h3 className="font-medium text-gray-900">Уведомления об аудитах</h3>
-                <p className="text-sm text-gray-600">Получать уведомления при завершении аудита</p>
-              </div>
-              abel className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={notifications.auditAlerts}
-                  onChange={(e) => setNotifications({ ...notifications, auditAlerts: e.target.checked })}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-            </div>
-
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-              <div>
-                <h3 className="font-medium text-gray-900">Изменения позиций</h3>
-                <p className="text-sm text-gray-600">Уведомления о значительных изменениях позиций</p>
-              </div>
-              abel className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={notifications.keywordChanges}
-                  onChange={(e) => setNotifications({ ...notifications, keywordChanges: e.target.checked })}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-            </div>
-
-            <Button onClick={() => console.log('Save notifications', notifications)}>
-              Сохранить настройки
+            <Button type="button" onClick={() => console.log('Save notifications', notifications)}>
+              Save notification settings
             </Button>
           </div>
         </Card>
       )}
-
-      <Card className="border-red-200">
-        <h2 className="text-xl font-semibold text-red-600 mb-4">Опасная зона</h2>
-        <p className="text-gray-600 mb-4">
-          Удаление аккаунта приведет к безвозвратной потере всех данных и проектов.
-        </p>
-        <Button className="bg-red-600 hover:bg-red-700">
-          Удалить аккаунт
-        </Button>
-      </Card>
     </div>
-  );
-};
+  )
+}
 
-export default Settings;
+export default Settings

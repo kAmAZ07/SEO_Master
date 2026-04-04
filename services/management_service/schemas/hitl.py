@@ -1,7 +1,8 @@
-from typing import Optional, Dict, Any, List, TypedDict
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, UUID4
+from typing_extensions import TypedDict
 
 from services.management_service.db.models import HITLStatus
 

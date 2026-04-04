@@ -260,7 +260,7 @@ class ClientAPIAdapter:
             return secret, key_id
 
         if task:
-            secret, key_id = self._find_hmac_credentials(task.metadata or {})
+            secret, key_id = self._find_hmac_credentials(task.meta or {})
             if secret:
                 return secret, key_id
 
@@ -270,7 +270,7 @@ class ClientAPIAdapter:
                 if secret:
                     return secret, key_id
 
-                secret, key_id = self._find_hmac_credentials(project.metadata or {})
+                secret, key_id = self._find_hmac_credentials(project.meta or {})
                 if secret:
                     return secret, key_id
 
@@ -292,7 +292,7 @@ class ClientAPIAdapter:
             return changes_data.get("changes")
 
         if task:
-            metadata = task.metadata or {}
+            metadata = task.meta or {}
             for key in ("json_patch", "patch", "json_patch_ops"):
                 ops = metadata.get(key)
                 if _looks_like_patch(ops):
@@ -779,7 +779,7 @@ def _get_entity_type(task_type: TaskType) -> str:
 
 
 def _extract_changes_from_task(task: Task) -> Dict[str, Any]:
-    metadata = task.metadata or {}
+    metadata = task.meta or {}
 
     if task.task_type == TaskType.ADD_INTERNAL_LINKS:
         interlinks = metadata.get("interlinks", [])
@@ -836,7 +836,7 @@ def _extract_changes_from_task(task: Task) -> Dict[str, Any]:
 
 
 def _calculate_priority(task: Task) -> int:
-    metadata = task.metadata or {}
+    metadata = task.meta or {}
 
     impact_score = metadata.get("impact_score", 0.5)
 
@@ -867,7 +867,7 @@ def _log_to_changelog(
         after_value=changes.get("after"),
         applied=False,
         source="HITL" if task.status == TaskStatus.APPROVED else "auto",
-        metadata={
+        meta={
             "change_id": change_id,
             "correlation_id": correlation_id,
             "deployment_status": deployment_result.get("status"),
@@ -917,7 +917,7 @@ async def deploy_task_changes(
         "entity_type": _get_entity_type(task.task_type),
         "changes": _extract_changes_from_task(task),
         "priority": _calculate_priority(task),
-        "metadata": task.metadata,
+        "metadata": task.meta,
     }
 
     try:
@@ -935,8 +935,8 @@ async def deploy_task_changes(
         )
 
         task.status = TaskStatus.DEPLOYED
-        task.metadata = {
-            **(task.metadata or {}),
+        task.meta = {
+            **(task.meta or {}),
             "deployment": {
                 "change_id": change_id,
                 "deployed_at": datetime.utcnow().isoformat(),
@@ -965,8 +965,8 @@ async def deploy_task_changes(
 
     except Exception as exc:
         task.status = TaskStatus.FAILED
-        task.metadata = {
-            **(task.metadata or {}),
+        task.meta = {
+            **(task.meta or {}),
             "error": {
                 "message": str(exc),
                 "failed_at": datetime.utcnow().isoformat(),
@@ -1011,7 +1011,7 @@ async def deploy_approved_tasks(
         Task.project_id == project_id,
         Task.status == TaskStatus.APPROVED,
     ).order_by(
-        Task.metadata["average_impact_score"].desc().nullslast(),
+        Task.meta["average_impact_score"].desc().nullslast(),
     ).limit(max_tasks).all()
 
     results = []
@@ -1041,3 +1041,6 @@ async def deploy_approved_tasks(
     )
 
     return results
+
+
+

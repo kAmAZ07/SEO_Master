@@ -1,4 +1,4 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
@@ -38,8 +38,8 @@ def handle_ff_score_recalculated_event(
 
     project = db.query(Project).filter(Project.id == project_id).first()
     if project:
-        project.metadata = {
-            **(project.metadata or {}),
+        project.meta = {
+            **(project.meta or {}),
             "ffscore": ff_score,
             "eeat_score": eeat_score,
             "ffscore_updated_at": datetime.now(timezone.utc).isoformat(),
@@ -49,12 +49,12 @@ def handle_ff_score_recalculated_event(
 
     tasks = db.query(Task).filter(Task.project_id == project_id).all()
     for task in tasks:
-        meta = task.metadata or {}
+        meta = task.meta or {}
         if ff_score is not None:
             meta["current_ffscore"] = ff_score
         if eeat_score is not None:
             meta["current_eeat"] = eeat_score
-        task.metadata = meta
+        task.meta = meta
         if hasattr(task, "calculate_priority"):
             task.calculate_priority()
         db.add(task)
@@ -82,3 +82,4 @@ def handle_ff_score_recalculated_event(
         "updated_tasks": updated_tasks,
         "updated_project": updated_project,
     }
+

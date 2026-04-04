@@ -532,7 +532,7 @@ class InterlinkGenerator:
                 task_type=TaskType.ADD_INTERNAL_LINKS,
                 status=TaskStatus.PENDING,
                 url=source_url,
-                metadata={
+                meta={
                     "interlinks": [
                         {
                             "target_url": link.target_url,
@@ -568,7 +568,7 @@ class InterlinkGenerator:
                     project_id=project_id,
                     task_type=TaskType.ADD_INTERNAL_LINKS,
                     url=task.url,
-                    metadata=task.metadata,
+                    meta=task.meta,
                     correlation_id=correlation_id
                 )
             except Exception as e:
@@ -692,4 +692,5 @@ async def generate_interlinks_for_page(
         url,
         correlation_id
     )
+
 

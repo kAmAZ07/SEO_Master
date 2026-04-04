@@ -1,4 +1,4 @@
-﻿import json
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -45,7 +45,7 @@ class TaskCreatedEvent(BaseModel):
             project_id=project_id,
             task_type=task_type,
             url=url,
-            metadata=metadata or {},
+            meta=metadata or {},
             correlation_id=correlation_id,
         )
         return cls(
@@ -78,7 +78,7 @@ async def publish_task_created_event(
         project_id=project_id,
         task_type=task_type_value,
         url=url,
-        metadata=metadata,
+        meta=metadata,
         correlation_id=correlation_id,
     )
 
@@ -111,3 +111,4 @@ async def publish_task_created_event(
             extra={"task_id": task_id, "correlation_id": correlation_id},
         )
         raise
+

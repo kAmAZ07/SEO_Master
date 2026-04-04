@@ -31,7 +31,7 @@ def daily_ff_score_recalculation() -> Dict[str, Any]:
         errors = []
 
         for project in projects:
-            metadata = project.metadata or {}
+            metadata = project.meta or {}
 
             root_url = metadata.get("root_url") or metadata.get("url")
             if not root_url:
@@ -74,3 +74,5 @@ def daily_ff_score_recalculation() -> Dict[str, Any]:
         }
     finally:
         db.close()
+
+

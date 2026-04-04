@@ -1,16 +1,9 @@
-﻿import uuid
+import uuid
 from datetime import datetime
 
-from sqlalchemy import (
-    Column,
-    String,
-    DateTime,
-    Boolean,
-    Text,
-    Index,
-)
+from sqlalchemy import Column, String, DateTime, Boolean, Text, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
 
 Base = declarative_base()
@@ -31,7 +24,7 @@ class ClientKey(Base):
     grace_until = Column(DateTime(timezone=True))
     last_used_at = Column(DateTime(timezone=True))
 
-    metadata = Column(JSONB, default={})
+    meta = Column("metadata", JSONB, default={})
 
     __table_args__ = (
         Index("idx_client_keys_project", "project_id"),
@@ -52,7 +45,7 @@ class DeploymentLog(Base):
     error_message = Column(Text)
 
     changes = Column(JSONB, nullable=False)
-    metadata = Column(JSONB, default={})
+    meta = Column("metadata", JSONB, default={})
 
     source_ip = Column(String(45))
     user_agent = Column(String(512))

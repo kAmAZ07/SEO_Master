@@ -1,4 +1,4 @@
-﻿import hmac
+import hmac
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -194,9 +194,9 @@ async def internal_deploy(
         else:
             log_entry.status = 'received'
 
-        merged_metadata = dict(log_entry.metadata or {})
+        merged_metadata = dict(log_entry.meta or {})
         merged_metadata['dispatch'] = dispatch_result
-        log_entry.metadata = merged_metadata
+        log_entry.meta = merged_metadata
 
         db.add(log_entry)
         db.commit()
@@ -277,9 +277,9 @@ async def rollback_internal_deploy(
     rollback_status = str(rollback_result.get('status') or 'unknown')
     if rollback_status == 'applied':
         log_entry.status = 'rolled_back'
-        merged_metadata = dict(log_entry.metadata or {})
+        merged_metadata = dict(log_entry.meta or {})
         merged_metadata['rollback'] = rollback_result
-        log_entry.metadata = merged_metadata
+        log_entry.meta = merged_metadata
         db.add(log_entry)
         db.commit()
     elif rollback_status == 'failed':
@@ -302,3 +302,4 @@ if __name__ == '__main__':
         reload=is_development(),
         log_level=settings.LOG_LEVEL.lower(),
     )
+

@@ -1,4 +1,4 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import Request
@@ -43,7 +43,7 @@ class ChangelogLogger:
             status=status,
             error_message=error_message,
             changes=changes,
-            metadata=metadata or {},
+            meta=metadata or {},
             source_ip=source_ip,
             user_agent=user_agent,
             correlation_id=correlation_id,
@@ -96,3 +96,4 @@ def log_deployment(
         status=status,
         error_message=error_message,
     )
+

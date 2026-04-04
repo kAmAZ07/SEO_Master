@@ -1,4 +1,6 @@
-﻿from pydantic import Field
+from typing import Literal
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +16,7 @@ class Settings(BaseSettings):
     webhook_secret: str | None = None
     request_timeout_seconds: float = 20.0
     mock_mode: bool = False
+    schema_policy: Literal['warn', 'require_hitl', 'strict'] = 'warn'
 
 
 settings = Settings()

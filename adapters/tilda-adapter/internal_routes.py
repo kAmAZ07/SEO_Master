@@ -1,4 +1,4 @@
-﻿from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field
@@ -62,6 +62,29 @@ def _collect_interlinks(changes: List[PatchOp]) -> List[Dict[str, Any]]:
     return result
 
 
+def _wrap_result(page_id: str, result: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    warnings = result.get('warnings') if isinstance(result, dict) else None
+    raw_status = str(result.get('status') or '') if isinstance(result, dict) else ''
+
+    if raw_status in {'requires_hitl', 'blocked', 'skipped', 'failed'}:
+        status_value = raw_status
+    elif warnings:
+        status_value = 'warning'
+    else:
+        status_value = 'ok'
+
+    response: Dict[str, Any] = {
+        'status': status_value,
+        'page_id': page_id,
+        'result': result,
+    }
+    if warnings:
+        response['warnings'] = warnings
+    if extra:
+        response.update(extra)
+    return response
+
+
 @router.post('/meta')
 async def apply_meta_patch(
     payload: TildaPatchRequest,
@@ -82,7 +105,7 @@ async def apply_meta_patch(
         },
     )
 
-    return {'status': 'ok', 'page_id': payload.page_id, 'result': result}
+    return _wrap_result(payload.page_id, result)
 
 
 @router.post('/schema')
@@ -97,7 +120,7 @@ async def apply_schema_patch(
         return {'status': 'skipped', 'reason': 'no_schema_change'}
 
     result = await injector.apply_schema(payload.page_id, str(schema_value))
-    return {'status': 'ok', 'page_id': payload.page_id, 'result': result}
+    return _wrap_result(payload.page_id, result)
 
 
 @router.post('/interlinks')
@@ -109,4 +132,4 @@ async def apply_interlinks_patch(
 
     links = _collect_interlinks(payload.changes)
     result = await injector.apply_interlinks(payload.page_id, links)
-    return {'status': 'ok', 'page_id': payload.page_id, 'result': result, 'links_count': len(links)}
+    return _wrap_result(payload.page_id, result, {'links_count': len(links)})

@@ -1,250 +1,137 @@
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit'
+import type { DashboardStats, Project } from '@/types/dashboard'
 import {
-  AnalyzeBacklinkPayload,
-  AnalyzeContentPayload,
-  Backlink,
-  ContentAnalysis,
-  CreateProjectPayload,
-  DashboardStats,
-  OptimizedPage,
-  Project,
-} from '@/types/dashboard'
-import {
-  analyzeBacklink as analyzeBacklinkAPI,
-  analyzeContent as analyzeContentAPI,
-  createProject as createProjectAPI,
-  deleteProject as deleteProjectAPI,
-  fetchBacklinks as fetchBacklinksAPI,
-  fetchDashboardStats as fetchDashboardStatsAPI,
-  fetchOptimizedPages as fetchOptimizedPagesAPI,
-  fetchProjectDetails as fetchProjectDetailsAPI,
-  fetchProjects as fetchProjectsAPI,
+  createProject as createProjectRequest,
+  deleteProject as deleteProjectRequest,
+  fetchDashboardStats,
+  fetchProjectDetails,
+  fetchProjects,
+  type CreateProjectPayload,
 } from '@/api/dashboardAPI'
-
+import { getApiErrorMessage } from '@/api/authAPI'
 
 interface DashboardState {
   projects: Project[]
   currentProject: Project | null
   stats: DashboardStats | null
-  backlinks: Backlink[]
-  contentAnalysis: ContentAnalysis | null
-  optimizedPages: OptimizedPage[]
   loading: boolean
   error: string | null
 }
-
 
 const initialState: DashboardState = {
   projects: [],
   currentProject: null,
   stats: null,
-  backlinks: [],
-  contentAnalysis: null,
-  optimizedPages: [],
   loading: false,
   error: null,
 }
 
-
-export const fetchProjects = createAsyncThunk('dashboard/fetchProjects', async () => {
-  return await fetchProjectsAPI()
-})
-
-
-export const fetchDashboardStats = createAsyncThunk('dashboard/fetchDashboardStats', async () => {
-  return await fetchDashboardStatsAPI()
-})
-
-
-export const fetchProjectDetails = createAsyncThunk(
-  'dashboard/fetchProjectDetails',
-  async (projectId: string | number) => {
-    return await fetchProjectDetailsAPI(projectId)
-  }
+export const loadProjects = createAsyncThunk<Project[], void, { rejectValue: string }>(
+  'dashboard/loadProjects',
+  async (_, { rejectWithValue }) => {
+    try {
+      return await fetchProjects()
+    } catch (error) {
+      return rejectWithValue(getApiErrorMessage(error, 'Failed to load projects.'))
+    }
+  },
 )
 
+export const loadStats = createAsyncThunk<DashboardStats, void, { rejectValue: string }>(
+  'dashboard/loadStats',
+  async (_, { rejectWithValue }) => {
+    try {
+      return await fetchDashboardStats()
+    } catch (error) {
+      return rejectWithValue(getApiErrorMessage(error, 'Failed to load dashboard statistics.'))
+    }
+  },
+)
 
-export const createProject = createAsyncThunk(
+export const loadProjectDetails = createAsyncThunk<Project, string, { rejectValue: string }>(
+  'dashboard/loadProjectDetails',
+  async (projectId, { rejectWithValue }) => {
+    try {
+      return await fetchProjectDetails(projectId)
+    } catch (error) {
+      return rejectWithValue(getApiErrorMessage(error, 'Failed to load project details.'))
+    }
+  },
+)
+
+export const createProject = createAsyncThunk<Project, CreateProjectPayload, { rejectValue: string }>(
   'dashboard/createProject',
-  async (payload: CreateProjectPayload) => {
-    return await createProjectAPI(payload)
-  }
+  async (payload, { rejectWithValue }) => {
+    try {
+      return await createProjectRequest(payload)
+    } catch (error) {
+      return rejectWithValue(getApiErrorMessage(error, 'Failed to create the project.'))
+    }
+  },
 )
 
-
-export const deleteProject = createAsyncThunk(
-  'dashboard/deleteProject',
-  async (projectId: string | number) => {
-    await deleteProjectAPI(projectId)
-    return String(projectId)
-  }
+export const removeProject = createAsyncThunk<string, string, { rejectValue: string }>(
+  'dashboard/removeProject',
+  async (projectId, { rejectWithValue }) => {
+    try {
+      await deleteProjectRequest(projectId)
+      return projectId
+    } catch (error) {
+      return rejectWithValue(getApiErrorMessage(error, 'Failed to delete the project.'))
+    }
+  },
 )
 
+const setLoading = (state: DashboardState) => {
+  state.loading = true
+  state.error = null
+}
 
-export const fetchBacklinks = createAsyncThunk(
-  'dashboard/fetchBacklinks',
-  async (projectId: string | number) => {
-    return await fetchBacklinksAPI(projectId)
-  }
-)
-
-
-export const analyzeBacklink = createAsyncThunk(
-  'dashboard/analyzeBacklink',
-  async (payload: AnalyzeBacklinkPayload) => {
-    return await analyzeBacklinkAPI(payload)
-  }
-)
-
-
-export const fetchOptimizedPages = createAsyncThunk(
-  'dashboard/fetchOptimizedPages',
-  async (projectId: string | number) => {
-    return await fetchOptimizedPagesAPI(projectId)
-  }
-)
-
-
-export const analyzeContent = createAsyncThunk(
-  'dashboard/analyzeContent',
-  async (payload: AnalyzeContentPayload) => {
-    return await analyzeContentAPI(payload)
-  }
-)
-
+const setError = (state: DashboardState, message?: string | null) => {
+  state.loading = false
+  state.error = message || 'Unexpected dashboard error.'
+}
 
 const dashboardSlice = createSlice({
   name: 'dashboard',
   initialState,
-  reducers: {
-    clearDashboardError: (state) => {
-      state.error = null
-    },
-    clearContentAnalysis: (state) => {
-      state.contentAnalysis = null
-    },
-  },
+  reducers: {},
   extraReducers: (builder) => {
     builder
-      .addCase(fetchProjects.pending, (state) => {
-        state.loading = true
-        state.error = null
-      })
-      .addCase(fetchProjects.fulfilled, (state, action) => {
+      .addCase(loadProjects.pending, setLoading)
+      .addCase(loadProjects.fulfilled, (state, action) => {
         state.loading = false
         state.projects = action.payload
       })
-      .addCase(fetchProjects.rejected, (state, action) => {
-        state.loading = false
-        state.error = action.error.message || 'Failed to load projects'
-      })
-
-      .addCase(fetchDashboardStats.pending, (state) => {
-        state.loading = true
-        state.error = null
-      })
-      .addCase(fetchDashboardStats.fulfilled, (state, action) => {
+      .addCase(loadProjects.rejected, (state, action) => setError(state, action.payload ?? action.error.message))
+      .addCase(loadStats.pending, setLoading)
+      .addCase(loadStats.fulfilled, (state, action) => {
         state.loading = false
         state.stats = action.payload
       })
-      .addCase(fetchDashboardStats.rejected, (state, action) => {
-        state.loading = false
-        state.error = action.error.message || 'Failed to load dashboard stats'
-      })
-
-      .addCase(fetchProjectDetails.pending, (state) => {
-        state.loading = true
-        state.error = null
-      })
-      .addCase(fetchProjectDetails.fulfilled, (state, action) => {
+      .addCase(loadStats.rejected, (state, action) => setError(state, action.payload ?? action.error.message))
+      .addCase(loadProjectDetails.pending, setLoading)
+      .addCase(loadProjectDetails.fulfilled, (state, action) => {
         state.loading = false
         state.currentProject = action.payload
       })
-      .addCase(fetchProjectDetails.rejected, (state, action) => {
-        state.loading = false
-        state.error = action.error.message || 'Failed to load project details'
-      })
-
-      .addCase(createProject.pending, (state) => {
-        state.loading = true
-        state.error = null
-      })
+      .addCase(loadProjectDetails.rejected, (state, action) => setError(state, action.payload ?? action.error.message))
+      .addCase(createProject.pending, setLoading)
       .addCase(createProject.fulfilled, (state, action) => {
         state.loading = false
-        state.projects.unshift(action.payload)
+        state.projects = [action.payload, ...state.projects]
       })
-      .addCase(createProject.rejected, (state, action) => {
-        state.loading = false
-        state.error = action.error.message || 'Failed to create project'
-      })
-
-      .addCase(deleteProject.pending, (state) => {
-        state.loading = true
-        state.error = null
-      })
-      .addCase(deleteProject.fulfilled, (state, action) => {
+      .addCase(createProject.rejected, (state, action) => setError(state, action.payload ?? action.error.message))
+      .addCase(removeProject.pending, setLoading)
+      .addCase(removeProject.fulfilled, (state, action) => {
         state.loading = false
         state.projects = state.projects.filter((project) => project.id !== action.payload)
+        if (state.currentProject?.id === action.payload) {
+          state.currentProject = null
+        }
       })
-      .addCase(deleteProject.rejected, (state, action) => {
-        state.loading = false
-        state.error = action.error.message || 'Failed to delete project'
-      })
-
-      .addCase(fetchBacklinks.pending, (state) => {
-        state.loading = true
-        state.error = null
-      })
-      .addCase(fetchBacklinks.fulfilled, (state, action) => {
-        state.loading = false
-        state.backlinks = action.payload
-      })
-      .addCase(fetchBacklinks.rejected, (state, action) => {
-        state.loading = false
-        state.error = action.error.message || 'Failed to load backlinks'
-      })
-
-      .addCase(analyzeBacklink.pending, (state) => {
-        state.loading = true
-        state.error = null
-      })
-      .addCase(analyzeBacklink.fulfilled, (state, action) => {
-        state.loading = false
-        state.backlinks = action.payload
-      })
-      .addCase(analyzeBacklink.rejected, (state, action) => {
-        state.loading = false
-        state.error = action.error.message || 'Failed to analyze backlink'
-      })
-
-      .addCase(fetchOptimizedPages.pending, (state) => {
-        state.loading = true
-        state.error = null
-      })
-      .addCase(fetchOptimizedPages.fulfilled, (state, action) => {
-        state.loading = false
-        state.optimizedPages = action.payload
-      })
-      .addCase(fetchOptimizedPages.rejected, (state, action) => {
-        state.loading = false
-        state.error = action.error.message || 'Failed to load optimized pages'
-      })
-
-      .addCase(analyzeContent.pending, (state) => {
-        state.loading = true
-        state.error = null
-      })
-      .addCase(analyzeContent.fulfilled, (state, action) => {
-        state.loading = false
-        state.contentAnalysis = action.payload
-      })
-      .addCase(analyzeContent.rejected, (state, action) => {
-        state.loading = false
-        state.error = action.error.message || 'Failed to analyze content'
-      })
+      .addCase(removeProject.rejected, (state, action) => setError(state, action.payload ?? action.error.message))
   },
 })
 
-
-export const { clearDashboardError, clearContentAnalysis } = dashboardSlice.actions
 export default dashboardSlice.reducer

@@ -1,88 +1,75 @@
 export interface AuditRequest {
-  url: string;
-  projectId?: string | number;
+  url: string
+  projectId?: number
 }
 
-export interface AuditIssueCounters {
-  passed: number;
-  warnings: number;
-  errors: number;
+export type AuditWorkflowStatus = 'queued' | 'pending' | 'processing' | 'in_progress' | 'completed' | 'failed'
+export type AuditFindingStatus = 'success' | 'warning' | 'error' | 'info'
+
+export interface AuditIssueSummary {
+  passed: number
+  warnings: number
+  errors: number
 }
 
-export interface AuditDetail {
-  title: string;
-  description: string;
-  status: 'success' | 'warning' | 'error';
-  recommendation?: string;
+export interface AuditCoverage {
+  attempted: number
+  processed: number
+  max_pages: number
+}
+
+export interface AuditPage {
+  url: string
+  final_url?: string | null
+  status_code?: number | null
+  title?: string | null
+  description?: string | null
+  h1?: string | null
+  links?: string[]
+  error?: string | null
+}
+
+export interface AuditFinding {
+  code: string
+  title: string
+  description: string
+  recommendation?: string
+  category?: string
+  severity?: string
+  confidence?: string
+  status: AuditFindingStatus
+}
+
+export interface AuditScoreBreakdown {
+  base_score: number
+  penalty_points: number
+  coverage_bonus: number
+  crawl_bonus: number
+  crawl_completion_ratio: number
+}
+
+export interface AuditSummary {
+  score?: number
+  score_explanation?: string
+  score_breakdown?: AuditScoreBreakdown
+  issue_counts?: Record<string, number>
+  coverage?: AuditCoverage
+  cwv?: Record<string, string | number | null>
+  links_checked?: number
+  [key: string]: unknown
 }
 
 export interface AuditStatus {
-  uid?: string;
-  id?: string;
-  url?: string;
-  createdAt?: string;
-  status: 'queued' | 'running' | 'pending' | 'processing' | 'in_progress' | 'completed' | 'failed';
-  progress?: number;
-  score?: number;
-  issues?: AuditIssueCounters;
-  details?: AuditDetail[];
-  result?: AuditResult;
-  error?: string;
-}
-
-export interface AuditResult {
-  url: string;
-  issues: AuditIssue[];
-  cwv: CoreWebVitals;
-  meta: MetaAnalysis;
-  links: LinkAnalysis;
-  schema: SchemaAnalysis;
-  timestamp: string;
-}
-
-export interface AuditIssue {
-  severity: 'critical' | 'warning' | 'info';
-  category: string;
-  title: string;
-  description: string;
-  recommendation: string;
-}
-
-export interface CoreWebVitals {
-  lcp: number;
-  fid: number;
-  cls: number;
-  score: number;
-}
-
-export interface MetaAnalysis {
-  title: {
-    value: string;
-    length: number;
-    issues: string[];
-  };
-  description: {
-    value: string;
-    length: number;
-    issues: string[];
-  };
-  h1: {
-    value: string;
-    count: number;
-    issues: string[];
-  };
-}
-
-export interface LinkAnalysis {
-  total: number;
-  internal: number;
-  external: number;
-  broken: number;
-  brokenLinks: string[];
-}
-
-export interface SchemaAnalysis {
-  hasSchema: boolean;
-  types: string[];
-  issues: string[];
+  uid: string
+  id: string
+  url: string
+  status: AuditWorkflowStatus
+  progress: number
+  createdAt: string
+  score: number
+  issues: AuditIssueSummary
+  details: AuditFinding[]
+  summary?: AuditSummary
+  pages?: AuditPage[]
+  error?: string
 }

@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../../store/hooks'
-import { register } from '../../store/slices/authSlice'
+import { clearError, register } from '../../store/slices/authSlice'
 import Input from '../../components/ui/Input'
 import Button from '../../components/ui/Button'
+import { validatePassword } from '../../utils/validation'
 
 const Register = () => {
   const navigate = useNavigate()
@@ -18,49 +19,61 @@ const Register = () => {
   })
   const [validationError, setValidationError] = useState('')
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  useEffect(() => {
+    return () => {
+      dispatch(clearError())
+    }
+  }, [dispatch])
+
+  const passwordValidation = useMemo(() => validatePassword(formData.password), [formData.password])
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
     setValidationError('')
 
     if (formData.password !== formData.confirmPassword) {
-      setValidationError('Passwords do not match')
+      setValidationError('Passwords do not match.')
       return
     }
 
-    if (formData.password.length < 6) {
-      setValidationError('Password must contain at least 6 characters')
+    if (!passwordValidation.valid) {
+      setValidationError(passwordValidation.message ?? 'Password is invalid.')
       return
     }
 
     const result = await dispatch(
       register({
-        name: formData.name.trim(),
         email: formData.email.trim(),
         password: formData.password,
-      })
+        name: formData.name.trim() || undefined,
+      }),
     )
 
     if (register.fulfilled.match(result)) {
-      navigate('/app')
+      navigate('/')
     }
   }
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData((prev) => ({
-      ...prev,
-      [e.target.name]: e.target.value,
+  const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (error) {
+      dispatch(clearError())
+    }
+
+    setFormData((current) => ({
+      ...current,
+      [event.target.name]: event.target.value,
     }))
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-      <div className="w-full max-w-md rounded-lg bg-white p-8 shadow-xl">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 px-4 py-10">
+      <div className="mx-auto w-full max-w-md rounded-2xl bg-white p-8 shadow-xl">
         <div className="mb-8 text-center">
           <h1 className="mb-2 text-3xl font-bold text-blue-600">SEO Master</h1>
           <p className="text-gray-600">Create a new account</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} className="space-y-5">
           {(error || validationError) && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {validationError || error}
@@ -69,11 +82,11 @@ const Register = () => {
 
           <Input
             label="Name"
+            type="text"
             name="name"
             value={formData.name}
             onChange={handleChange}
-            placeholder="John Doe"
-            required
+            placeholder="John Test"
           />
 
           <Input
@@ -92,7 +105,9 @@ const Register = () => {
             name="password"
             value={formData.password}
             onChange={handleChange}
-            placeholder="********"
+            placeholder="At least 8 characters"
+            hint={formData.password ? passwordValidation.message : 'Use at least 8 characters.'}
+            error={formData.password && !passwordValidation.valid ? passwordValidation.message : undefined}
             required
           />
 
@@ -102,7 +117,12 @@ const Register = () => {
             name="confirmPassword"
             value={formData.confirmPassword}
             onChange={handleChange}
-            placeholder="********"
+            placeholder="Repeat your password"
+            error={
+              formData.confirmPassword && formData.password !== formData.confirmPassword
+                ? 'Passwords do not match.'
+                : undefined
+            }
             required
           />
 
@@ -111,18 +131,14 @@ const Register = () => {
           </Button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-gray-600">
-          Already have an account?{' '}
-          <Link to="/login" className="font-medium text-blue-600 hover:text-blue-700">
-            Sign in
-          </Link>
-        </p>
-        <p className="mt-2 text-center text-sm text-gray-600">
-          Or{' '}
-          <Link to="/" className="font-medium text-blue-600 hover:text-blue-700">
-            run free audit without registration
-          </Link>
-        </p>
+        <div className="mt-6 text-center text-sm text-gray-600">
+          <p>
+            Already have an account?{' '}
+            <Link to="/login" className="font-medium text-blue-600 hover:text-blue-700">
+              Sign in
+            </Link>
+          </p>
+        </div>
       </div>
     </div>
   )

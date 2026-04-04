@@ -1,12 +1,12 @@
 const Loader = () => {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="text-center">
-        <div className="mx-auto h-16 w-16 animate-spin rounded-full border-b-4 border-blue-600"></div>
-        <p className="mt-4 text-gray-600">Loading...</p>
+        <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600 mx-auto"></div>
+        <p className="mt-4 text-gray-600">Загрузка...</p>
       </div>
     </div>
-  )
-}
+  );
+};
 
-export default Loader
+export default Loader;

@@ -13,21 +13,11 @@ export const validateUrl = (url: string): boolean => {
 }
 
 export const validatePassword = (password: string): { valid: boolean; message?: string } => {
-  if (password.length < 6) {
-    return { valid: false, message: 'Password must contain at least 6 characters' }
-  }
-
-  if (!/[A-Za-z]/.test(password)) {
-    return { valid: false, message: 'Password must contain at least one letter' }
-  }
-
-  if (!/[0-9]/.test(password)) {
-    return { valid: false, message: 'Password must contain at least one number' }
+  if (password.length < 8) {
+    return { valid: false, message: 'Password must contain at least 8 characters.' }
   }
 
   return { valid: true }
 }
 
-export const sanitizeInput = (input: string): string => {
-  return input.trim().replace(/[<>]/g, '')
-}
+export const sanitizeInput = (input: string): string => input.trim().replace(/[<>]/g, '')

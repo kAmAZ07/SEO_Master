@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     HMAC_ROTATION_DAYS: int = Field(default=90, env="HMAC_ROTATION_DAYS")
     HMAC_GRACE_DAYS: int = Field(default=7, env="HMAC_GRACE_DAYS")
 
+    CLIENT_API_HMAC_SECRET: Optional[str] = Field(default=None, env="CLIENT_API_HMAC_SECRET")
+    CLIENT_API_HMAC_PROJECT_ID: Optional[str] = Field(default=None, env="CLIENT_API_HMAC_PROJECT_ID")
+
+    WORDPRESS_BASE_URL: Optional[str] = Field(default=None, env="WORDPRESS_BASE_URL")
+    WORDPRESS_HMAC_SECRET: Optional[str] = Field(default=None, env="WORDPRESS_HMAC_SECRET")
+
+    TILDA_ADAPTER_URL: Optional[str] = Field(default=None, env="TILDA_ADAPTER_URL")
+    TILDA_INTERNAL_API_KEY: Optional[str] = Field(default=None, env="TILDA_INTERNAL_API_KEY")
+
     CORS_ORIGINS: str = Field(default="*", env="CORS_ORIGINS")
     CORS_ALLOW_CREDENTIALS: bool = Field(default=True, env="CORS_ALLOW_CREDENTIALS")
     CORS_ALLOW_METHODS: str = Field(default="GET,POST,PATCH,OPTIONS", env="CORS_ALLOW_METHODS")

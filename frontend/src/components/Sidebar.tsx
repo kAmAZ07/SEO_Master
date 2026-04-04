@@ -1,51 +1,41 @@
-import { Link, useLocation } from 'react-router-dom'
-import {
-  FileText,
-  FolderKanban,
-  KeyRound,
-  LayoutDashboard,
-  Link2,
-  Search,
-  Settings,
-} from 'lucide-react'
+import { Link, useLocation } from 'react-router-dom';
 
 const navigation = [
-  { name: 'Dashboard', href: '/app', Icon: LayoutDashboard },
-  { name: 'Projects', href: '/app/projects', Icon: FolderKanban },
-  { name: 'Site Audit', href: '/app/audit', Icon: Search },
-  { name: 'Keywords', href: '/app/keywords', Icon: KeyRound },
-  { name: 'Content', href: '/app/content', Icon: FileText },
-  { name: 'Backlinks', href: '/app/backlinks', Icon: Link2 },
-  { name: 'Settings', href: '/app/settings', Icon: Settings },
-]
+  { name: 'Панель управления', href: '/', icon: '📊' },
+  { name: 'Проекты', href: '/projects', icon: '📁' },
+  { name: 'Аудит сайта', href: '/audit', icon: '🔍' },
+  { name: 'Ключевые слова', href: '/keywords', icon: '🔑' },
+  { name: 'Контент', href: '/content', icon: '📝' },
+  { name: 'Обратные ссылки', href: '/backlinks', icon: '🔗' },
+  { name: 'Настройки', href: '/settings', icon: '⚙️' },
+];
 
 const Sidebar = () => {
-  const location = useLocation()
+  const location = useLocation();
 
   return (
-    <aside className="fixed left-0 top-16 h-[calc(100vh-4rem)] w-64 overflow-y-auto border-r border-gray-200 bg-white">
-      <nav className="space-y-1 p-4">
+    <aside className="fixed left-0 top-16 h-[calc(100vh-4rem)] w-64 bg-white border-r border-gray-200 overflow-y-auto">
+      <nav className="p-4 space-y-1">
         {navigation.map((item) => {
-          const isActive = item.href === '/app'
-            ? location.pathname === '/app'
-            : location.pathname.startsWith(item.href)
-
+          const isActive = location.pathname === item.href;
           return (
             <Link
               key={item.name}
               to={item.href}
-              className={`flex items-center rounded-lg px-4 py-3 text-sm font-medium transition-colors ${
-                isActive ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'
+              className={`flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-colors ${
+                isActive
+                  ? 'bg-blue-50 text-blue-700'
+                  : 'text-gray-700 hover:bg-gray-50'
               }`}
             >
-              <item.Icon className="mr-3 h-4 w-4" />
+              <span className="mr-3 text-lg">{item.icon}</span>
               {item.name}
             </Link>
-          )
+          );
         })}
       </nav>
     </aside>
-  )
-}
+  );
+};
 
-export default Sidebar
+export default Sidebar;

@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
-import { createProject, deleteProject, fetchProjects } from '../store/slices/dashboardSlice'
-import { Project } from '../types/dashboard'
+import { createProject, loadProjects, removeProject } from '../store/slices/dashboardSlice'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
@@ -10,25 +9,47 @@ import Loader from '../components/ui/Loader'
 
 const Projects = () => {
   const dispatch = useAppDispatch()
-  const { projects, loading } = useAppSelector((state) => state.dashboard)
+  const { projects, loading, error } = useAppSelector((state) => state.dashboard)
   const [showModal, setShowModal] = useState(false)
-  const [newProject, setNewProject] = useState({ name: '', url: '', description: '' })
+  const [form, setForm] = useState({ name: '', url: '', description: '' })
+  const [localError, setLocalError] = useState('')
 
   useEffect(() => {
-    dispatch(fetchProjects())
+    void dispatch(loadProjects())
   }, [dispatch])
 
-  const handleCreateProject = async (e: React.FormEvent) => {
-    e.preventDefault()
-    await dispatch(createProject(newProject))
-    setNewProject({ name: '', url: '', description: '' })
-    setShowModal(false)
+  const isSubmitDisabled = useMemo(() => !form.name.trim() || !form.url.trim() || loading, [form, loading])
+
+  const handleCreateProject = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setLocalError('')
+
+    try {
+      new URL(form.url)
+    } catch {
+      setLocalError('Enter a valid project URL, including http:// or https://.')
+      return
+    }
+
+    const result = await dispatch(
+      createProject({
+        name: form.name.trim(),
+        url: form.url.trim(),
+        description: form.description.trim() || undefined,
+      }),
+    )
+
+    if (createProject.fulfilled.match(result)) {
+      setForm({ name: '', url: '', description: '' })
+      setShowModal(false)
+    }
   }
 
   const handleDeleteProject = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this project?')) {
-      await dispatch(deleteProject(id))
+    if (!window.confirm('Delete this project? This action cannot be undone.')) {
+      return
     }
+    await dispatch(removeProject(id))
   }
 
   if (loading && !projects.length) {
@@ -37,93 +58,138 @@ const Projects = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Projects</h1>
-          <p className="mt-1 text-gray-600">Manage your SEO projects and workspaces.</p>
+          <p className="mt-1 text-gray-600">Manage the websites you want to audit, optimize, and monitor.</p>
         </div>
-        <Button onClick={() => setShowModal(true)}>+ Create project</Button>
+        <Button onClick={() => setShowModal(true)}>Create project</Button>
       </div>
 
-      {projects.length > 0 ? (
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {projects.map((project: Project) => (
-            <Card key={project.id} className="transition-shadow hover:shadow-lg">
+      {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+
+      {projects.length ? (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
+          {projects.map((project) => (
+            <Card key={project.id} className="flex h-full flex-col justify-between p-6">
               <div className="space-y-4">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <h3 className="text-lg font-semibold text-gray-900">{project.name}</h3>
-                    <p className="mt-1 text-sm text-gray-600">{project.url}</p>
-                    {project.description && <p className="mt-2 text-sm text-gray-500">{project.description}</p>}
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900">{project.name}</h2>
+                    <a
+                      href={project.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 inline-block text-sm text-blue-600 hover:text-blue-700"
+                    >
+                      {project.url}
+                    </a>
                   </div>
-                  <button onClick={() => handleDeleteProject(project.id)} className="text-sm text-red-600 hover:text-red-700">
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteProject(project.id)}
+                    className="text-sm font-medium text-red-600 hover:text-red-700"
+                  >
                     Delete
                   </button>
                 </div>
 
-                <div className="flex items-center justify-between border-t border-gray-200 pt-4">
-                  <span className="text-xs text-gray-500">
-                    Created: {project.createdAt ? new Date(project.createdAt).toLocaleDateString('ru-RU') : '-'}
-                  </span>
-                  <Link to={`/app/projects/${project.id}`} className="text-sm font-medium text-blue-600 hover:text-blue-700">
-                    Open
-                  </Link>
+                {project.description && <p className="text-sm text-gray-600">{project.description}</p>}
+
+                <div className="grid grid-cols-2 gap-3 rounded-lg bg-gray-50 p-4 text-sm text-gray-600">
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-gray-400">Status</p>
+                    <p className="mt-1 font-medium text-gray-900">{project.status}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-gray-400">Created</p>
+                    <p className="mt-1 font-medium text-gray-900">
+                      {project.createdAt ? new Date(project.createdAt).toLocaleDateString() : 'Recently'}
+                    </p>
+                  </div>
                 </div>
+              </div>
+
+              <div className="mt-6 flex gap-3">
+                <Link to={`/projects/${project.id}`} className="flex-1">
+                  <Button className="w-full">Open project</Button>
+                </Link>
+                <Link to={`/audit?project=${project.id}`} className="flex-1">
+                  <Button variant="outline" className="w-full">
+                    Audit
+                  </Button>
+                </Link>
               </div>
             </Card>
           ))}
         </div>
       ) : (
-        <Card className="py-12 text-center">
-          <p className="mb-4 text-gray-500">No projects yet.</p>
-          <Button onClick={() => setShowModal(true)}>Create your first project</Button>
+        <Card className="p-10 text-center">
+          <h2 className="text-xl font-semibold text-gray-900">No projects yet</h2>
+          <p className="mt-2 text-gray-600">Create your first project to start using the SEO tools.</p>
+          <Button className="mt-6" onClick={() => setShowModal(true)}>
+            Create project
+          </Button>
         </Card>
       )}
 
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-          <div className="w-full max-w-md rounded-lg bg-white p-6">
-            <h2 className="mb-4 text-2xl font-bold text-gray-900">New project</h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <Card className="w-full max-w-lg p-6">
+            <div className="mb-6 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-semibold text-gray-900">New project</h2>
+                <p className="mt-1 text-sm text-gray-600">Add a website you want to manage inside SEO Master.</p>
+              </div>
+              <button type="button" onClick={() => setShowModal(false)} className="text-sm text-gray-500 hover:text-gray-700">
+                Close
+              </button>
+            </div>
+
+            {(localError || error) && (
+              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {localError || error}
+              </div>
+            )}
+
             <form onSubmit={handleCreateProject} className="space-y-4">
               <Input
                 label="Project name"
-                value={newProject.name}
-                onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
-                placeholder="My website"
+                value={form.name}
+                onChange={(event) => setForm({ ...form, name: event.target.value })}
+                placeholder="Main company website"
                 required
               />
               <Input
                 label="Website URL"
                 type="url"
-                value={newProject.url}
-                onChange={(e) => setNewProject({ ...newProject, url: e.target.value })}
+                value={form.url}
+                onChange={(event) => setForm({ ...form, url: event.target.value })}
                 placeholder="https://example.com"
                 required
               />
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Description (optional)</label>
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-gray-700" htmlFor="project-description">
+                  Description
+                </label>
                 <textarea
-                  value={newProject.description}
-                  onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-transparent focus:ring-2 focus:ring-blue-500"
-                  rows={3}
-                  placeholder="Short project description"
+                  id="project-description"
+                  value={form.description}
+                  onChange={(event) => setForm({ ...form, description: event.target.value })}
+                  className="min-h-[110px] w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  placeholder="Optional notes about the site, niche, or SEO goals."
                 />
               </div>
-              <div className="flex gap-3 pt-4">
-                <Button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="flex-1 bg-gray-200 text-gray-800 hover:bg-gray-300"
-                >
+              <div className="flex gap-3 pt-2">
+                <Button type="button" variant="outline" className="flex-1" onClick={() => setShowModal(false)}>
                   Cancel
                 </Button>
-                <Button type="submit" className="flex-1">
-                  Create
+                <Button type="submit" className="flex-1" disabled={isSubmitDisabled}>
+                  {loading ? 'Creating...' : 'Create project'}
                 </Button>
               </div>
             </form>
-          </div>
+          </Card>
         </div>
       )}
     </div>

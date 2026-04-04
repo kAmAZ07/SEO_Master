@@ -1,171 +1,175 @@
-﻿import api from './axiosConfig'
-import { AuditDetail, AuditIssueCounters, AuditRequest, AuditStatus } from '@/types/audit'
+import api from './axiosConfig'
+import type { AuditRequest, AuditStatus, AuditFinding, AuditIssueSummary, AuditSummary, AuditPage } from '@/types/audit'
 
-type JsonObject = Record<string, unknown>
+const asObject = (value: unknown): Record<string, unknown> =>
+  typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
 
-const toObject = (value: unknown): JsonObject => {
-  if (typeof value === 'object' && value !== null) {
-    return value as JsonObject
-  }
-
-  return {}
-}
-
-const toString = (value: unknown, fallback = ''): string => {
+const asString = (value: unknown, fallback = ''): string => {
   if (typeof value === 'string') {
     return value
   }
-
   if (value === null || value === undefined) {
     return fallback
   }
-
   return String(value)
 }
 
-const toNumber = (value: unknown, fallback = 0): number => {
+const asNumber = (value: unknown, fallback = 0): number => {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value
   }
-
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-const mapSeverityToStatus = (severity: string): AuditDetail['status'] => {
+const normalizeFindingStatus = (severity: string): AuditFinding['status'] => {
   if (severity === 'critical' || severity === 'high' || severity === 'error') {
     return 'error'
   }
-
   if (severity === 'warning' || severity === 'medium' || severity === 'low') {
     return 'warning'
   }
-
+  if (severity === 'info') {
+    return 'info'
+  }
   return 'success'
 }
 
-const mapFindingsToDetails = (findingsPayload: unknown): AuditDetail[] => {
-  if (!Array.isArray(findingsPayload)) {
+const normalizeStatus = (status: string): AuditStatus['status'] => {
+  const value = status.toLowerCase()
+  if (value === 'queued' || value === 'pending' || value === 'processing' || value === 'in_progress' || value === 'completed' || value === 'failed') {
+    return value
+  }
+  return 'processing'
+}
+
+const mapFindings = (findings: unknown): AuditFinding[] => {
+  if (!Array.isArray(findings)) {
     return []
   }
 
-  return findingsPayload.slice(0, 30).map((finding) => {
-    const item = toObject(finding)
-    const code = toString(item.code || item.title || 'audit_finding')
-    const severity = toString(item.severity || 'info').toLowerCase()
+  return findings.slice(0, 100).map((item) => {
+    const finding = asObject(item)
+    const severity = asString(finding.severity, 'info').toLowerCase()
+    const code = asString(finding.code || finding.title || 'audit_finding')
+    const title = asString(finding.title, code.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase()))
+    const description = asString(finding.description || finding.message, title)
+    const recommendation = asString(finding.recommendation)
 
     return {
-      title: code.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase()),
-      description: toString(item.message || item.description || code),
-      status: mapSeverityToStatus(severity),
-      recommendation: toString(item.recommendation || ''),
+      code,
+      title,
+      description,
+      recommendation: recommendation || undefined,
+      category: asString(finding.category) || undefined,
+      severity,
+      confidence: asString(finding.confidence) || undefined,
+      status: normalizeFindingStatus(severity),
     }
   })
 }
 
-const buildIssueCounters = (details: AuditDetail[]): AuditIssueCounters => {
-  const counters: AuditIssueCounters = {
-    passed: 0,
-    warnings: 0,
-    errors: 0,
-  }
+const summarizeIssues = (details: AuditFinding[]): AuditIssueSummary => {
+  const summary = { passed: 0, warnings: 0, errors: 0 }
 
   for (const detail of details) {
     if (detail.status === 'error') {
-      counters.errors += 1
+      summary.errors += 1
     } else if (detail.status === 'warning') {
-      counters.warnings += 1
+      summary.warnings += 1
     } else {
-      counters.passed += 1
+      summary.passed += 1
     }
   }
 
-  return counters
+  return summary
 }
 
-const computeScore = (summaryPayload: unknown, issues: AuditIssueCounters): number => {
-  const summary = toObject(summaryPayload)
-  const directScore = toNumber(summary.score, -1)
-
+const calculateScore = (summary: AuditSummary, issues: AuditIssueSummary): number => {
+  const directScore = asNumber(summary.score, -1)
   if (directScore >= 0) {
     return Math.max(0, Math.min(100, Math.round(directScore)))
   }
 
-  const penalty = issues.errors * 20 + issues.warnings * 6
-  return Math.max(0, 100 - penalty)
+  const fallback = 100 - issues.errors * 18 - issues.warnings * 5
+  return Math.max(0, Math.min(100, Math.round(fallback)))
 }
 
-const normalizeStatus = (rawStatus: string): AuditStatus['status'] => {
-  const status = rawStatus.toLowerCase()
-
-  if (status === 'queued') {
-    return 'queued'
-  }
-  if (status === 'running') {
-    return 'running'
-  }
-  if (status === 'pending') {
-    return 'pending'
-  }
-  if (status === 'processing') {
-    return 'processing'
-  }
-  if (status === 'in_progress') {
-    return 'in_progress'
-  }
-  if (status === 'failed') {
-    return 'failed'
+const mapPages = (pages: unknown): AuditPage[] => {
+  if (!Array.isArray(pages)) {
+    return []
   }
 
-  return 'completed'
+  return pages.map((item) => {
+    const page = asObject(item)
+    return {
+      url: asString(page.url),
+      final_url: asString(page.final_url) || undefined,
+      status_code: asNumber(page.status_code, NaN),
+      title: asString(page.title) || undefined,
+      description: asString(page.description) || undefined,
+      h1: asString(page.h1) || undefined,
+      links: Array.isArray(page.links) ? page.links.map((link) => asString(link)) : [],
+      error: asString(page.error) || undefined,
+    }
+  })
 }
 
-const normalizeAuditStatus = (payload: unknown): AuditStatus => {
-  const data = toObject(payload)
-  const results = toObject(data.results)
-  const details = mapFindingsToDetails(results.findings)
-  const issues = buildIssueCounters(details)
+const normalizeAudit = (payload: unknown): AuditStatus => {
+  const data = asObject(payload)
+  const results = asObject(data.results)
+  const summary = asObject(results.summary) as AuditSummary
+  const details = mapFindings(results.findings)
+  const issues = summarizeIssues(details)
+  const pages = mapPages(results.pages)
+  const uid = asString(data.uid || data.audit_id || data.id)
+  const url = asString(data.url || data.root_url || data.target_url)
 
   return {
-    uid: toString(data.uid || data.audit_id || data.id),
-    id: toString(data.id || data.uid || data.audit_id),
-    url: toString(data.url || data.root_url || data.target_url),
-    createdAt: toString(data.created_at || data.createdAt || new Date().toISOString()),
-    status: normalizeStatus(toString(data.status, 'pending')),
-    progress: toNumber(data.progress, 0),
-    score: computeScore(results.summary, issues),
+    uid,
+    id: asString(data.id || uid),
+    url,
+    createdAt: asString(data.created_at || data.createdAt || new Date().toISOString()),
+    status: normalizeStatus(asString(data.status, 'processing')),
+    progress: asNumber(data.progress, 0),
+    score: calculateScore(summary, issues),
     issues,
     details,
-    result: undefined,
-    error: toString(data.error || ''),
+    summary,
+    pages,
+    error: asString(data.error),
   }
 }
 
 export const submitAuditRequest = async (request: AuditRequest): Promise<AuditStatus> => {
   const response = await api.post('/public/quick-audit', request)
-  return normalizeAuditStatus(response.data)
+  const data = asObject(response.data)
+
+  return {
+    uid: asString(data.uid || data.audit_id),
+    id: asString(data.audit_id || data.uid || data.id),
+    url: request.url,
+    status: normalizeStatus(asString(data.status, 'processing')),
+    progress: 10,
+    createdAt: new Date().toISOString(),
+    score: 0,
+    issues: { passed: 0, warnings: 0, errors: 0 },
+    details: [],
+    summary: undefined,
+    pages: [],
+    error: '',
+  }
 }
 
 export const getAuditStatus = async (uid: string): Promise<AuditStatus> => {
   const response = await api.get(`/public/audit-status/${uid}`)
-  return normalizeAuditStatus(response.data)
+  return normalizeAudit(response.data)
 }
 
-export const fetchAuditHistory = async (projectId?: string | number): Promise<AuditStatus[]> => {
-  const response = await api.get('/audit/history', {
-    params: projectId ? { projectId } : undefined,
-  })
-
-  const payload = response.data
-  if (Array.isArray(payload)) {
-    return payload.map(normalizeAuditStatus)
+export const getAuditHistory = async (): Promise<AuditStatus[]> => {
+  const response = await api.get('/audit/history')
+  if (!Array.isArray(response.data)) {
+    return []
   }
-  if (Array.isArray(payload?.items)) {
-    return payload.items.map(normalizeAuditStatus)
-  }
-  if (Array.isArray(payload?.history)) {
-    return payload.history.map(normalizeAuditStatus)
-  }
-
-  return []
+  return response.data.map((item: unknown) => normalizeAudit(item))
 }

@@ -1,0 +1,60 @@
+﻿<?php
+/**
+ * Plugin Name: SEO Master Connector
+ * Description: Secure connector that applies SEO updates received from SEO Master platform.
+ * Version: 0.2.0
+ * Author: SEO Master Team
+ * Requires at least: 6.4
+ * Requires PHP: 8.0
+ * Text Domain: seo-master-connector
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+define('SEO_MASTER_CONNECTOR_VERSION', '0.2.0');
+define('SEO_MASTER_CONNECTOR_PATH', plugin_dir_path(__FILE__));
+define('SEO_MASTER_CONNECTOR_URL', plugin_dir_url(__FILE__));
+
+require_once SEO_MASTER_CONNECTOR_PATH . 'includes/compatibility-checker.php';
+
+if (!seo_master_is_compatible()) {
+    add_action('admin_notices', 'seo_master_render_incompatibility_notice');
+    return;
+}
+
+require_once SEO_MASTER_CONNECTOR_PATH . 'includes/signature-verifier.php';
+require_once SEO_MASTER_CONNECTOR_PATH . 'includes/hmac-validator.php';
+require_once SEO_MASTER_CONNECTOR_PATH . 'includes/api-handler.php';
+require_once SEO_MASTER_CONNECTOR_PATH . 'includes/meta-filter.php';
+require_once SEO_MASTER_CONNECTOR_PATH . 'admin/settings.php';
+
+/**
+ * Initialize default options.
+ */
+function seo_master_activate_plugin() {
+    if (get_option('seo_master_max_drift') === false) {
+        add_option('seo_master_max_drift', 300);
+    }
+
+    if (get_option('seo_master_project_id') === false) {
+        add_option('seo_master_project_id', '');
+    }
+
+    if (get_option('seo_master_hmac_secret') === false) {
+        add_option('seo_master_hmac_secret', '');
+    }
+}
+register_activation_hook(__FILE__, 'seo_master_activate_plugin');
+
+/**
+ * Register runtime hooks.
+ */
+function seo_master_bootstrap() {
+    add_action('rest_api_init', 'seo_master_register_routes');
+    add_action('admin_menu', 'seo_master_register_settings_page');
+    add_action('admin_init', 'seo_master_register_settings');
+    add_action('wp_head', 'seo_master_output_meta_tags', 5);
+}
+add_action('plugins_loaded', 'seo_master_bootstrap');

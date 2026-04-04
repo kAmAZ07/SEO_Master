@@ -11,7 +11,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 from config.logging_config import get_logger
-from services.api_gateway.config import settings
+from services.api_gateway.config import settings, is_development
 
 logger = get_logger(__name__)
 
@@ -134,7 +134,7 @@ def setup_error_handlers(app: FastAPI) -> None:
             }
         )
         
-        if settings.is_development():
+        if is_development():
             detail = str(exc)
         else:
             detail = "Database error occurred"
@@ -168,7 +168,7 @@ def setup_error_handlers(app: FastAPI) -> None:
             exc_info=True
         )
         
-        if settings.is_development():
+        if is_development():
             detail = f"{type(exc).__name__}: {str(exc)}"
         else:
             detail = "Internal server error"

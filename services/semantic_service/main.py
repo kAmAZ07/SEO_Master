@@ -10,12 +10,15 @@ from services.semantic_service.config import settings
 from services.semantic_service.db.session import init_db, get_session
 from services.semantic_service.db.models import FFScoreRow, EEATScoreRow, ContentDraftRow, SemanticAnalysisRow
 from services.semantic_service.schemas.ff_score import FFScoreRequest, FFScoreResponse
+from services.semantic_service.schemas.analysis import SemanticAnalysisRequest, SemanticAnalysisResponse
 from services.semantic_service.schemas.eeat import EEATRequest, EEATResponse
 from services.semantic_service.scoring.ff_score_calculator import calculate_ff_score
 from services.semantic_service.scoring.eeat_analyzer import analyze_eeat
 from services.semantic_service.llm.llm_client import generate_drafts
 from services.semantic_service.events.ff_score_recalculated import publish_ffscore_recalculated
 from services.semantic_service.events.crawl_completed_handler import maybe_start_crawl_completed_consumer
+from services.semantic_service.events.task_created_handler import maybe_start_task_created_consumer
+from services.semantic_service.analysis.pipeline import create_semantic_analysis
 
 app = FastAPI(title="Semantic Service", version="0.1.0")
 
@@ -27,6 +30,7 @@ _CWV_RANK = {"poor": 0, "needs_improvement": 1, "good": 2, "unknown": 3}
 async def _startup() -> None:
     await init_db()
     asyncio.create_task(maybe_start_crawl_completed_consumer())
+    asyncio.create_task(maybe_start_task_created_consumer())
 
 
 @app.get("/health")
@@ -69,6 +73,7 @@ def _count_findings(findings: list[dict], *, prefixes: tuple[str, ...] = (), cod
 async def _resolve_ffscore_inputs(payload: FFScoreRequest) -> dict:
     sources: dict[str, str] = {}
     unavailable: list[str] = []
+    input_sources = payload.input_sources if isinstance(payload.input_sources, dict) else {}
 
     latest_analysis = None
     if payload.project_id:
@@ -90,7 +95,7 @@ async def _resolve_ffscore_inputs(payload: FFScoreRequest) -> dict:
         if semantic_distance is not None:
             sources["semantic_distance"] = "semantic_analysis"
     elif semantic_distance is not None:
-        sources["semantic_distance"] = "request"
+        sources["semantic_distance"] = str(input_sources.get("semantic_distance") or "request")
     else:
         semantic_distance = 50.0
         sources["semantic_distance"] = "estimate"
@@ -102,7 +107,7 @@ async def _resolve_ffscore_inputs(payload: FFScoreRequest) -> dict:
         if keyword_coverage is not None:
             sources["keyword_coverage"] = "semantic_analysis"
     elif keyword_coverage is not None:
-        sources["keyword_coverage"] = "request"
+        sources["keyword_coverage"] = str(input_sources.get("keyword_coverage") or "request")
     else:
         keyword_coverage = 50.0
         sources["keyword_coverage"] = "estimate"
@@ -114,7 +119,7 @@ async def _resolve_ffscore_inputs(payload: FFScoreRequest) -> dict:
         sources["freshness_days_since_update"] = "estimate"
         unavailable.append("freshness_days_since_update")
     else:
-        sources["freshness_days_since_update"] = "request"
+        sources["freshness_days_since_update"] = str(input_sources.get("freshness_days_since_update") or "request")
 
     serp_shift = payload.serp_shift
     if serp_shift is None:
@@ -122,7 +127,7 @@ async def _resolve_ffscore_inputs(payload: FFScoreRequest) -> dict:
         sources["serp_shift"] = "estimate"
         unavailable.append("serp_shift")
     else:
-        sources["serp_shift"] = "request"
+        sources["serp_shift"] = str(input_sources.get("serp_shift") or "request")
 
     link_velocity = payload.link_velocity
     if link_velocity is None:
@@ -130,11 +135,11 @@ async def _resolve_ffscore_inputs(payload: FFScoreRequest) -> dict:
         sources["link_velocity"] = "estimate"
         unavailable.append("link_velocity")
     else:
-        sources["link_velocity"] = "request"
+        sources["link_velocity"] = str(input_sources.get("link_velocity") or "request")
 
     cwv_grade = payload.cwv_grade
     if cwv_grade:
-        sources["cwv_grade"] = "request"
+        sources["cwv_grade"] = str(input_sources.get("cwv_grade") or "request")
     else:
         cwv_grade = _worst_cwv_grade(summary) or "unknown"
         sources["cwv_grade"] = "audit_summary" if cwv_grade != "unknown" else "estimate"
@@ -148,7 +153,7 @@ async def _resolve_ffscore_inputs(payload: FFScoreRequest) -> dict:
         if not findings:
             unavailable.append("broken_links_count")
     else:
-        sources["broken_links_count"] = "request"
+        sources["broken_links_count"] = str(input_sources.get("broken_links_count") or "request")
 
     schema_errors_count = payload.schema_errors_count
     if schema_errors_count is None:
@@ -161,7 +166,7 @@ async def _resolve_ffscore_inputs(payload: FFScoreRequest) -> dict:
         if not findings:
             unavailable.append("schema_errors_count")
     else:
-        sources["schema_errors_count"] = "request"
+        sources["schema_errors_count"] = str(input_sources.get("schema_errors_count") or "request")
 
     return {
         "freshness_days_since_update": int(freshness_days_since_update),
@@ -205,6 +210,22 @@ async def eeat(payload: EEATRequest) -> EEATResponse:
         )
         await session.commit()
     return EEATResponse(score_id=score_id, score=res["score"], breakdown=res["breakdown"], signals=res["signals"])
+
+
+@app.post("/semantic/analyze", response_model=SemanticAnalysisResponse)
+async def analyze_semantic(payload: SemanticAnalysisRequest) -> SemanticAnalysisResponse:
+    result = await create_semantic_analysis(
+        project_id=payload.project_id,
+        root_url=str(payload.root_url),
+        audit_id=payload.audit_id,
+        analysis_id=payload.analysis_id,
+        mode=payload.mode,
+        content_text=payload.content_text,
+        pages=payload.pages,
+        keywords=payload.keywords,
+        serp_top10_texts=payload.serp_top10_texts,
+    )
+    return SemanticAnalysisResponse(**result)
 
 
 @app.post("/semantic/ff-score", response_model=FFScoreResponse)
@@ -320,12 +341,17 @@ async def latest(project_id: str) -> dict:
         eeat_res = await session.execute(
             select(EEATScoreRow).where(EEATScoreRow.project_id == project_id).order_by(EEATScoreRow.created_at.desc()).limit(1)
         )
+        draft_res = await session.execute(
+            select(ContentDraftRow).where(ContentDraftRow.project_id == project_id).order_by(ContentDraftRow.created_at.desc()).limit(1)
+        )
         ff = ff_res.scalar_one_or_none()
         eeat = eeat_res.scalar_one_or_none()
+        draft = draft_res.scalar_one_or_none()
         return {
             "project_id": project_id,
             "ff_score": None if ff is None else {"id": ff.score_id, "score": ff.ff_score, "components": ff.components, "created_at": ff.created_at},
             "eeat": None if eeat is None else {"id": eeat.score_id, "score": eeat.score, "breakdown": eeat.breakdown, "created_at": eeat.created_at},
+            "draft": None if draft is None else {"id": draft.draft_id, "root_url": draft.root_url, "drafts": draft.drafts, "created_at": draft.created_at},
         }
 
 

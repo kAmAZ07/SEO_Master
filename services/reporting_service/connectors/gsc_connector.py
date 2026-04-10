@@ -20,15 +20,28 @@ def _load_credentials() -> Credentials:
     )
 
 
-def fetch_gsc_summary(property_url: str, days: int = 28) -> dict:
+def fetch_gsc_summary(property_url: str, days: int = 28, offset_days: int = 0) -> dict:
     creds = _load_credentials()
     service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
-    end = date.today()
-    start = end - timedelta(days=days)
+    end = date.today() - timedelta(days=max(0, offset_days))
+    start = end - timedelta(days=max(0, days - 1))
     body = {"startDate": start.isoformat(), "endDate": end.isoformat(), "dimensions": ["query"], "rowLimit": 50}
     resp = service.searchanalytics().query(siteUrl=property_url, body=body).execute()
     rows = resp.get("rows", []) or []
     clicks = sum(float(r.get("clicks", 0.0) or 0.0) for r in rows)
     impressions = sum(float(r.get("impressions", 0.0) or 0.0) for r in rows)
     ctr = 0.0 if impressions <= 0 else clicks / impressions
-    return {"property_url": property_url, "range_days": days, "clicks": round(clicks, 2), "impressions": round(impressions, 2), "ctr": round(ctr, 4)}
+    positions = [float(r.get("position", 0.0) or 0.0) for r in rows if r.get("position") is not None]
+    avg_position = None if not positions else round(sum(positions) / len(positions), 4)
+    return {
+        "property_url": property_url,
+        "range_days": days,
+        "offset_days": offset_days,
+        "clicks": round(clicks, 2),
+        "impressions": round(impressions, 2),
+        "ctr": round(ctr, 4),
+        "avg_position": avg_position,
+        "rows_count": len(rows),
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+    }

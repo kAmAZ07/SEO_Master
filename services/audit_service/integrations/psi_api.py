@@ -3,11 +3,10 @@ from services.audit_service.config import settings
 
 
 async def fetch_pagespeed_insights(url: str, strategy: str = "mobile") -> dict | None:
-    if not settings.psi_api_key:
-        return None
-
     api_url = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
-    params = {"url": url, "strategy": strategy, "key": settings.psi_api_key}
+    params = {"url": url, "strategy": strategy}
+    if settings.psi_api_key:
+        params["key"] = settings.psi_api_key
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.get(api_url, params=params)
@@ -25,4 +24,5 @@ async def fetch_pagespeed_insights(url: str, strategy: str = "mobile") -> dict |
     return {
         "metrics": {"LCP": int(lcp) if isinstance(lcp, (int, float)) else None, "FID": int(fid) if isinstance(fid, (int, float)) else None, "CLS": float(cls) if isinstance(cls, (int, float)) else None},
         "raw": j,
+        "used_api_key": bool(settings.psi_api_key),
     }

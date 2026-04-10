@@ -133,21 +133,46 @@ def upgrade():
     op.create_index('idx_backlink_discovered_at', 'backlinks', ['discovered_at'], schema='audit_schema')
     
     op.create_table(
+        'crawl_results',
+        sa.Column('audit_id', sa.String(64), primary_key=True),
+        sa.Column('project_id', sa.String(128), nullable=True),
+        sa.Column('root_url', sa.String(2048), nullable=False),
+        sa.Column('mode', sa.String(16), nullable=False),
+        sa.Column('site_type_hint', sa.String(64), server_default='unknown', nullable=False),
+        sa.Column('platform', sa.String(64), server_default='generic', nullable=False),
+        sa.Column('seeds', postgresql.JSONB, server_default=sa.text("'[]'::jsonb"), nullable=False),
+        sa.Column('status', sa.String(32), server_default='queued', nullable=False),
+        sa.Column('summary', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('findings', postgresql.JSONB, server_default=sa.text("'[]'::jsonb"), nullable=False),
+        sa.Column('pages', postgresql.JSONB, server_default=sa.text("'[]'::jsonb"), nullable=False),
+        sa.Column('options', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        schema='audit_schema'
+    )
+    op.create_index('ix_crawl_results_project_created_at', 'crawl_results', ['project_id', 'created_at'], schema='audit_schema')
+    op.create_index('ix_crawl_results_mode_status', 'crawl_results', ['mode', 'status'], schema='audit_schema')
+
+    op.create_table(
         'public_audit_results',
-        sa.Column('id', sa.String(36), primary_key=True),
-        sa.Column('url', sa.String(2048), nullable=False),
-        sa.Column('ip_address', sa.String(45), nullable=False),
-        sa.Column('results', postgresql.JSONB, nullable=False),
-        sa.Column('status', sa.String(50), server_default='completed'),
-        sa.Column('is_deleted', sa.Boolean, server_default='false', nullable=False),
-        sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('audit_id', sa.String(64), primary_key=True),
+        sa.Column('project_id', sa.String(128), nullable=True),
+        sa.Column('root_url', sa.String(2048), nullable=False),
+        sa.Column('mode', sa.String(16), server_default='public', nullable=False),
+        sa.Column('site_type_hint', sa.String(64), server_default='unknown', nullable=False),
+        sa.Column('platform', sa.String(64), server_default='generic', nullable=False),
+        sa.Column('seeds', postgresql.JSONB, server_default=sa.text("'[]'::jsonb"), nullable=False),
+        sa.Column('status', sa.String(32), server_default='queued', nullable=False),
+        sa.Column('summary', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('findings', postgresql.JSONB, server_default=sa.text("'[]'::jsonb"), nullable=False),
+        sa.Column('pages', postgresql.JSONB, server_default=sa.text("'[]'::jsonb"), nullable=False),
+        sa.Column('options', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
         schema='audit_schema'
     )
     op.create_index('idx_public_audit_created_at', 'public_audit_results', ['created_at'], schema='audit_schema')
-    op.create_index('idx_public_audit_deleted', 'public_audit_results', ['is_deleted'], schema='audit_schema')
-    op.create_index('idx_public_audit_ip', 'public_audit_results', ['ip_address'], schema='audit_schema')
+    op.create_index('ix_public_audit_results_mode_status', 'public_audit_results', ['mode', 'status'], schema='audit_schema')
     
     op.create_table(
         'crawl_events',
@@ -420,6 +445,7 @@ def upgrade():
         ('audit_schema', 'core_web_vitals'),
         ('audit_schema', 'schema_validations'),
         ('audit_schema', 'backlinks'),
+        ('audit_schema', 'crawl_results'),
         ('audit_schema', 'public_audit_results'),
         ('audit_schema', 'crawl_events'),
         ('semantic_schema', 'ff_scores'),

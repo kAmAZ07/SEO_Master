@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from datetime import datetime, timezone
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -19,6 +20,9 @@ from services.semantic_service.events.crawl_completed_handler import maybe_start
 app = FastAPI(title="Semantic Service", version="0.1.0")
 
 
+_CWV_RANK = {"poor": 0, "needs_improvement": 1, "good": 2, "unknown": 3}
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     await init_db()
@@ -28,6 +32,149 @@ async def _startup() -> None:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "service": "semantic_service", "ts": datetime.now(timezone.utc).isoformat()}
+
+
+def _worst_cwv_grade(summary: dict | None) -> str | None:
+    if not isinstance(summary, dict):
+        return None
+    cwv = summary.get("cwv")
+    if not isinstance(cwv, dict):
+        return None
+
+    grades = [
+        str(cwv.get("LCP_grade") or "unknown").lower(),
+        str(cwv.get("FID_grade") or "unknown").lower(),
+        str(cwv.get("CLS_grade") or "unknown").lower(),
+    ]
+    grades = [grade for grade in grades if grade in _CWV_RANK]
+    if not grades:
+        return None
+    return min(grades, key=lambda grade: _CWV_RANK.get(grade, 99))
+
+
+def _count_findings(findings: list[dict], *, prefixes: tuple[str, ...] = (), codes: set[str] | None = None) -> int:
+    total = 0
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        code = str(finding.get("code") or "")
+        if codes and code in codes:
+            total += 1
+            continue
+        if prefixes and any(code.startswith(prefix) for prefix in prefixes):
+            total += 1
+    return total
+
+
+async def _resolve_ffscore_inputs(payload: FFScoreRequest) -> dict:
+    sources: dict[str, str] = {}
+    unavailable: list[str] = []
+
+    latest_analysis = None
+    if payload.project_id:
+        async with get_session() as session:
+            analysis_res = await session.execute(
+                select(SemanticAnalysisRow)
+                .where(SemanticAnalysisRow.project_id == payload.project_id)
+                .order_by(SemanticAnalysisRow.created_at.desc())
+                .limit(1)
+            )
+            latest_analysis = analysis_res.scalar_one_or_none()
+
+    findings = [item for item in payload.audit_findings if isinstance(item, dict)]
+    summary = payload.audit_summary if isinstance(payload.audit_summary, dict) else {}
+
+    semantic_distance = payload.semantic_distance
+    if semantic_distance is None and latest_analysis and isinstance(latest_analysis.semantic_distance, dict):
+        semantic_distance = latest_analysis.semantic_distance.get("semantic_distance")
+        if semantic_distance is not None:
+            sources["semantic_distance"] = "semantic_analysis"
+    elif semantic_distance is not None:
+        sources["semantic_distance"] = "request"
+    else:
+        semantic_distance = 50.0
+        sources["semantic_distance"] = "estimate"
+        unavailable.append("semantic_distance")
+
+    keyword_coverage = payload.keyword_coverage
+    if keyword_coverage is None and latest_analysis and isinstance(latest_analysis.keyword_coverage, dict):
+        keyword_coverage = latest_analysis.keyword_coverage.get("coverage")
+        if keyword_coverage is not None:
+            sources["keyword_coverage"] = "semantic_analysis"
+    elif keyword_coverage is not None:
+        sources["keyword_coverage"] = "request"
+    else:
+        keyword_coverage = 50.0
+        sources["keyword_coverage"] = "estimate"
+        unavailable.append("keyword_coverage")
+
+    freshness_days_since_update = payload.freshness_days_since_update
+    if freshness_days_since_update is None:
+        freshness_days_since_update = 30
+        sources["freshness_days_since_update"] = "estimate"
+        unavailable.append("freshness_days_since_update")
+    else:
+        sources["freshness_days_since_update"] = "request"
+
+    serp_shift = payload.serp_shift
+    if serp_shift is None:
+        serp_shift = 0.0
+        sources["serp_shift"] = "estimate"
+        unavailable.append("serp_shift")
+    else:
+        sources["serp_shift"] = "request"
+
+    link_velocity = payload.link_velocity
+    if link_velocity is None:
+        link_velocity = 0.0
+        sources["link_velocity"] = "estimate"
+        unavailable.append("link_velocity")
+    else:
+        sources["link_velocity"] = "request"
+
+    cwv_grade = payload.cwv_grade
+    if cwv_grade:
+        sources["cwv_grade"] = "request"
+    else:
+        cwv_grade = _worst_cwv_grade(summary) or "unknown"
+        sources["cwv_grade"] = "audit_summary" if cwv_grade != "unknown" else "estimate"
+        if cwv_grade == "unknown":
+            unavailable.append("cwv_grade")
+
+    broken_links_count = payload.broken_links_count
+    if broken_links_count is None:
+        broken_links_count = _count_findings(findings, codes={"broken_link_404"})
+        sources["broken_links_count"] = "audit_findings" if findings else "estimate"
+        if not findings:
+            unavailable.append("broken_links_count")
+    else:
+        sources["broken_links_count"] = "request"
+
+    schema_errors_count = payload.schema_errors_count
+    if schema_errors_count is None:
+        schema_errors_count = _count_findings(
+            findings,
+            prefixes=("jsonld_",),
+            codes={"jsonld_missing", "jsonld_empty", "jsonld_invalid_json", "jsonld_invalid_structure", "jsonld_missing_context", "jsonld_missing_type"},
+        )
+        sources["schema_errors_count"] = "audit_findings" if findings else "estimate"
+        if not findings:
+            unavailable.append("schema_errors_count")
+    else:
+        sources["schema_errors_count"] = "request"
+
+    return {
+        "freshness_days_since_update": int(freshness_days_since_update),
+        "serp_shift": float(serp_shift),
+        "link_velocity": float(link_velocity),
+        "semantic_distance": float(semantic_distance),
+        "keyword_coverage": float(keyword_coverage),
+        "cwv_grade": str(cwv_grade),
+        "broken_links_count": int(broken_links_count),
+        "schema_errors_count": int(schema_errors_count),
+        "sources": sources,
+        "unavailable": sorted(set(unavailable)),
+    }
 
 
 @app.post("/semantic/eeat", response_model=EEATResponse)
@@ -62,6 +209,7 @@ async def eeat(payload: EEATRequest) -> EEATResponse:
 
 @app.post("/semantic/ff-score", response_model=FFScoreResponse)
 async def ff_score(payload: FFScoreRequest) -> FFScoreResponse:
+    resolved_inputs = await _resolve_ffscore_inputs(payload)
     eeat_res = analyze_eeat(
         text=payload.content_text,
         root_url=str(payload.root_url),
@@ -74,16 +222,18 @@ async def ff_score(payload: FFScoreRequest) -> FFScoreResponse:
         brand_mentions=payload.brand_mentions,
     )
     ff = calculate_ff_score(
-        freshness_days_since_update=payload.freshness_days_since_update,
-        serp_shift=payload.serp_shift,
-        link_velocity=payload.link_velocity,
-        semantic_distance=payload.semantic_distance,
-        keyword_coverage=payload.keyword_coverage,
+        freshness_days_since_update=resolved_inputs["freshness_days_since_update"],
+        serp_shift=resolved_inputs["serp_shift"],
+        link_velocity=resolved_inputs["link_velocity"],
+        semantic_distance=resolved_inputs["semantic_distance"],
+        keyword_coverage=resolved_inputs["keyword_coverage"],
         eeat_score=eeat_res["score"],
-        cwv_grade=payload.cwv_grade,
-        broken_links_count=payload.broken_links_count,
-        schema_errors_count=payload.schema_errors_count,
+        cwv_grade=resolved_inputs["cwv_grade"],
+        broken_links_count=resolved_inputs["broken_links_count"],
+        schema_errors_count=resolved_inputs["schema_errors_count"],
     )
+    ff["inputs"]["sources"] = resolved_inputs["sources"]
+    ff["inputs"]["unavailable"] = resolved_inputs["unavailable"]
 
     ff_id = str(uuid.uuid4())
     eeat_id = str(uuid.uuid4())
@@ -121,6 +271,8 @@ async def ff_score(payload: FFScoreRequest) -> FFScoreResponse:
         ff_score_id=ff_id,
         ff_score=ff["ff_score"],
         components=ff["components"],
+        inputs=ff["inputs"],
+        eeat={"score": eeat_res["score"], "breakdown": eeat_res["breakdown"]},
     )
 
     return FFScoreResponse(

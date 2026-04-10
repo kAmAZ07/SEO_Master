@@ -1,8 +1,8 @@
 import asyncio
 import json
 from datetime import datetime, timezone
+
 import aio_pika
-from sqlalchemy import select
 
 from services.semantic_service.config import settings
 from services.semantic_service.db.session import get_session
@@ -12,17 +12,50 @@ from services.semantic_service.analysis.semantic_distance import serp_minus_10_d
 from services.semantic_service.analysis.keyword_coverage import keyword_coverage
 
 
+def _extract_event_payload(message: dict) -> dict:
+    payload = message.get("payload")
+    if isinstance(payload, dict):
+        return payload
+    return message
+
+
+def _build_target_text(payload: dict) -> str:
+    content_text = payload.get("content_text")
+    if isinstance(content_text, str) and content_text.strip():
+        return content_text.strip()
+
+    parts: list[str] = []
+    for page in payload.get("pages", [])[:10]:
+        if not isinstance(page, dict):
+            continue
+        parts.extend(
+            [
+                str(page.get("title") or ""),
+                str(page.get("description") or ""),
+                str(page.get("h1") or ""),
+            ]
+        )
+
+    return "\n".join(part for part in parts if part).strip()
+
+
 async def _handle_message(body: bytes) -> None:
     try:
-        payload = json.loads(body.decode("utf-8"))
+        event = json.loads(body.decode("utf-8"))
     except Exception:
         return
 
+    if event.get("event_name") not in (None, "CrawlCompleted"):
+        return
+
+    payload = _extract_event_payload(event)
     root_url = payload.get("root_url")
     project_id = payload.get("project_id")
-    target_text = payload.get("target_text", "") or ""
+    target_text = _build_target_text(payload)
     serp_texts = payload.get("serp_top10_texts", []) or []
     keywords = payload.get("keywords", []) or []
+    mode = payload.get("mode", "unknown")
+    audit_id = payload.get("audit_id")
 
     if not root_url or not isinstance(root_url, str):
         return
@@ -46,7 +79,13 @@ async def _handle_message(body: bytes) -> None:
                 content_gap=gap,
                 semantic_distance=dist,
                 keyword_coverage=kc,
-                inputs={"keywords_count": len(keywords), "serp_n": len(serp_texts)},
+                inputs={
+                    "keywords_count": len(keywords),
+                    "serp_n": len(serp_texts),
+                    "mode": mode,
+                    "audit_id": audit_id,
+                    "content_length": len(target_text),
+                },
             )
         )
         await session.commit()

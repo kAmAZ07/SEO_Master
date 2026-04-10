@@ -1,5 +1,7 @@
+import asyncio
 import ipaddress
 import socket
+from typing import Type
 from urllib.parse import urlparse
 
 from services.audit_service.crawler.public_crawler import crawl_public
@@ -7,10 +9,11 @@ from services.audit_service.analyzers.meta_checker import check_meta
 from services.audit_service.analyzers.link_checker import check_links_404
 from services.audit_service.analyzers.schema_validator import validate_jsonld
 from services.audit_service.analyzers.robots_checker import check_robots
+from services.audit_service.analyzers.sitemap_checker import check_sitemap
 from services.audit_service.analyzers.cwv_analyzer import analyze_cwv
 from services.audit_service.config import settings
 from services.audit_service.db.session import get_session
-from services.audit_service.db.models import PublicAuditResult
+from services.audit_service.db.models import CrawlResult, PublicAuditResult
 
 
 FINDING_CATALOG = {
@@ -30,6 +33,12 @@ FINDING_CATALOG = {
         "title": "Crawl blocked by robots.txt",
         "description": "The root path is disallowed for generic crawlers, so the audit cannot inspect the site safely.",
         "recommendation": "Allow the relevant crawler or audit the site in an environment where robots restrictions are relaxed.",
+        "category": "crawlability",
+    },
+    "sitemap_missing": {
+        "title": "Sitemap is missing or unavailable",
+        "description": "The crawler could not access a valid sitemap.xml file on the target site.",
+        "recommendation": "Publish a valid sitemap.xml file and ensure it is reachable without authentication.",
         "category": "crawlability",
     },
     "title_missing": {
@@ -157,6 +166,12 @@ FINDING_CATALOG = {
         "description": "The audit could not fetch PageSpeed data for this URL, so performance scoring is partially estimated.",
         "recommendation": "Provide a valid PageSpeed API key or rerun the audit when external performance data is available.",
         "category": "performance",
+    },
+    "backlinks_unavailable": {
+        "title": "Backlink data was not collected",
+        "description": "The audit could not fetch backlink data from the configured external source.",
+        "recommendation": "Check the external integration credentials and rerun the full audit.",
+        "category": "links",
     },
     "spa_detected_enable_js_render": {
         "title": "SPA-like rendering detected",
@@ -358,13 +373,23 @@ def _build_score_explanation_finding(summary: dict) -> dict:
     }
 
 
-async def run_public_audit_pipeline(audit_id: str) -> dict:
+async def _load_audit_row(audit_id: str, row_cls: Type[PublicAuditResult] | Type[CrawlResult]) -> PublicAuditResult | CrawlResult:
     async with get_session() as session:
-        row = await session.get(PublicAuditResult, audit_id)
-        if row is None:
-            raise ValueError("audit_not_found")
-        root_url = row.root_url
-        options = row.options or {}
+        row = await session.get(row_cls, audit_id)
+    if row is None:
+        raise ValueError("audit_not_found")
+    return row
+
+
+async def _run_audit_pipeline(
+    audit_id: str,
+    *,
+    row_cls: Type[PublicAuditResult] | Type[CrawlResult],
+    include_external_data: bool,
+) -> dict:
+    row = await _load_audit_row(audit_id, row_cls)
+    root_url = row.root_url
+    options = row.options or {}
 
     findings = []
     precheck_findings = _precheck_url(root_url)
@@ -379,19 +404,22 @@ async def run_public_audit_pipeline(audit_id: str) -> dict:
         findings.append(_build_score_explanation_finding(summary))
         return {"root_url": root_url, "summary": summary, "findings": findings, "pages": []}
 
-    max_pages = int(options.get("max_pages", 10))
+    max_pages = int(options.get("max_pages", 10 if row.mode == "public" else 1000))
+    max_depth = int(options.get("max_depth", 2 if row.mode == "public" else 4))
     js_render = bool(options.get("js_render", False))
     respect_robots = bool(options.get("respect_robots", True))
     timeout = float(options.get("timeout", settings.default_timeout_s))
 
     robots = await check_robots(root_url=root_url)
+    sitemap = await check_sitemap(root_url=root_url)
+    summary = {"robots": robots, "sitemap": sitemap}
+
+    if not sitemap.get("available"):
+        findings.append({"code": "sitemap_missing", "severity": "medium", "confidence": "high", "details": sitemap})
+
     if respect_robots and robots.get("blocked_root", False):
         findings.append({"code": "blocked_by_robots", "severity": "medium", "confidence": "high", "details": robots})
-        summary = {
-            "coverage": {"attempted": 0, "processed": 0, "max_pages": max_pages},
-            "blocked_pages_count": 0,
-            "precheck_failed": False,
-        }
+        summary.update({"coverage": {"attempted": 0, "processed": 0, "max_pages": max_pages, "max_depth": max_depth}, "blocked_pages_count": 0, "precheck_failed": False})
         findings = [_decorate_finding(finding) for finding in findings]
         summary.update(_compute_score(summary, findings))
         findings.append(_build_score_explanation_finding(summary))
@@ -400,12 +428,13 @@ async def run_public_audit_pipeline(audit_id: str) -> dict:
     crawled = await crawl_public(
         root_url=root_url,
         max_pages=max_pages,
+        max_depth=max_depth,
         js_render=js_render,
         timeout_s=timeout,
         respect_robots=respect_robots,
     )
     pages = crawled["pages"]
-    summary = crawled["summary"]
+    summary.update(crawled["summary"])
     findings.extend(_build_page_level_findings(pages))
 
     for page in pages:
@@ -431,6 +460,20 @@ async def run_public_audit_pipeline(audit_id: str) -> dict:
             "details": {"reason": "psi_api_key_missing_or_error"},
         })
 
+    if include_external_data:
+        try:
+            from services.audit_service.integrations.gsc_link_analyzer import analyze_links
+
+            backlink_summary = await asyncio.to_thread(analyze_links, root_url)
+            summary["backlinks"] = backlink_summary
+        except Exception as exc:
+            findings.append({
+                "code": "backlinks_unavailable",
+                "severity": "info",
+                "confidence": "medium",
+                "details": {"reason": str(exc)},
+            })
+
     if summary.get("spa_detected") and not js_render:
         findings.append({
             "code": "spa_detected_enable_js_render",
@@ -452,7 +495,33 @@ async def run_public_audit_pipeline(audit_id: str) -> dict:
         deduped[_issue_key(finding)] = finding
 
     findings = [_decorate_finding(finding) for finding in deduped.values()]
+    summary["mode"] = row.mode
+    if row.project_id:
+        summary["project_id"] = row.project_id
     summary.update(_compute_score(summary, findings))
     findings.append(_build_score_explanation_finding(summary))
 
-    return {"root_url": root_url, "summary": summary, "findings": findings, "pages": pages}
+    return {
+        "project_id": row.project_id,
+        "mode": row.mode,
+        "root_url": root_url,
+        "summary": summary,
+        "findings": findings,
+        "pages": pages,
+    }
+
+
+async def run_public_audit_pipeline(audit_id: str) -> dict:
+    return await _run_audit_pipeline(
+        audit_id,
+        row_cls=PublicAuditResult,
+        include_external_data=False,
+    )
+
+
+async def run_full_audit_pipeline(audit_id: str) -> dict:
+    return await _run_audit_pipeline(
+        audit_id,
+        row_cls=CrawlResult,
+        include_external_data=True,
+    )

@@ -88,10 +88,17 @@ async def fetch_html_playwright(url: str, timeout_ms: int, user_agent: str) -> t
             return None, None, None, str(e)
 
 
-async def crawl_public(root_url: str, max_pages: int = 10, js_render: bool = False, timeout_s: float = 10.0, respect_robots: bool = True) -> dict:
+async def crawl_public(
+    root_url: str,
+    max_pages: int = 10,
+    max_depth: int = 2,
+    js_render: bool = False,
+    timeout_s: float = 10.0,
+    respect_robots: bool = True,
+) -> dict:
     headers = {"User-Agent": settings.user_agent}
     visited: set[str] = set()
-    queue: list[str] = [root_url]
+    queue: list[tuple[str, int]] = [(root_url, 0)]
     pages: list[CrawledPage] = []
 
     blocked_pages_count = 0
@@ -101,12 +108,14 @@ async def crawl_public(root_url: str, max_pages: int = 10, js_render: bool = Fal
     ssl_errors_count = 0
     anti_bot_detected = False
     spa_detected = False
+    max_depth_reached = 0
 
     while queue and len(pages) < max_pages:
-        url = queue.pop(0)
+        url, depth = queue.pop(0)
         if url in visited:
             continue
         visited.add(url)
+        max_depth_reached = max(max_depth_reached, depth)
 
         try:
             if js_render:
@@ -145,17 +154,18 @@ async def crawl_public(root_url: str, max_pages: int = 10, js_render: bool = Fal
                 if len(body_text) < 30:
                     spa_detected = True
 
-            for href in raw_links:
-                nu = _normalize_url(final_url or url, href)
-                if nu and _same_site(root_url, nu) and nu not in visited:
-                    links.append(nu)
+            if depth < max_depth:
+                for href in raw_links:
+                    nu = _normalize_url(final_url or url, href)
+                    if nu and _same_site(root_url, nu) and nu not in visited:
+                        links.append(nu)
         pages.append(CrawledPage(url=url, status_code=status, final_url=final_url, html=html, title=title, description=desc, h1=h1, links=links, error=None))
 
         for l in links:
             if len(queue) + len(pages) >= max_pages:
                 break
             if l not in visited:
-                queue.append(l)
+                queue.append((l, depth + 1))
 
         await asyncio.sleep(0)
 
@@ -163,6 +173,8 @@ async def crawl_public(root_url: str, max_pages: int = 10, js_render: bool = Fal
         "attempted": len(visited),
         "processed": len(pages),
         "max_pages": max_pages,
+        "max_depth": max_depth,
+        "max_depth_reached": max_depth_reached,
     }
 
     summary = {

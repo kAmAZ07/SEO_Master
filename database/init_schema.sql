@@ -135,21 +135,48 @@ CREATE INDEX idx_backlink_discovered_at ON audit_schema.backlinks(discovered_at 
 CREATE TRIGGER update_backlinks_updated_at BEFORE UPDATE ON audit_schema.backlinks
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+CREATE TABLE IF NOT EXISTS audit_schema.crawl_results (
+    audit_id VARCHAR(64) PRIMARY KEY,
+    project_id VARCHAR(128),
+    root_url VARCHAR(2048) NOT NULL,
+    mode VARCHAR(16) NOT NULL,
+    site_type_hint VARCHAR(64) NOT NULL DEFAULT 'unknown',
+    platform VARCHAR(64) NOT NULL DEFAULT 'generic',
+    seeds JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status VARCHAR(32) NOT NULL DEFAULT 'queued',
+    summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+    findings JSONB NOT NULL DEFAULT '[]'::jsonb,
+    pages JSONB NOT NULL DEFAULT '[]'::jsonb,
+    options JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX ix_crawl_results_project_created_at ON audit_schema.crawl_results(project_id, created_at DESC);
+CREATE INDEX ix_crawl_results_mode_status ON audit_schema.crawl_results(mode, status);
+
+CREATE TRIGGER update_crawl_results_updated_at BEFORE UPDATE ON audit_schema.crawl_results
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
 CREATE TABLE IF NOT EXISTS audit_schema.public_audit_results (
-    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
-    url VARCHAR(2048) NOT NULL,
-    ip_address VARCHAR(45) NOT NULL,
-    results JSONB NOT NULL,
-    status VARCHAR(50) DEFAULT 'completed',
-    is_deleted BOOLEAN DEFAULT FALSE NOT NULL,
-    deleted_at TIMESTAMP WITH TIME ZONE,
+    audit_id VARCHAR(64) PRIMARY KEY,
+    project_id VARCHAR(128),
+    root_url VARCHAR(2048) NOT NULL,
+    mode VARCHAR(16) NOT NULL DEFAULT 'public',
+    site_type_hint VARCHAR(64) NOT NULL DEFAULT 'unknown',
+    platform VARCHAR(64) NOT NULL DEFAULT 'generic',
+    seeds JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status VARCHAR(32) NOT NULL DEFAULT 'queued',
+    summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+    findings JSONB NOT NULL DEFAULT '[]'::jsonb,
+    pages JSONB NOT NULL DEFAULT '[]'::jsonb,
+    options JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
 );
 
 CREATE INDEX idx_public_audit_created_at ON audit_schema.public_audit_results(created_at DESC);
-CREATE INDEX idx_public_audit_deleted ON audit_schema.public_audit_results(is_deleted);
-CREATE INDEX idx_public_audit_ip ON audit_schema.public_audit_results(ip_address);
+CREATE INDEX ix_public_audit_results_mode_status ON audit_schema.public_audit_results(mode, status);
 
 CREATE TRIGGER update_public_audit_results_updated_at BEFORE UPDATE ON audit_schema.public_audit_results
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
@@ -563,14 +590,14 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION audit_schema.cleanup_old_crawl_data(
-    retention_days INTEGER DEFAULT 90
+    retention_days INTEGER DEFAULT 30
 )
 RETURNS INTEGER AS $$
 DECLARE
     deleted_count INTEGER;
 BEGIN
-    DELETE FROM audit_schema.crawls
-    WHERE completed_at < NOW() - (retention_days || ' days')::INTERVAL
+    DELETE FROM audit_schema.crawl_results
+    WHERE created_at < NOW() - (retention_days || ' days')::INTERVAL
         AND status = 'completed';
     
     GET DIAGNOSTICS deleted_count = ROW_COUNT;
@@ -585,11 +612,8 @@ RETURNS INTEGER AS $$
 DECLARE
     deleted_count INTEGER;
 BEGIN
-    UPDATE audit_schema.public_audit_results
-    SET is_deleted = TRUE,
-        deleted_at = NOW()
+    DELETE FROM audit_schema.public_audit_results
     WHERE created_at < NOW() - (retention_days || ' days')::INTERVAL
-        AND is_deleted = FALSE;
     
     GET DIAGNOSTICS deleted_count = ROW_COUNT;
     RETURN deleted_count;

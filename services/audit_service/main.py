@@ -20,6 +20,7 @@ from services.audit_service.schemas.audit import (
 )
 from services.audit_service.crawler.technical_audit import run_full_audit_pipeline, run_public_audit_pipeline
 from services.audit_service.events.crawl_completed import publish_crawl_completed
+from services.audit_service.events.task_created_handler import maybe_start_task_created_consumer
 
 app = FastAPI(title="Audit Service", version="0.1.0")
 
@@ -27,6 +28,7 @@ app = FastAPI(title="Audit Service", version="0.1.0")
 @app.on_event("startup")
 async def _startup() -> None:
     await init_db()
+    asyncio.create_task(maybe_start_task_created_consumer())
 
 
 @app.get("/health")
@@ -83,8 +85,13 @@ async def _enqueue_audit(
     row_cls: Type[PublicAuditResult] | Type[CrawlResult],
     mode: str,
     runner,
+    audit_id: str | None = None,
+    extra_options: dict | None = None,
 ) -> AuditQueuedResponse:
-    audit_id = str(uuid.uuid4())
+    audit_id = audit_id or str(uuid.uuid4())
+    row_options = payload.options.model_dump()
+    if extra_options:
+        row_options.update(extra_options)
     async with get_session() as session:
         row = row_cls(
             audit_id=audit_id,
@@ -100,7 +107,7 @@ async def _enqueue_audit(
             summary={},
             findings=[],
             pages=[],
-            options=payload.options.model_dump(),
+            options=row_options,
         )
         session.add(row)
         await session.commit()
@@ -196,6 +203,47 @@ async def _get_audit_row(audit_id: str) -> PublicAuditResult | CrawlResult | Non
 
         full_res = await session.execute(select(CrawlResult).where(CrawlResult.audit_id == audit_id))
         return full_res.scalar_one_or_none()
+
+
+async def queue_full_audit_for_task_created(
+    *,
+    task_id: str,
+    project_id: str,
+    root_url: str,
+    task_type: str,
+    metadata: dict | None = None,
+    correlation_id: str | None = None,
+) -> AuditQueuedResponse:
+    audit_id = f"task-{task_id}"
+    existing = await _get_audit_row(audit_id)
+    if existing is not None:
+        return AuditQueuedResponse(
+            audit_id=existing.audit_id,
+            status=existing.status,
+            mode=existing.mode,
+            project_id=existing.project_id,
+        )
+
+    payload = FullAuditRequest(
+        project_id=project_id,
+        root_url=root_url,
+        site_type_hint="unknown",
+        platform=str((metadata or {}).get("platform") or "generic"),
+        seeds=[str(seed) for seed in ((metadata or {}).get("seed_urls") or []) if seed],
+    )
+    return await _enqueue_audit(
+        payload=payload,
+        row_cls=CrawlResult,
+        mode="full",
+        runner=run_full_audit_pipeline,
+        audit_id=audit_id,
+        extra_options={
+            "trigger": "task_created",
+            "source_task_id": task_id,
+            "source_task_type": task_type,
+            "correlation_id": correlation_id,
+        },
+    )
 
 
 @app.get("/audit/{audit_id}", response_model=AuditStatusResponse)

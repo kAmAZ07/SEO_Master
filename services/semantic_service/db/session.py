@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine, async_sessionmaker
 from services.semantic_service.config import settings
 from services.semantic_service.db.models import Base
@@ -31,4 +32,6 @@ async def get_session():
 async def init_db() -> None:
     engine = _get_engine()
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS semantic_schema"))
+        if settings.auto_create_tables:
+            await conn.run_sync(Base.metadata.create_all)

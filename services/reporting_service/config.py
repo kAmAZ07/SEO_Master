@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     port: int = 8003
 
     database_url: str = Field(default="postgresql+asyncpg://postgres:postgres@postgres:5432/reporting_db")
+    auto_create_tables: bool = False
     rabbitmq_url: str | None = None
 
     gsc_credentials_json: str | None = None

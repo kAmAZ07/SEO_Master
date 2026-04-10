@@ -198,44 +198,74 @@ CREATE TRIGGER update_crawl_events_updated_at BEFORE UPDATE ON audit_schema.craw
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS semantic_schema.ff_scores (
-    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
-    project_id VARCHAR(36) NOT NULL,
-    page_id VARCHAR(36),
-    total_score DOUBLE PRECISION NOT NULL,
-    freshness_score DOUBLE PRECISION NOT NULL,
-    familiarity_score DOUBLE PRECISION NOT NULL,
-    quality_score DOUBLE PRECISION NOT NULL,
-    calculated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    metadata JSONB,
+    score_id VARCHAR(64) PRIMARY KEY,
+    project_id VARCHAR(128),
+    root_url VARCHAR(2048) NOT NULL,
+    ff_score DOUBLE PRECISION NOT NULL,
+    components JSONB NOT NULL DEFAULT '{}'::jsonb,
+    inputs JSONB NOT NULL DEFAULT '{}'::jsonb,
+    thresholds JSONB NOT NULL DEFAULT '{}'::jsonb,
+    eeat_score_id VARCHAR(64),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
 );
 
 CREATE INDEX idx_ff_score_project_id ON semantic_schema.ff_scores(project_id);
-CREATE INDEX idx_ff_score_page_id ON semantic_schema.ff_scores(page_id);
-CREATE INDEX idx_ff_score_calculated_at ON semantic_schema.ff_scores(calculated_at DESC);
-CREATE INDEX idx_ff_score_total ON semantic_schema.ff_scores(total_score DESC);
+CREATE INDEX idx_ff_score_created_at ON semantic_schema.ff_scores(created_at DESC);
+CREATE INDEX idx_ff_score_root_url ON semantic_schema.ff_scores(root_url);
 
 CREATE TRIGGER update_ff_scores_updated_at BEFORE UPDATE ON semantic_schema.ff_scores
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS semantic_schema.eeat_scores (
-    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
-    page_id VARCHAR(36) NOT NULL UNIQUE,
-    total_score DOUBLE PRECISION NOT NULL,
-    experience_score DOUBLE PRECISION NOT NULL,
-    expertise_score DOUBLE PRECISION NOT NULL,
-    authoritativeness_score DOUBLE PRECISION NOT NULL,
-    trustworthiness_score DOUBLE PRECISION NOT NULL,
-    signals JSONB,
+    score_id VARCHAR(64) PRIMARY KEY,
+    project_id VARCHAR(128),
+    root_url VARCHAR(2048) NOT NULL,
+    score DOUBLE PRECISION NOT NULL,
+    breakdown JSONB NOT NULL DEFAULT '{}'::jsonb,
+    signals JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
 );
 
-CREATE INDEX idx_eeat_score_page_id ON semantic_schema.eeat_scores(page_id);
-CREATE INDEX idx_eeat_total_score ON semantic_schema.eeat_scores(total_score DESC);
+CREATE INDEX idx_eeat_score_project_id ON semantic_schema.eeat_scores(project_id);
+CREATE INDEX idx_eeat_score_created_at ON semantic_schema.eeat_scores(created_at DESC);
+CREATE INDEX idx_eeat_root_url ON semantic_schema.eeat_scores(root_url);
 
 CREATE TRIGGER update_eeat_scores_updated_at BEFORE UPDATE ON semantic_schema.eeat_scores
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TABLE IF NOT EXISTS semantic_schema.content_drafts (
+    draft_id VARCHAR(64) PRIMARY KEY,
+    project_id VARCHAR(128),
+    root_url VARCHAR(2048) NOT NULL,
+    drafts JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX idx_content_draft_project_id ON semantic_schema.content_drafts(project_id);
+CREATE INDEX idx_content_draft_created_at ON semantic_schema.content_drafts(created_at DESC);
+
+CREATE TRIGGER update_content_drafts_updated_at BEFORE UPDATE ON semantic_schema.content_drafts
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TABLE IF NOT EXISTS semantic_schema.semantic_analysis (
+    analysis_id VARCHAR(64) PRIMARY KEY,
+    project_id VARCHAR(128),
+    root_url VARCHAR(2048) NOT NULL,
+    content_gap JSONB NOT NULL DEFAULT '{}'::jsonb,
+    semantic_distance JSONB NOT NULL DEFAULT '{}'::jsonb,
+    keyword_coverage JSONB NOT NULL DEFAULT '{}'::jsonb,
+    inputs JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX idx_semantic_analysis_project_id ON semantic_schema.semantic_analysis(project_id);
+CREATE INDEX idx_semantic_analysis_created_at ON semantic_schema.semantic_analysis(created_at DESC);
+
+CREATE TRIGGER update_semantic_analysis_updated_at BEFORE UPDATE ON semantic_schema.semantic_analysis
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS semantic_schema.content_gaps (
@@ -405,23 +435,33 @@ CREATE TRIGGER update_yandex_webmaster_data_updated_at BEFORE UPDATE ON reportin
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS reporting_schema.reports (
-    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
-    project_id VARCHAR(36) NOT NULL,
-    report_type VARCHAR(50) NOT NULL,
-    period_start DATE NOT NULL,
-    period_end DATE NOT NULL,
-    file_path VARCHAR(512),
-    metrics JSONB,
-    status VARCHAR(50) DEFAULT 'generated',
+    report_id VARCHAR(64) PRIMARY KEY,
+    project_id VARCHAR(128),
+    root_url VARCHAR(2048) NOT NULL,
+    data JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
 );
 
 CREATE INDEX idx_report_project_id ON reporting_schema.reports(project_id);
-CREATE INDEX idx_report_type ON reporting_schema.reports(report_type);
 CREATE INDEX idx_report_created_at ON reporting_schema.reports(created_at DESC);
 
 CREATE TRIGGER update_reports_updated_at BEFORE UPDATE ON reporting_schema.reports
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TABLE IF NOT EXISTS reporting_schema.metrics_history (
+    metric_id VARCHAR(64) PRIMARY KEY,
+    project_id VARCHAR(128),
+    root_url VARCHAR(2048) NOT NULL,
+    metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX idx_metrics_history_project_id ON reporting_schema.metrics_history(project_id);
+CREATE INDEX idx_metrics_history_created_at ON reporting_schema.metrics_history(created_at DESC);
+
+CREATE TRIGGER update_metrics_history_updated_at BEFORE UPDATE ON reporting_schema.metrics_history
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS reporting_schema.cost_efficiency (
@@ -507,53 +547,114 @@ CREATE TRIGGER update_domain_events_updated_at BEFORE UPDATE ON public.domain_ev
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE OR REPLACE VIEW reporting_schema.project_performance AS
-SELECT 
+WITH latest_ff_scores AS (
+    SELECT DISTINCT ON (project_id)
+        project_id,
+        root_url,
+        ff_score,
+        components,
+        created_at
+    FROM semantic_schema.ff_scores
+    WHERE project_id IS NOT NULL
+    ORDER BY project_id, created_at DESC
+),
+latest_audits AS (
+    SELECT DISTINCT ON (project_id)
+        project_id,
+        root_url,
+        summary,
+        created_at
+    FROM audit_schema.crawl_results
+    WHERE project_id IS NOT NULL
+        AND status = 'completed'
+    ORDER BY project_id, created_at DESC
+),
+gsc_rollup AS (
+    SELECT
+        project_id,
+        SUM(clicks)::BIGINT AS total_clicks,
+        SUM(impressions)::BIGINT AS total_impressions,
+        AVG(position)::DOUBLE PRECISION AS avg_position,
+        MAX(date) AS latest_gsc_date
+    FROM reporting_schema.gsc_data
+    GROUP BY project_id
+)
+SELECT
     p.id AS project_id,
     p.name AS project_name,
     p.url,
-    f.total_score AS ff_score,
-    f.freshness_score,
-    f.familiarity_score,
-    f.quality_score,
-    COUNT(DISTINCT c.id) AS total_crawls,
-    COUNT(DISTINCT pg.id) AS total_pages,
-    AVG(cwv.overall_score) AS avg_cwv_score,
-    SUM(gsc.clicks) AS total_clicks,
-    SUM(gsc.impressions) AS total_impressions,
-    AVG(gsc.position) AS avg_position,
+    ff.ff_score,
+    NULLIF(ff.components ->> 'freshness', '')::DOUBLE PRECISION AS freshness_score,
+    NULLIF(ff.components ->> 'familiarity', '')::DOUBLE PRECISION AS familiarity_score,
+    NULLIF(ff.components ->> 'quality', '')::DOUBLE PRECISION AS quality_score,
+    COALESCE(NULLIF(a.summary -> 'coverage' ->> 'processed', '')::INTEGER, 0) AS processed_pages,
+    COALESCE(NULLIF(a.summary -> 'coverage' ->> 'attempted', '')::INTEGER, 0) AS attempted_pages,
+    NULLIF(a.summary ->> 'score', '')::DOUBLE PRECISION AS latest_audit_score,
+    NULLIF(a.summary -> 'cwv' ->> 'LCP_grade', '') AS lcp_grade,
+    NULLIF(a.summary -> 'cwv' ->> 'FID_grade', '') AS fid_grade,
+    NULLIF(a.summary -> 'cwv' ->> 'CLS_grade', '') AS cls_grade,
+    a.created_at AS latest_audit_created_at,
+    gsc.total_clicks,
+    gsc.total_impressions,
+    gsc.avg_position,
+    gsc.latest_gsc_date,
     p.created_at
 FROM audit_schema.projects p
-LEFT JOIN semantic_schema.ff_scores f ON f.project_id = p.id
-LEFT JOIN audit_schema.crawls c ON c.project_id = p.id
-LEFT JOIN audit_schema.pages pg ON pg.crawl_id = c.id
-LEFT JOIN audit_schema.core_web_vitals cwv ON cwv.page_id = pg.id
-LEFT JOIN reporting_schema.gsc_data gsc ON gsc.project_id = p.id
-WHERE p.status = 'active'
-GROUP BY p.id, p.name, p.url, f.total_score, f.freshness_score, f.familiarity_score, f.quality_score, p.created_at;
+LEFT JOIN latest_ff_scores ff ON ff.project_id = p.id
+LEFT JOIN latest_audits a ON a.project_id = p.id
+LEFT JOIN gsc_rollup gsc ON gsc.project_id = p.id
+WHERE p.status = 'active';
 
 CREATE OR REPLACE VIEW semantic_schema.content_recommendations AS
-SELECT 
-    cg.id,
-    cg.project_id,
-    cg.page_id,
-    pg.url,
-    cg.gap_type,
-    cg.missing_keywords,
-    cg.recommendations,
-    cg.priority,
-    e.total_score AS eeat_score,
-    cg.created_at
-FROM semantic_schema.content_gaps cg
-LEFT JOIN audit_schema.pages pg ON pg.id = cg.page_id
-LEFT JOIN semantic_schema.eeat_scores e ON e.page_id = cg.page_id
-WHERE cg.priority IN ('high', 'critical')
+WITH latest_eeat_scores AS (
+    SELECT DISTINCT ON (COALESCE(project_id, ''), root_url)
+        project_id,
+        root_url,
+        score,
+        created_at
+    FROM semantic_schema.eeat_scores
+    ORDER BY COALESCE(project_id, ''), root_url, created_at DESC
+)
+SELECT
+    sa.analysis_id AS id,
+    sa.project_id,
+    NULL::VARCHAR(36) AS page_id,
+    sa.root_url AS url,
+    'semantic_gap'::VARCHAR(100) AS gap_type,
+    COALESCE(sa.keyword_coverage -> 'missing', '[]'::jsonb) AS missing_keywords,
+    COALESCE(
+        NULLIF(
+            ARRAY_TO_STRING(
+                ARRAY(
+                    SELECT jsonb_array_elements_text(COALESCE(sa.content_gap -> 'suggestions', '[]'::jsonb))
+                ),
+                E'\n'
+            ),
+            ''
+        ),
+        'No recommendations available'
+    ) AS recommendations,
+    CASE
+        WHEN COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) >= 30 THEN 'critical'
+        WHEN COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) >= 20 THEN 'high'
+        WHEN COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) >= 10 THEN 'medium'
+        ELSE 'low'
+    END AS priority,
+    ee.score AS eeat_score,
+    sa.created_at
+FROM semantic_schema.semantic_analysis sa
+LEFT JOIN latest_eeat_scores ee
+    ON ee.root_url = sa.root_url
+    AND ee.project_id IS NOT DISTINCT FROM sa.project_id
+WHERE COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) > 0
 ORDER BY 
-    CASE cg.priority 
-        WHEN 'critical' THEN 1
-        WHEN 'high' THEN 2
-        ELSE 3
+    CASE
+        WHEN COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) >= 30 THEN 1
+        WHEN COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) >= 20 THEN 2
+        WHEN COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) >= 10 THEN 3
+        ELSE 4
     END,
-    cg.created_at DESC;
+    sa.created_at DESC;
 
 CREATE OR REPLACE FUNCTION reporting_schema.calculate_monthly_roi(
     p_project_id VARCHAR,

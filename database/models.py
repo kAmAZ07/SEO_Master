@@ -186,38 +186,71 @@ class CrawlEvent(Base, TimestampMixin, UUIDMixin):
     crawl = relationship("Crawl", back_populates="events")
 
 
-class FFScore(Base, TimestampMixin, UUIDMixin):
+class FFScore(Base, TimestampMixin):
     __tablename__ = "ff_scores"
     __table_args__ = (
         Index("idx_ff_score_project_id", "project_id"),
-        Index("idx_ff_score_calculated_at", "calculated_at"),
+        Index("idx_ff_score_created_at", "created_at"),
+        Index("idx_ff_score_root_url", "root_url"),
         {"schema": "semantic_schema"}
     )
-    
-    project_id = Column(String(36), nullable=False)
-    page_id = Column(String(36), nullable=True)
-    total_score = Column(Float, nullable=False)
-    freshness_score = Column(Float, nullable=False)
-    familiarity_score = Column(Float, nullable=False)
-    quality_score = Column(Float, nullable=False)
-    calculated_at = Column(DateTime(timezone=True), server_default=func.now())
-    metadata_json = Column("metadata", JSON, nullable=True)
+
+    score_id = Column(String(64), primary_key=True)
+    project_id = Column(String(128), nullable=True)
+    root_url = Column(String(2048), nullable=False)
+    ff_score = Column(Float, nullable=False)
+    components = Column(JSONB, nullable=False, default=dict)
+    inputs = Column(JSONB, nullable=False, default=dict)
+    thresholds = Column(JSONB, nullable=False, default=dict)
+    eeat_score_id = Column(String(64), nullable=True)
 
 
-class EEATScore(Base, TimestampMixin, UUIDMixin):
+class EEATScore(Base, TimestampMixin):
     __tablename__ = "eeat_scores"
     __table_args__ = (
-        Index("idx_eeat_score_page_id", "page_id"),
+        Index("idx_eeat_score_project_id", "project_id"),
+        Index("idx_eeat_score_created_at", "created_at"),
+        Index("idx_eeat_root_url", "root_url"),
         {"schema": "semantic_schema"}
     )
-    
-    page_id = Column(String(36), nullable=False, unique=True)
-    total_score = Column(Float, nullable=False)
-    experience_score = Column(Float, nullable=False)
-    expertise_score = Column(Float, nullable=False)
-    authoritativeness_score = Column(Float, nullable=False)
-    trustworthiness_score = Column(Float, nullable=False)
-    signals = Column(JSON, nullable=True)
+
+    score_id = Column(String(64), primary_key=True)
+    project_id = Column(String(128), nullable=True)
+    root_url = Column(String(2048), nullable=False)
+    score = Column(Float, nullable=False)
+    breakdown = Column(JSONB, nullable=False, default=dict)
+    signals = Column(JSONB, nullable=False, default=dict)
+
+
+class ContentDraft(Base, TimestampMixin):
+    __tablename__ = "content_drafts"
+    __table_args__ = (
+        Index("idx_content_draft_project_id", "project_id"),
+        Index("idx_content_draft_created_at", "created_at"),
+        {"schema": "semantic_schema"}
+    )
+
+    draft_id = Column(String(64), primary_key=True)
+    project_id = Column(String(128), nullable=True)
+    root_url = Column(String(2048), nullable=False)
+    drafts = Column(JSONB, nullable=False, default=dict)
+
+
+class SemanticAnalysis(Base, TimestampMixin):
+    __tablename__ = "semantic_analysis"
+    __table_args__ = (
+        Index("idx_semantic_analysis_project_id", "project_id"),
+        Index("idx_semantic_analysis_created_at", "created_at"),
+        {"schema": "semantic_schema"}
+    )
+
+    analysis_id = Column(String(64), primary_key=True)
+    project_id = Column(String(128), nullable=True)
+    root_url = Column(String(2048), nullable=False)
+    content_gap = Column(JSONB, nullable=False, default=dict)
+    semantic_distance = Column(JSONB, nullable=False, default=dict)
+    keyword_coverage = Column(JSONB, nullable=False, default=dict)
+    inputs = Column(JSONB, nullable=False, default=dict)
 
 
 class ContentGap(Base, TimestampMixin, UUIDMixin):
@@ -266,16 +299,19 @@ class SemanticEvent(Base, TimestampMixin, UUIDMixin):
     event_data = Column(JSON, nullable=False)
 
 
-class GSCData(Base, TimestampMixin, UUIDMixin):
+class GSCData(Base, TimestampMixin):
     __tablename__ = "gsc_data"
     __table_args__ = (
         Index("idx_gsc_project_id", "project_id"),
         Index("idx_gsc_date", "date"),
-        {"schema": "reporting_schema"}
+        Index("idx_gsc_query", "query"),
+        Index("idx_gsc_page", "page"),
+        {"schema": "reporting_schema", "postgresql_partition_by": "RANGE (date)"}
     )
-    
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     project_id = Column(String(36), nullable=False)
-    date = Column(Date, nullable=False)
+    date = Column(Date, primary_key=True, nullable=False)
     query = Column(String(512), nullable=True)
     page = Column(String(2048), nullable=True)
     clicks = Column(Integer, default=0)
@@ -285,16 +321,18 @@ class GSCData(Base, TimestampMixin, UUIDMixin):
     raw_data = Column(JSON, nullable=True)
 
 
-class GA4Data(Base, TimestampMixin, UUIDMixin):
+class GA4Data(Base, TimestampMixin):
     __tablename__ = "ga4_data"
     __table_args__ = (
         Index("idx_ga4_project_id", "project_id"),
         Index("idx_ga4_date", "date"),
-        {"schema": "reporting_schema"}
+        Index("idx_ga4_page_path", "page_path"),
+        {"schema": "reporting_schema", "postgresql_partition_by": "RANGE (date)"}
     )
-    
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     project_id = Column(String(36), nullable=False)
-    date = Column(Date, nullable=False)
+    date = Column(Date, primary_key=True, nullable=False)
     page_path = Column(String(2048), nullable=True)
     sessions = Column(Integer, default=0)
     users = Column(Integer, default=0)
@@ -306,16 +344,18 @@ class GA4Data(Base, TimestampMixin, UUIDMixin):
     raw_data = Column(JSON, nullable=True)
 
 
-class YandexWebmasterData(Base, TimestampMixin, UUIDMixin):
+class YandexWebmasterData(Base, TimestampMixin):
     __tablename__ = "yandex_webmaster_data"
     __table_args__ = (
         Index("idx_ym_project_id", "project_id"),
         Index("idx_ym_date", "date"),
-        {"schema": "reporting_schema"}
+        Index("idx_ym_query", "query"),
+        {"schema": "reporting_schema", "postgresql_partition_by": "RANGE (date)"}
     )
-    
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     project_id = Column(String(36), nullable=False)
-    date = Column(Date, nullable=False)
+    date = Column(Date, primary_key=True, nullable=False)
     query = Column(String(512), nullable=True)
     url = Column(String(2048), nullable=True)
     shows = Column(Integer, default=0)
@@ -325,21 +365,32 @@ class YandexWebmasterData(Base, TimestampMixin, UUIDMixin):
     raw_data = Column(JSON, nullable=True)
 
 
-class Report(Base, TimestampMixin, UUIDMixin):
+class Report(Base, TimestampMixin):
     __tablename__ = "reports"
     __table_args__ = (
         Index("idx_report_project_id", "project_id"),
-        Index("idx_report_type", "report_type"),
+        Index("idx_report_created_at", "created_at"),
         {"schema": "reporting_schema"}
     )
-    
-    project_id = Column(String(36), nullable=False)
-    report_type = Column(String(50), nullable=False)
-    period_start = Column(Date, nullable=False)
-    period_end = Column(Date, nullable=False)
-    file_path = Column(String(512), nullable=True)
-    metrics = Column(JSON, nullable=True)
-    status = Column(String(50), default="generated")
+
+    report_id = Column(String(64), primary_key=True)
+    project_id = Column(String(128), nullable=True)
+    root_url = Column(String(2048), nullable=False)
+    data = Column(JSONB, nullable=False, default=dict)
+
+
+class MetricsHistory(Base, TimestampMixin):
+    __tablename__ = "metrics_history"
+    __table_args__ = (
+        Index("idx_metrics_history_project_id", "project_id"),
+        Index("idx_metrics_history_created_at", "created_at"),
+        {"schema": "reporting_schema"}
+    )
+
+    metric_id = Column(String(64), primary_key=True)
+    project_id = Column(String(128), nullable=True)
+    root_url = Column(String(2048), nullable=False)
+    metrics = Column(JSONB, nullable=False, default=dict)
 
 
 class CostEfficiency(Base, TimestampMixin, UUIDMixin):
@@ -503,29 +554,28 @@ class PublicAuditResponse(BaseModel):
 
 
 class FFScoreResponse(BaseModel):
-    id: str
-    project_id: str
-    page_id: Optional[str]
-    total_score: float
-    freshness_score: float
-    familiarity_score: float
-    quality_score: float
-    calculated_at: datetime
-    metadata: Optional[Dict[str, Any]]
+    score_id: str
+    project_id: Optional[str]
+    root_url: str
+    ff_score: float
+    components: Dict[str, Any]
+    inputs: Dict[str, Any]
+    thresholds: Dict[str, Any]
+    eeat_score_id: Optional[str]
+    created_at: datetime
     
     class Config:
         from_attributes = True
 
 
 class EEATScoreResponse(BaseModel):
-    id: str
-    page_id: str
-    total_score: float
-    experience_score: float
-    expertise_score: float
-    authoritativeness_score: float
-    trustworthiness_score: float
-    signals: Optional[Dict[str, Any]]
+    score_id: str
+    project_id: Optional[str]
+    root_url: str
+    score: float
+    breakdown: Dict[str, Any]
+    signals: Dict[str, Any]
+    created_at: datetime
     
     class Config:
         from_attributes = True
@@ -599,21 +649,16 @@ class GA4DataResponse(BaseModel):
 
 
 class ReportCreate(BaseModel):
-    project_id: str
-    report_type: str = Field(..., regex="^(gsc|ga4|yandex|combined|cost_efficiency)$")
-    period_start: date
-    period_end: date
+    project_id: Optional[str] = None
+    root_url: str
+    data: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ReportResponse(BaseModel):
-    id: str
-    project_id: str
-    report_type: str
-    period_start: date
-    period_end: date
-    file_path: Optional[str]
-    metrics: Optional[Dict[str, Any]]
-    status: str
+    report_id: str
+    project_id: Optional[str]
+    root_url: str
+    data: Dict[str, Any]
     created_at: datetime
     
     class Config:

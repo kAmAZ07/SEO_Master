@@ -190,40 +190,66 @@ def upgrade():
     
     op.create_table(
         'ff_scores',
-        sa.Column('id', sa.String(36), primary_key=True),
-        sa.Column('project_id', sa.String(36), nullable=False),
-        sa.Column('page_id', sa.String(36), nullable=True),
-        sa.Column('total_score', sa.Float, nullable=False),
-        sa.Column('freshness_score', sa.Float, nullable=False),
-        sa.Column('familiarity_score', sa.Float, nullable=False),
-        sa.Column('quality_score', sa.Float, nullable=False),
-        sa.Column('calculated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()')),
-        sa.Column('metadata', postgresql.JSONB, nullable=True),
+        sa.Column('score_id', sa.String(64), primary_key=True),
+        sa.Column('project_id', sa.String(128), nullable=True),
+        sa.Column('root_url', sa.String(2048), nullable=False),
+        sa.Column('ff_score', sa.Float, nullable=False),
+        sa.Column('components', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('inputs', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('thresholds', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('eeat_score_id', sa.String(64), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
         schema='semantic_schema'
     )
     op.create_index('idx_ff_score_project_id', 'ff_scores', ['project_id'], schema='semantic_schema')
-    op.create_index('idx_ff_score_page_id', 'ff_scores', ['page_id'], schema='semantic_schema')
-    op.create_index('idx_ff_score_calculated_at', 'ff_scores', ['calculated_at'], schema='semantic_schema')
-    op.create_index('idx_ff_score_total', 'ff_scores', ['total_score'], schema='semantic_schema')
+    op.create_index('idx_ff_score_created_at', 'ff_scores', ['created_at'], schema='semantic_schema')
+    op.create_index('idx_ff_score_root_url', 'ff_scores', ['root_url'], schema='semantic_schema')
     
     op.create_table(
         'eeat_scores',
-        sa.Column('id', sa.String(36), primary_key=True),
-        sa.Column('page_id', sa.String(36), nullable=False, unique=True),
-        sa.Column('total_score', sa.Float, nullable=False),
-        sa.Column('experience_score', sa.Float, nullable=False),
-        sa.Column('expertise_score', sa.Float, nullable=False),
-        sa.Column('authoritativeness_score', sa.Float, nullable=False),
-        sa.Column('trustworthiness_score', sa.Float, nullable=False),
-        sa.Column('signals', postgresql.JSONB, nullable=True),
+        sa.Column('score_id', sa.String(64), primary_key=True),
+        sa.Column('project_id', sa.String(128), nullable=True),
+        sa.Column('root_url', sa.String(2048), nullable=False),
+        sa.Column('score', sa.Float, nullable=False),
+        sa.Column('breakdown', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('signals', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
         schema='semantic_schema'
     )
-    op.create_index('idx_eeat_score_page_id', 'eeat_scores', ['page_id'], schema='semantic_schema')
-    op.create_index('idx_eeat_total_score', 'eeat_scores', ['total_score'], schema='semantic_schema')
+    op.create_index('idx_eeat_score_project_id', 'eeat_scores', ['project_id'], schema='semantic_schema')
+    op.create_index('idx_eeat_score_created_at', 'eeat_scores', ['created_at'], schema='semantic_schema')
+    op.create_index('idx_eeat_root_url', 'eeat_scores', ['root_url'], schema='semantic_schema')
+
+    op.create_table(
+        'content_drafts',
+        sa.Column('draft_id', sa.String(64), primary_key=True),
+        sa.Column('project_id', sa.String(128), nullable=True),
+        sa.Column('root_url', sa.String(2048), nullable=False),
+        sa.Column('drafts', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        schema='semantic_schema'
+    )
+    op.create_index('idx_content_draft_project_id', 'content_drafts', ['project_id'], schema='semantic_schema')
+    op.create_index('idx_content_draft_created_at', 'content_drafts', ['created_at'], schema='semantic_schema')
+
+    op.create_table(
+        'semantic_analysis',
+        sa.Column('analysis_id', sa.String(64), primary_key=True),
+        sa.Column('project_id', sa.String(128), nullable=True),
+        sa.Column('root_url', sa.String(2048), nullable=False),
+        sa.Column('content_gap', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('semantic_distance', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('keyword_coverage', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('inputs', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        schema='semantic_schema'
+    )
+    op.create_index('idx_semantic_analysis_project_id', 'semantic_analysis', ['project_id'], schema='semantic_schema')
+    op.create_index('idx_semantic_analysis_created_at', 'semantic_analysis', ['created_at'], schema='semantic_schema')
     
     op.create_table(
         'content_gaps',
@@ -279,7 +305,7 @@ def upgrade():
     
     op.execute("""
         CREATE TABLE IF NOT EXISTS reporting_schema.gsc_data (
-            id VARCHAR(36) PRIMARY KEY,
+            id VARCHAR(36) NOT NULL DEFAULT uuid_generate_v4()::text,
             project_id VARCHAR(36) NOT NULL,
             date DATE NOT NULL,
             query VARCHAR(512),
@@ -290,17 +316,22 @@ def upgrade():
             position DOUBLE PRECISION,
             raw_data JSONB,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            PRIMARY KEY (date, id)
         ) PARTITION BY RANGE (date)
     """)
-    op.create_index('idx_gsc_project_id', 'gsc_data', ['project_id'], schema='reporting_schema')
-    op.create_index('idx_gsc_date', 'gsc_data', ['date'], schema='reporting_schema')
-    op.create_index('idx_gsc_query', 'gsc_data', ['query'], schema='reporting_schema')
-    op.create_index('idx_gsc_page', 'gsc_data', ['page'], schema='reporting_schema')
-    
+    op.execute("CREATE INDEX idx_gsc_project_id ON reporting_schema.gsc_data(project_id)")
+    op.execute("CREATE INDEX idx_gsc_date ON reporting_schema.gsc_data(date DESC)")
+    op.execute("CREATE INDEX idx_gsc_query ON reporting_schema.gsc_data(query)")
+    op.execute("CREATE INDEX idx_gsc_page ON reporting_schema.gsc_data(page)")
+    op.execute("CREATE TABLE reporting_schema.gsc_data_2024 PARTITION OF reporting_schema.gsc_data FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')")
+    op.execute("CREATE TABLE reporting_schema.gsc_data_2025 PARTITION OF reporting_schema.gsc_data FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')")
+    op.execute("CREATE TABLE reporting_schema.gsc_data_2026 PARTITION OF reporting_schema.gsc_data FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')")
+    op.execute("CREATE TABLE reporting_schema.gsc_data_2027 PARTITION OF reporting_schema.gsc_data FOR VALUES FROM ('2027-01-01') TO ('2028-01-01')")
+
     op.execute("""
         CREATE TABLE IF NOT EXISTS reporting_schema.ga4_data (
-            id VARCHAR(36) PRIMARY KEY,
+            id VARCHAR(36) NOT NULL DEFAULT uuid_generate_v4()::text,
             project_id VARCHAR(36) NOT NULL,
             date DATE NOT NULL,
             page_path VARCHAR(2048),
@@ -313,16 +344,21 @@ def upgrade():
             revenue DOUBLE PRECISION DEFAULT 0.0,
             raw_data JSONB,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            PRIMARY KEY (date, id)
         ) PARTITION BY RANGE (date)
     """)
-    op.create_index('idx_ga4_project_id', 'ga4_data', ['project_id'], schema='reporting_schema')
-    op.create_index('idx_ga4_date', 'ga4_data', ['date'], schema='reporting_schema')
-    op.create_index('idx_ga4_page_path', 'ga4_data', ['page_path'], schema='reporting_schema')
-    
+    op.execute("CREATE INDEX idx_ga4_project_id ON reporting_schema.ga4_data(project_id)")
+    op.execute("CREATE INDEX idx_ga4_date ON reporting_schema.ga4_data(date DESC)")
+    op.execute("CREATE INDEX idx_ga4_page_path ON reporting_schema.ga4_data(page_path)")
+    op.execute("CREATE TABLE reporting_schema.ga4_data_2024 PARTITION OF reporting_schema.ga4_data FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')")
+    op.execute("CREATE TABLE reporting_schema.ga4_data_2025 PARTITION OF reporting_schema.ga4_data FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')")
+    op.execute("CREATE TABLE reporting_schema.ga4_data_2026 PARTITION OF reporting_schema.ga4_data FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')")
+    op.execute("CREATE TABLE reporting_schema.ga4_data_2027 PARTITION OF reporting_schema.ga4_data FOR VALUES FROM ('2027-01-01') TO ('2028-01-01')")
+
     op.execute("""
         CREATE TABLE IF NOT EXISTS reporting_schema.yandex_webmaster_data (
-            id VARCHAR(36) PRIMARY KEY,
+            id VARCHAR(36) NOT NULL DEFAULT uuid_generate_v4()::text,
             project_id VARCHAR(36) NOT NULL,
             date DATE NOT NULL,
             query VARCHAR(512),
@@ -333,30 +369,43 @@ def upgrade():
             position DOUBLE PRECISION,
             raw_data JSONB,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            PRIMARY KEY (date, id)
         ) PARTITION BY RANGE (date)
     """)
-    op.create_index('idx_ym_project_id', 'yandex_webmaster_data', ['project_id'], schema='reporting_schema')
-    op.create_index('idx_ym_date', 'yandex_webmaster_data', ['date'], schema='reporting_schema')
-    op.create_index('idx_ym_query', 'yandex_webmaster_data', ['query'], schema='reporting_schema')
+    op.execute("CREATE INDEX idx_ym_project_id ON reporting_schema.yandex_webmaster_data(project_id)")
+    op.execute("CREATE INDEX idx_ym_date ON reporting_schema.yandex_webmaster_data(date DESC)")
+    op.execute("CREATE INDEX idx_ym_query ON reporting_schema.yandex_webmaster_data(query)")
+    op.execute("CREATE TABLE reporting_schema.yandex_webmaster_data_2024 PARTITION OF reporting_schema.yandex_webmaster_data FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')")
+    op.execute("CREATE TABLE reporting_schema.yandex_webmaster_data_2025 PARTITION OF reporting_schema.yandex_webmaster_data FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')")
+    op.execute("CREATE TABLE reporting_schema.yandex_webmaster_data_2026 PARTITION OF reporting_schema.yandex_webmaster_data FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')")
+    op.execute("CREATE TABLE reporting_schema.yandex_webmaster_data_2027 PARTITION OF reporting_schema.yandex_webmaster_data FOR VALUES FROM ('2027-01-01') TO ('2028-01-01')")
     
     op.create_table(
         'reports',
-        sa.Column('id', sa.String(36), primary_key=True),
-        sa.Column('project_id', sa.String(36), nullable=False),
-        sa.Column('report_type', sa.String(50), nullable=False),
-        sa.Column('period_start', sa.Date, nullable=False),
-        sa.Column('period_end', sa.Date, nullable=False),
-        sa.Column('file_path', sa.String(512), nullable=True),
-        sa.Column('metrics', postgresql.JSONB, nullable=True),
-        sa.Column('status', sa.String(50), server_default='generated'),
+        sa.Column('report_id', sa.String(64), primary_key=True),
+        sa.Column('project_id', sa.String(128), nullable=True),
+        sa.Column('root_url', sa.String(2048), nullable=False),
+        sa.Column('data', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
         schema='reporting_schema'
     )
     op.create_index('idx_report_project_id', 'reports', ['project_id'], schema='reporting_schema')
-    op.create_index('idx_report_type', 'reports', ['report_type'], schema='reporting_schema')
     op.create_index('idx_report_created_at', 'reports', ['created_at'], schema='reporting_schema')
+
+    op.create_table(
+        'metrics_history',
+        sa.Column('metric_id', sa.String(64), primary_key=True),
+        sa.Column('project_id', sa.String(128), nullable=True),
+        sa.Column('root_url', sa.String(2048), nullable=False),
+        sa.Column('metrics', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        schema='reporting_schema'
+    )
+    op.create_index('idx_metrics_history_project_id', 'metrics_history', ['project_id'], schema='reporting_schema')
+    op.create_index('idx_metrics_history_created_at', 'metrics_history', ['created_at'], schema='reporting_schema')
     
     op.create_table(
         'cost_efficiency',
@@ -450,10 +499,16 @@ def upgrade():
         ('audit_schema', 'crawl_events'),
         ('semantic_schema', 'ff_scores'),
         ('semantic_schema', 'eeat_scores'),
+        ('semantic_schema', 'content_drafts'),
+        ('semantic_schema', 'semantic_analysis'),
         ('semantic_schema', 'content_gaps'),
         ('semantic_schema', 'llm_generations'),
         ('semantic_schema', 'semantic_events'),
+        ('reporting_schema', 'gsc_data'),
+        ('reporting_schema', 'ga4_data'),
+        ('reporting_schema', 'yandex_webmaster_data'),
         ('reporting_schema', 'reports'),
+        ('reporting_schema', 'metrics_history'),
         ('reporting_schema', 'cost_efficiency'),
         ('public', 'users'),
         ('public', 'changelog'),
@@ -474,6 +529,120 @@ def upgrade():
                 BEFORE UPDATE ON {table}
                 FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()
             """)
+
+    op.execute("""
+        CREATE OR REPLACE VIEW reporting_schema.project_performance AS
+        WITH latest_ff_scores AS (
+            SELECT DISTINCT ON (project_id)
+                project_id,
+                root_url,
+                ff_score,
+                components,
+                created_at
+            FROM semantic_schema.ff_scores
+            WHERE project_id IS NOT NULL
+            ORDER BY project_id, created_at DESC
+        ),
+        latest_audits AS (
+            SELECT DISTINCT ON (project_id)
+                project_id,
+                root_url,
+                summary,
+                created_at
+            FROM audit_schema.crawl_results
+            WHERE project_id IS NOT NULL
+                AND status = 'completed'
+            ORDER BY project_id, created_at DESC
+        ),
+        gsc_rollup AS (
+            SELECT
+                project_id,
+                SUM(clicks)::BIGINT AS total_clicks,
+                SUM(impressions)::BIGINT AS total_impressions,
+                AVG(position)::DOUBLE PRECISION AS avg_position,
+                MAX(date) AS latest_gsc_date
+            FROM reporting_schema.gsc_data
+            GROUP BY project_id
+        )
+        SELECT
+            p.id AS project_id,
+            p.name AS project_name,
+            p.url,
+            ff.ff_score,
+            NULLIF(ff.components ->> 'freshness', '')::DOUBLE PRECISION AS freshness_score,
+            NULLIF(ff.components ->> 'familiarity', '')::DOUBLE PRECISION AS familiarity_score,
+            NULLIF(ff.components ->> 'quality', '')::DOUBLE PRECISION AS quality_score,
+            COALESCE(NULLIF(a.summary -> 'coverage' ->> 'processed', '')::INTEGER, 0) AS processed_pages,
+            COALESCE(NULLIF(a.summary -> 'coverage' ->> 'attempted', '')::INTEGER, 0) AS attempted_pages,
+            NULLIF(a.summary ->> 'score', '')::DOUBLE PRECISION AS latest_audit_score,
+            NULLIF(a.summary -> 'cwv' ->> 'LCP_grade', '') AS lcp_grade,
+            NULLIF(a.summary -> 'cwv' ->> 'FID_grade', '') AS fid_grade,
+            NULLIF(a.summary -> 'cwv' ->> 'CLS_grade', '') AS cls_grade,
+            a.created_at AS latest_audit_created_at,
+            gsc.total_clicks,
+            gsc.total_impressions,
+            gsc.avg_position,
+            gsc.latest_gsc_date,
+            p.created_at
+        FROM audit_schema.projects p
+        LEFT JOIN latest_ff_scores ff ON ff.project_id = p.id
+        LEFT JOIN latest_audits a ON a.project_id = p.id
+        LEFT JOIN gsc_rollup gsc ON gsc.project_id = p.id
+        WHERE p.status = 'active'
+    """)
+
+    op.execute("""
+        CREATE OR REPLACE VIEW semantic_schema.content_recommendations AS
+        WITH latest_eeat_scores AS (
+            SELECT DISTINCT ON (COALESCE(project_id, ''), root_url)
+                project_id,
+                root_url,
+                score,
+                created_at
+            FROM semantic_schema.eeat_scores
+            ORDER BY COALESCE(project_id, ''), root_url, created_at DESC
+        )
+        SELECT
+            sa.analysis_id AS id,
+            sa.project_id,
+            NULL::VARCHAR(36) AS page_id,
+            sa.root_url AS url,
+            'semantic_gap'::VARCHAR(100) AS gap_type,
+            COALESCE(sa.keyword_coverage -> 'missing', '[]'::jsonb) AS missing_keywords,
+            COALESCE(
+                NULLIF(
+                    ARRAY_TO_STRING(
+                        ARRAY(
+                            SELECT jsonb_array_elements_text(COALESCE(sa.content_gap -> 'suggestions', '[]'::jsonb))
+                        ),
+                        E'\n'
+                    ),
+                    ''
+                ),
+                'No recommendations available'
+            ) AS recommendations,
+            CASE
+                WHEN COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) >= 30 THEN 'critical'
+                WHEN COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) >= 20 THEN 'high'
+                WHEN COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) >= 10 THEN 'medium'
+                ELSE 'low'
+            END AS priority,
+            ee.score AS eeat_score,
+            sa.created_at
+        FROM semantic_schema.semantic_analysis sa
+        LEFT JOIN latest_eeat_scores ee
+            ON ee.root_url = sa.root_url
+            AND ee.project_id IS NOT DISTINCT FROM sa.project_id
+        WHERE COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) > 0
+        ORDER BY
+            CASE
+                WHEN COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) >= 30 THEN 1
+                WHEN COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) >= 20 THEN 2
+                WHEN COALESCE(NULLIF(sa.content_gap ->> 'gap', '')::DOUBLE PRECISION, 0.0) >= 10 THEN 3
+                ELSE 4
+            END,
+            sa.created_at DESC
+    """)
 
 
 def downgrade():

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from config.database_config import get_db
 from config.logging_config import get_logger
 from database.models import Project, PublicAuditResult, User
+from services.api_gateway.events.hitl_approved import publish_hitl_approved_event
 from services.api_gateway.auth import (
     authenticate_user,
     create_token_pair,
@@ -178,6 +179,28 @@ async def _proxy_management(
                 return response.json()
             except ValueError:
                 return None
+
+    return None
+
+
+async def _proxy_management_response(
+    method: str,
+    path_candidates: List[str],
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[httpx.Response]:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for path in path_candidates:
+            url = f"{settings.MANAGEMENT_SERVICE_URL.rstrip('/')}{path}"
+            try:
+                response = await client.request(method, url, params=params, json=payload)
+            except httpx.RequestError:
+                continue
+
+            if response.status_code == 404:
+                continue
+            return response
 
     return None
 
@@ -607,13 +630,54 @@ async def approve_task(
     request: ApprovalRequest,
     current_user: User = Depends(get_current_user),
 ):
+    correlation_id = str(uuid.uuid4())
     payload = {"user_id": str(current_user.id), "comment": request.comment}
-    data = await _proxy_management(
+    response = await _proxy_management_response(
         "POST",
         [f"/api/v1/hitl/tasks/{task_id}/approve", f"/api/hitl/approve/{task_id}"],
         payload=payload,
     )
-    return data or {"task_id": task_id, "status": "approved"}
+    if response is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="hitl_approval_unavailable")
+    if response.status_code >= 400:
+        detail = None
+        try:
+            detail = response.json().get("detail")
+        except ValueError:
+            detail = response.text[:300] or "hitl_approval_failed"
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    data = response.json() if response.content else {}
+
+    project_id = data.get("project_id")
+    approved_at = data.get("approved_at")
+    approved_by = data.get("approved_by") or str(current_user.id)
+    if not project_id or not approved_at:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="hitl_approval_missing_context")
+
+    event_published = True
+    try:
+        await publish_hitl_approved_event(
+            task_id=task_id,
+            project_id=str(project_id),
+            approved_by=approved_by,
+            approved_at=str(approved_at),
+            auto_deployed=bool(data.get("auto_deployed", True)),
+            notes=request.comment,
+            correlation_id=correlation_id,
+        )
+    except Exception:
+        event_published = False
+        logger.error(
+            "HITL approval succeeded but event publication failed",
+            extra={"task_id": task_id, "project_id": project_id, "correlation_id": correlation_id},
+            exc_info=True,
+        )
+
+    return {
+        **data,
+        "event_published": event_published,
+        "correlation_id": correlation_id,
+    }
 
 
 @router.post("/hitl/tasks/{task_id}/reject")
@@ -623,12 +687,22 @@ async def reject_task(
     current_user: User = Depends(get_current_user),
 ):
     payload = {"user_id": str(current_user.id), "comment": request.comment}
-    data = await _proxy_management(
+    response = await _proxy_management_response(
         "POST",
         [f"/api/v1/hitl/tasks/{task_id}/reject", f"/api/hitl/reject/{task_id}"],
         payload=payload,
     )
-    return data or {"task_id": task_id, "status": "rejected"}
+    if response is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="hitl_rejection_unavailable")
+    if response.status_code >= 400:
+        detail = None
+        try:
+            detail = response.json().get("detail")
+        except ValueError:
+            detail = response.text[:300] or "hitl_rejection_failed"
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    data = response.json() if response.content else {}
+    return data
 
 
 @router.post("/hitl/approve/{task_id}")

@@ -28,6 +28,7 @@ class FFScoreRequest(BaseModel):
 
     audit_summary: dict | None = None
     audit_findings: list[dict] = Field(default_factory=list)
+    input_sources: dict = Field(default_factory=dict)
 
 
 class FFScoreResponse(BaseModel):

@@ -18,7 +18,6 @@ from services.management_service.schemas.hitl import (
     HITLBatchApproveResponse
 )
 from services.management_service.client_api_adapter import deploy_task_changes
-from services.management_service.events.hitl_approved import publish_hitl_approved_event
 from config.logging_config import get_logger
 from prometheus_client import Counter, Histogram
 
@@ -186,27 +185,14 @@ class HITLHandler:
                     )
                     hitl_errors_total.labels(error_type='deployment_failed').inc()
             
-            try:
-                await publish_hitl_approved_event(
-                    db=self.db,
-                    task_id=str(task.id),
-                    project_id=str(task.project_id),
-                    approved_by=approved_by,
-                    auto_deployed=decision.auto_deploy,
-                    correlation_id=correlation_id
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to publish HITLApproved event: {e}",
-                    extra={"task_id": task_id, "correlation_id": correlation_id}
-                )
-            
             return {
                 "task_id": str(task.id),
+                "project_id": str(task.project_id),
                 "status": "approved",
                 "approved_by": approved_by,
                 "approved_at": hitl_approval.approved_at.isoformat(),
                 "auto_deployed": decision.auto_deploy,
+                "notes": decision.notes,
                 "deployment_result": deployment_result
             }
     

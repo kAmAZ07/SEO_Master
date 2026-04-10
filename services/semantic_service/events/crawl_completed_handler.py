@@ -1,15 +1,10 @@
 import asyncio
 import json
-from datetime import datetime, timezone
 
 import aio_pika
 
 from services.semantic_service.config import settings
-from services.semantic_service.db.session import get_session
-from services.semantic_service.db.models import SemanticAnalysisRow
-from services.semantic_service.analysis.content_gap import analyze_content_gap
-from services.semantic_service.analysis.semantic_distance import serp_minus_10_distance
-from services.semantic_service.analysis.keyword_coverage import keyword_coverage
+from services.semantic_service.analysis.pipeline import create_semantic_analysis
 
 
 def _extract_event_payload(message: dict) -> dict:
@@ -17,26 +12,6 @@ def _extract_event_payload(message: dict) -> dict:
     if isinstance(payload, dict):
         return payload
     return message
-
-
-def _build_target_text(payload: dict) -> str:
-    content_text = payload.get("content_text")
-    if isinstance(content_text, str) and content_text.strip():
-        return content_text.strip()
-
-    parts: list[str] = []
-    for page in payload.get("pages", [])[:10]:
-        if not isinstance(page, dict):
-            continue
-        parts.extend(
-            [
-                str(page.get("title") or ""),
-                str(page.get("description") or ""),
-                str(page.get("h1") or ""),
-            ]
-        )
-
-    return "\n".join(part for part in parts if part).strip()
 
 
 async def _handle_message(body: bytes) -> None:
@@ -51,44 +26,23 @@ async def _handle_message(body: bytes) -> None:
     payload = _extract_event_payload(event)
     root_url = payload.get("root_url")
     project_id = payload.get("project_id")
-    target_text = _build_target_text(payload)
-    serp_texts = payload.get("serp_top10_texts", []) or []
-    keywords = payload.get("keywords", []) or []
     mode = payload.get("mode", "unknown")
     audit_id = payload.get("audit_id")
 
     if not root_url or not isinstance(root_url, str):
         return
 
-    kc = keyword_coverage(target_text, keywords)
-    dist = serp_minus_10_distance(target_text, serp_texts)
-    gap = analyze_content_gap(target_text, serp_texts, keywords)
-
-    analysis_id = payload.get("analysis_id")
-    if not analysis_id or not isinstance(analysis_id, str):
-        analysis_id = payload.get("crawl_id") or payload.get("audit_id") or "analysis"
-        analysis_id = f"{analysis_id}-{int(datetime.now(timezone.utc).timestamp())}"
-
-    async with get_session() as session:
-        session.add(
-            SemanticAnalysisRow(
-                analysis_id=str(analysis_id),
-                project_id=project_id,
-                root_url=root_url,
-                created_at=datetime.now(timezone.utc),
-                content_gap=gap,
-                semantic_distance=dist,
-                keyword_coverage=kc,
-                inputs={
-                    "keywords_count": len(keywords),
-                    "serp_n": len(serp_texts),
-                    "mode": mode,
-                    "audit_id": audit_id,
-                    "content_length": len(target_text),
-                },
-            )
-        )
-        await session.commit()
+    await create_semantic_analysis(
+        project_id=project_id,
+        root_url=root_url,
+        audit_id=audit_id,
+        analysis_id=payload.get("analysis_id"),
+        mode=mode,
+        content_text=payload.get("content_text"),
+        pages=payload.get("pages", []),
+        serp_top10_texts=payload.get("serp_top10_texts", []),
+        keywords=payload.get("keywords", []),
+    )
 
 
 async def maybe_start_crawl_completed_consumer() -> None:

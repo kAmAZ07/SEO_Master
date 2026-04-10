@@ -568,7 +568,7 @@ class InterlinkGenerator:
                     project_id=project_id,
                     task_type=TaskType.ADD_INTERNAL_LINKS,
                     url=task.url,
-                    meta=task.meta,
+                    metadata=task.meta,
                     correlation_id=correlation_id
                 )
             except Exception as e:

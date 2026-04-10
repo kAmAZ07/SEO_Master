@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     MANAGEMENT_SERVICE_URL: str = Field(default="http://localhost:8004", env="MANAGEMENT_SERVICE_URL")
     SEMANTIC_SERVICE_URL: str = Field(default="http://localhost:8002", env="SEMANTIC_SERVICE_URL")
     REPORTING_SERVICE_URL: str = Field(default="http://localhost:8003", env="REPORTING_SERVICE_URL")
+
+    RABBITMQ_URL: Optional[str] = Field(default=None, env="RABBITMQ_URL")
+    RABBITMQ_HOST: str = Field(default="localhost", env="RABBITMQ_HOST")
+    RABBITMQ_PORT: int = Field(default=5672, env="RABBITMQ_PORT")
+    RABBITMQ_USER: str = Field(default="guest", env="RABBITMQ_USER")
+    RABBITMQ_PASSWORD: str = Field(default="guest", env="RABBITMQ_PASSWORD")
+    RABBITMQ_VHOST: str = Field(default="/", env="RABBITMQ_VHOST")
     
     ENABLE_METRICS: bool = Field(default=True, env="ENABLE_METRICS")
     METRICS_PORT: int = Field(default=9100, env="METRICS_PORT")
@@ -75,6 +82,15 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def get_rabbitmq_url() -> str:
+    if settings.RABBITMQ_URL:
+        return settings.RABBITMQ_URL
+    return (
+        f"amqp://{settings.RABBITMQ_USER}:{settings.RABBITMQ_PASSWORD}"
+        f"@{settings.RABBITMQ_HOST}:{settings.RABBITMQ_PORT}/{settings.RABBITMQ_VHOST}"
+    )
 
 
 def get_redis_config():

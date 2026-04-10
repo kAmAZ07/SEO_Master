@@ -49,6 +49,114 @@ class OptimizationSaga:
         self.correlation_id = str(uuid.uuid4())
         self.client: Optional[httpx.AsyncClient] = None
 
+    def _build_full_audit_payload(self) -> dict:
+        return {
+            "project_id": self.project_id,
+            "root_url": self.url,
+            "site_type_hint": "unknown",
+            "platform": "generic",
+        }
+
+    @staticmethod
+    def _build_content_text(crawl_result: dict) -> str:
+        pages = crawl_result.get("pages", []) if isinstance(crawl_result, dict) else []
+        findings = crawl_result.get("findings", []) if isinstance(crawl_result, dict) else []
+
+        content_parts = []
+        for page in pages[:10]:
+            if not isinstance(page, dict):
+                continue
+            content_parts.append(str(page.get("title") or ""))
+            content_parts.append(str(page.get("description") or ""))
+            content_parts.append(str(page.get("h1") or ""))
+        for finding in findings[:20]:
+            if not isinstance(finding, dict):
+                continue
+            content_parts.append(str(finding.get("message") or finding.get("title") or finding.get("description") or ""))
+
+        return "\n".join(part for part in content_parts if part).strip()
+
+    def _extract_current_page_snapshot(self, crawl_result: dict) -> dict:
+        if not isinstance(crawl_result, dict):
+            return {"title": None, "description": None, "h1": None, "schema_org": None}
+
+        pages = crawl_result.get("pages", [])
+        selected_page = None
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            if str(page.get("url") or "").rstrip("/") == self.url.rstrip("/"):
+                selected_page = page
+                break
+        if selected_page is None and pages:
+            first_page = pages[0]
+            selected_page = first_page if isinstance(first_page, dict) else None
+
+        selected_page = selected_page or {}
+        return {
+            "title": selected_page.get("title"),
+            "description": selected_page.get("description"),
+            "h1": selected_page.get("h1"),
+            "schema_org": selected_page.get("schema_org"),
+        }
+
+    @staticmethod
+    def _derive_backlinks_count(crawl_result: dict, reporting_summary: dict | None) -> int:
+        reporting_signals = (reporting_summary or {}).get("signals") or {}
+        reporting_backlinks = reporting_signals.get("backlinks_count")
+        if isinstance(reporting_backlinks, (int, float)):
+            return max(0, int(reporting_backlinks))
+
+        summary = crawl_result.get("summary") if isinstance(crawl_result, dict) else {}
+        backlinks = summary.get("backlinks") if isinstance(summary, dict) else {}
+        top_sites = backlinks.get("top_linking_sites") if isinstance(backlinks, dict) else []
+        if isinstance(top_sites, list):
+            return len(top_sites)
+        return 0
+
+    @staticmethod
+    def _derive_brand_mentions(reporting_summary: dict | None) -> int:
+        signals = (reporting_summary or {}).get("signals") or {}
+        brand_mentions = signals.get("brand_mentions")
+        if isinstance(brand_mentions, (int, float)):
+            return max(0, int(brand_mentions))
+        return 0
+
+    async def _fetch_reporting_summary(self) -> dict:
+        try:
+            response = await self.client.get(
+                f"{settings.REPORTING_SERVICE_URL}/reporting/projects/{self.project_id}/summary",
+                params={"root_url": self.url},
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            logger.warning(
+                "Failed to fetch reporting summary for saga",
+                extra={
+                    "project_id": self.project_id,
+                    "url": self.url,
+                    "correlation_id": self.correlation_id,
+                    "error": str(exc),
+                },
+            )
+            return {}
+
+    async def _run_semantic_analysis(self, crawl_result: dict, content_text: str) -> dict:
+        payload = {
+            "project_id": self.project_id,
+            "root_url": self.url,
+            "audit_id": crawl_result.get("audit_id") if isinstance(crawl_result, dict) else None,
+            "mode": crawl_result.get("mode") if isinstance(crawl_result, dict) else None,
+            "content_text": content_text,
+            "pages": crawl_result.get("pages", []) if isinstance(crawl_result, dict) else [],
+            "keywords": crawl_result.get("keywords", []) if isinstance(crawl_result, dict) else [],
+            "serp_top10_texts": crawl_result.get("serp_top10_texts", []) if isinstance(crawl_result, dict) else [],
+        }
+        response = await self.client.post(f"{settings.SEMANTIC_SERVICE_URL}/semantic/analyze", json=payload)
+        response.raise_for_status()
+        return response.json()
+
     async def execute(self) -> bool:
         from services.management_service.db.session import SessionLocal
 
@@ -115,13 +223,8 @@ class OptimizationSaga:
         self.state = SagaState.CRAWLING
 
         response = await self.client.post(
-            f"{settings.AUDIT_SERVICE_URL}/audit/public",
-            json={
-                "root_url": self.url,
-                "site_type_hint": "unknown",
-                "platform": "generic",
-                "options": {"max_pages": 25, "max_depth": 2, "js_render": False},
-            },
+            f"{settings.AUDIT_SERVICE_URL}/audit/full",
+            json=self._build_full_audit_payload(),
         )
         response.raise_for_status()
 
@@ -176,19 +279,33 @@ class OptimizationSaga:
         self.state = SagaState.CALCULATING_SCORES
 
         crawl_result = self.context.get("crawl_result", {})
-        pages = crawl_result.get("pages", []) if isinstance(crawl_result, dict) else []
-        findings = crawl_result.get("findings", []) if isinstance(crawl_result, dict) else []
+        content_text = self._build_content_text(crawl_result)
+        reporting_summary = await self._fetch_reporting_summary()
+        semantic_analysis = await self._run_semantic_analysis(crawl_result, content_text)
 
-        content_parts = []
-        for page in pages[:10]:
-            if isinstance(page, dict):
-                content_parts.append(str(page.get("title") or ""))
-                content_parts.append(str(page.get("description") or ""))
-        for finding in findings[:20]:
-            if isinstance(finding, dict):
-                content_parts.append(str(finding.get("message") or finding.get("title") or ""))
+        self.context["reporting_summary"] = reporting_summary
+        self.context["semantic_analysis"] = semantic_analysis
 
-        content_text = "\n".join(part for part in content_parts if part).strip()
+        audit_summary = crawl_result.get("summary", {}) if isinstance(crawl_result, dict) else {}
+        audit_findings = crawl_result.get("findings", []) if isinstance(crawl_result, dict) else []
+        reporting_signals = (reporting_summary.get("signals") or {}) if isinstance(reporting_summary, dict) else {}
+        reporting_sources = (reporting_summary.get("sources") or {}) if isinstance(reporting_summary, dict) else {}
+        semantic_inputs = semantic_analysis.get("inputs") if isinstance(semantic_analysis, dict) else {}
+        semantic_distance = (semantic_analysis.get("semantic_distance") or {}).get("semantic_distance") if isinstance(semantic_analysis, dict) else None
+        keyword_coverage = (semantic_analysis.get("keyword_coverage") or {}).get("coverage") if isinstance(semantic_analysis, dict) else None
+
+        semantic_unavailable = []
+        if isinstance(semantic_inputs, dict):
+            semantic_unavailable = semantic_inputs.get("unavailable") or []
+        semantic_distance_source = "semantic_analysis"
+        keyword_coverage_source = "semantic_analysis"
+        if "serp_top10_texts" in semantic_unavailable:
+            semantic_distance_source = "semantic_analysis_degraded"
+        if "keywords" in semantic_unavailable:
+            keyword_coverage_source = "semantic_analysis_degraded"
+
+        backlinks_count = self._derive_backlinks_count(crawl_result, reporting_summary)
+        brand_mentions = self._derive_brand_mentions(reporting_summary)
 
         ffscore_response = await self.client.post(
             f"{settings.SEMANTIC_SERVICE_URL}/semantic/ff-score",
@@ -196,6 +313,24 @@ class OptimizationSaga:
                 "project_id": self.project_id,
                 "root_url": self.url,
                 "content_text": content_text,
+                "audit_summary": audit_summary,
+                "audit_findings": audit_findings,
+                "freshness_days_since_update": reporting_signals.get("freshness_days_since_update"),
+                "serp_shift": reporting_signals.get("serp_shift"),
+                "link_velocity": reporting_signals.get("link_velocity"),
+                "semantic_distance": semantic_distance,
+                "keyword_coverage": keyword_coverage,
+                "backlinks_count": backlinks_count,
+                "brand_mentions": brand_mentions,
+                "input_sources": {
+                    "freshness_days_since_update": reporting_sources.get("freshness_days_since_update"),
+                    "serp_shift": reporting_sources.get("serp_shift"),
+                    "link_velocity": reporting_sources.get("link_velocity"),
+                    "semantic_distance": semantic_distance_source,
+                    "keyword_coverage": keyword_coverage_source,
+                    "backlinks_count": "audit_summary_backlinks" if backlinks_count else None,
+                    "brand_mentions": reporting_sources.get("brand_mentions"),
+                },
             },
         )
         ffscore_response.raise_for_status()
@@ -254,12 +389,7 @@ class OptimizationSaga:
             raise ValueError("task_id is required to create HITL approval record")
 
         crawl_data = self.context.get("crawl_result", {})
-        old_content = {
-            "title": crawl_data.get("title"),
-            "description": crawl_data.get("description"),
-            "h1": crawl_data.get("h1"),
-            "schema_org": crawl_data.get("schema_org"),
-        }
+        old_content = self._extract_current_page_snapshot(crawl_data)
 
         new_content = self.context.get("generated_content", {})
 

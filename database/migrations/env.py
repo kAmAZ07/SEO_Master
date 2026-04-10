@@ -4,18 +4,13 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool, text
 from alembic import context
 
-sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), '..')))
+ROOT_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
-from database_config import Base, DATABASE_URL
-from secrets_manager import get_api_credentials
-
-from models import (
-    Project, Crawl, Page, CoreWebVitals, SchemaValidation,
-    Backlink, PublicAuditResult, CrawlEvent,
-    FFScore, EEATScore, ContentGap, LLMGeneration, SemanticEvent,
-    GSCData, GA4Data, YandexWebmasterData, Report, CostEfficiency,
-    Changelog, DomainEvent, User
-)
+from config.database_config import Base
+from config.secrets_manager import get_api_credentials
+import database.models  # noqa: F401
 
 config = context.config
 

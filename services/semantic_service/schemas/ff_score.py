@@ -6,16 +6,16 @@ class FFScoreRequest(BaseModel):
     root_url: AnyUrl
 
     content_text: str = ""
-    freshness_days_since_update: int = Field(default=30, ge=0, le=3650)
-    serp_shift: float = Field(default=0.0, ge=-50.0, le=50.0)
-    link_velocity: float = Field(default=0.0, ge=0.0, le=100.0)
+    freshness_days_since_update: int | None = Field(default=None, ge=0, le=3650)
+    serp_shift: float | None = Field(default=None, ge=-50.0, le=50.0)
+    link_velocity: float | None = Field(default=None, ge=0.0, le=100.0)
 
-    semantic_distance: float = Field(default=50.0, ge=0.0, le=100.0)
-    keyword_coverage: float = Field(default=50.0, ge=0.0, le=100.0)
+    semantic_distance: float | None = Field(default=None, ge=0.0, le=100.0)
+    keyword_coverage: float | None = Field(default=None, ge=0.0, le=100.0)
 
-    cwv_grade: str = "unknown"
-    broken_links_count: int = Field(default=0, ge=0, le=1000000)
-    schema_errors_count: int = Field(default=0, ge=0, le=1000000)
+    cwv_grade: str | None = None
+    broken_links_count: int | None = Field(default=None, ge=0, le=1000000)
+    schema_errors_count: int | None = Field(default=None, ge=0, le=1000000)
 
     backlinks_count: int = Field(default=0, ge=0, le=100000000)
     brand_mentions: int = Field(default=0, ge=0, le=1000000)
@@ -25,6 +25,9 @@ class FFScoreRequest(BaseModel):
     has_privacy_policy: bool = False
     has_contacts: bool = False
     has_author_schema: bool = False
+
+    audit_summary: dict | None = None
+    audit_findings: list[dict] = Field(default_factory=list)
 
 
 class FFScoreResponse(BaseModel):

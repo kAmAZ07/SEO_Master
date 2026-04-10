@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Text, JSON, Float, Date, ForeignKey, Index, BigInteger, Boolean, DateTime
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from config.database_config import Base
@@ -20,6 +21,20 @@ class SoftDeleteMixin:
 
 class UUIDMixin:
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+
+class AuditResultMixin:
+    project_id = Column(String(128), nullable=True)
+    root_url = Column(String(2048), nullable=False)
+    mode = Column(String(16), nullable=False)
+    site_type_hint = Column(String(64), nullable=False, default="unknown")
+    platform = Column(String(64), nullable=False, default="generic")
+    seeds = Column(JSONB, nullable=False, default=list)
+    status = Column(String(32), default="queued", nullable=False)
+    summary = Column(JSONB, nullable=False, default=dict)
+    findings = Column(JSONB, nullable=False, default=list)
+    pages = Column(JSONB, nullable=False, default=list)
+    options = Column(JSONB, nullable=False, default=dict)
 
 
 class Project(Base, TimestampMixin, UUIDMixin):
@@ -134,18 +149,26 @@ class Backlink(Base, TimestampMixin, UUIDMixin):
     page = relationship("Page", back_populates="backlinks")
 
 
-class PublicAuditResult(Base, TimestampMixin, SoftDeleteMixin, UUIDMixin):
+class CrawlResult(Base, TimestampMixin, AuditResultMixin):
+    __tablename__ = "crawl_results"
+    __table_args__ = (
+        Index("ix_crawl_results_project_created_at", "project_id", "created_at"),
+        Index("ix_crawl_results_mode_status", "mode", "status"),
+        {"schema": "audit_schema"}
+    )
+
+    audit_id = Column(String(64), primary_key=True)
+
+
+class PublicAuditResult(Base, TimestampMixin, AuditResultMixin):
     __tablename__ = "public_audit_results"
     __table_args__ = (
         Index("idx_public_audit_created_at", "created_at"),
-        Index("idx_public_audit_deleted", "is_deleted"),
+        Index("ix_public_audit_results_mode_status", "mode", "status"),
         {"schema": "audit_schema"}
     )
-    
-    url = Column(String(2048), nullable=False)
-    ip_address = Column(String(45), nullable=False)
-    results = Column(JSON, nullable=False)
-    status = Column(String(50), default="completed")
+
+    audit_id = Column(String(64), primary_key=True)
 
 
 class CrawlEvent(Base, TimestampMixin, UUIDMixin):

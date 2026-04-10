@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine, async_sessionmaker
 
 from services.audit_service.config import settings
@@ -32,4 +33,5 @@ async def get_session():
 async def init_db() -> None:
     engine = _get_engine()
     async with engine.begin() as conn:
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS audit_schema"))
         await conn.run_sync(Base.metadata.create_all)

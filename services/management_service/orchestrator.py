@@ -92,7 +92,9 @@ class OptimizationSaga:
             first_page = pages[0]
             selected_page = first_page if isinstance(first_page, dict) else None
 
-        selected_page = selected_page or {}
+        # Older tests and some integrations still pass a flattened crawl snapshot
+        # instead of a page list. Keep supporting that shape to avoid regressions.
+        selected_page = selected_page or crawl_result
         return {
             "title": selected_page.get("title"),
             "description": selected_page.get("description"),

@@ -103,11 +103,7 @@ def test_approve_task_without_autodeploy(monkeypatch):
         async def fake_deploy(*args, **kwargs):
             raise AssertionError("deploy_task_changes should not be called")
 
-        async def fake_publish(*args, **kwargs):
-            return None
-
         monkeypatch.setattr(hitl_module, "deploy_task_changes", fake_deploy)
-        monkeypatch.setattr(hitl_module, "publish_hitl_approved_event", fake_publish)
 
         decision = HITLDecision(auto_deploy=False)
         result = await handler.approve_task(

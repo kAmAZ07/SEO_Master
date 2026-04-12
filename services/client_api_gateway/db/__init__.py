@@ -5,6 +5,7 @@ from typing import Generator
 import os
 
 from services.client_api_gateway.db.models import Base
+from services.project_integrations.models import ProjectIntegration
 from config.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -48,3 +49,4 @@ def init_db():
     if engine is None:
         raise RuntimeError("DATABASE_URL is not configured for client_api_gateway")
     Base.metadata.create_all(bind=engine)
+    ProjectIntegration.__table__.create(bind=engine, checkfirst=True)

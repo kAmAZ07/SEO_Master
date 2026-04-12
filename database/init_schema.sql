@@ -32,6 +32,24 @@ CREATE INDEX idx_projects_url ON audit_schema.projects(url);
 CREATE TRIGGER update_projects_updated_at BEFORE UPDATE ON audit_schema.projects
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+CREATE TABLE IF NOT EXISTS audit_schema.project_integrations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id VARCHAR(36) NOT NULL REFERENCES audit_schema.projects(id) ON DELETE CASCADE,
+    platform VARCHAR(32) NOT NULL,
+    encrypted_creds TEXT NOT NULL,
+    creds_hint VARCHAR(32) NOT NULL,
+    details JSONB NOT NULL DEFAULT '{}'::jsonb,
+    connected_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_project_integrations_project_platform UNIQUE (project_id, platform)
+);
+
+CREATE INDEX idx_project_integrations_project_id ON audit_schema.project_integrations(project_id);
+CREATE INDEX idx_project_integrations_platform ON audit_schema.project_integrations(platform);
+
+CREATE TRIGGER update_project_integrations_updated_at BEFORE UPDATE ON audit_schema.project_integrations
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
 CREATE TABLE IF NOT EXISTS audit_schema.crawls (
     id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
     project_id VARCHAR(36) NOT NULL REFERENCES audit_schema.projects(id) ON DELETE CASCADE,

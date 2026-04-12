@@ -8,8 +8,13 @@ import httpx
 
 from config.logging_config import get_logger
 from services.client_api_gateway.config import settings
+from services.project_integrations import (
+    IntegrationNotFoundError,
+    IntegrationsService,
+)
 
 logger = get_logger(__name__)
+integrations_service = IntegrationsService()
 
 WORDPRESS_NAMESPACE = "/wp-json/seo-master/v1"
 
@@ -132,6 +137,8 @@ def _build_wordpress_signature(secret: str, timestamp: str, method: str, path: s
     body_hash = hashlib.sha256(body or b"").hexdigest()
     message = f"{timestamp}{method.upper()}{path}{body_hash}".encode("utf-8")
     return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
 def _warnings_from_result(result: Dict[str, Any]) -> List[Dict[str, Any]]:
     warnings = result.get('warnings')
     if isinstance(warnings, list):
@@ -153,12 +160,9 @@ async def _dispatch_to_wordpress(
     changes: List[Dict[str, Any]],
     metadata: Optional[Dict[str, Any]],
     correlation_id: Optional[str],
+    base_url: str,
+    hmac_secret: str,
 ) -> Dict[str, Any]:
-    if not settings.WORDPRESS_BASE_URL:
-        raise ValueError("WORDPRESS_BASE_URL is not configured")
-    if not settings.WORDPRESS_HMAC_SECRET:
-        raise ValueError("WORDPRESS_HMAC_SECRET is not configured")
-
     path = _wordpress_path(change_type)
     payload = {
         "project_id": project_id,
@@ -170,7 +174,7 @@ async def _dispatch_to_wordpress(
     body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     timestamp = str(int(time.time()))
     signature = _build_wordpress_signature(
-        settings.WORDPRESS_HMAC_SECRET,
+        hmac_secret,
         timestamp,
         "PATCH",
         path,
@@ -187,7 +191,7 @@ async def _dispatch_to_wordpress(
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.patch(
-            _join_url(settings.WORDPRESS_BASE_URL, path),
+            _join_url(base_url, path),
             content=body,
             headers=headers,
         )
@@ -207,10 +211,11 @@ async def _dispatch_to_tilda(
     *,
     change_type: str,
     project_id: str,
-    entity_id: str,
+    page_id: str,
     changes: List[Dict[str, Any]],
     metadata: Optional[Dict[str, Any]],
     correlation_id: Optional[str],
+    credentials: Dict[str, Any],
 ) -> Dict[str, Any]:
     if not settings.TILDA_ADAPTER_URL:
         raise ValueError("TILDA_ADAPTER_URL is not configured")
@@ -219,9 +224,10 @@ async def _dispatch_to_tilda(
 
     payload = {
         "project_id": project_id,
-        "page_id": entity_id,
+        "page_id": page_id,
         "changes": changes,
         "metadata": metadata or {},
+        "credentials": credentials,
     }
     headers = {
         "Content-Type": "application/json",
@@ -245,9 +251,44 @@ async def _dispatch_to_tilda(
         "status": normalized_status,
         "platform": "tilda",
         "target_path": path,
+        "page_id": page_id,
         "response": result,
         "warnings": _warnings_from_result(result),
     }
+
+
+def _load_wordpress_credentials(db, project_id: str) -> Dict[str, Any]:
+    try:
+        return integrations_service.get_wordpress_credentials(db, project_id)
+    except IntegrationNotFoundError:
+        if settings.WORDPRESS_BASE_URL and settings.WORDPRESS_HMAC_SECRET:
+            logger.warning(
+                "Using legacy global WordPress credentials fallback",
+                extra={"project_id": project_id},
+            )
+            return {
+                "base_url": settings.WORDPRESS_BASE_URL,
+                "hmac_secret": settings.WORDPRESS_HMAC_SECRET,
+            }
+        raise
+
+
+def _load_tilda_credentials(db, project_id: str) -> Dict[str, Any]:
+    try:
+        return integrations_service.get_tilda_credentials(db, project_id)
+    except IntegrationNotFoundError:
+        if settings.TILDA_PUBLIC_KEY and settings.TILDA_SECRET_KEY:
+            logger.warning(
+                "Using legacy global Tilda credentials fallback",
+                extra={"project_id": project_id},
+            )
+            return {
+                "public_key": settings.TILDA_PUBLIC_KEY,
+                "secret_key": settings.TILDA_SECRET_KEY,
+                "project_id": settings.TILDA_PROJECT_ID,
+                "page_mappings": {},
+            }
+        raise
 
 
 async def dispatch_change(
@@ -261,8 +302,6 @@ async def dispatch_change(
     metadata: Optional[Dict[str, Any]] = None,
     correlation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    del db
-
     normalized_change_type = (change_type or "").lower()
     if normalized_change_type not in {"meta", "schema", "interlinks"}:
         raise ValueError(f"Unsupported change_type: {change_type}")
@@ -288,15 +327,30 @@ async def dispatch_change(
     )
 
     if platform == "tilda":
+        tilda_credentials = _load_tilda_credentials(db, project_id)
+        page_id = integrations_service.resolve_tilda_page_id(
+            db,
+            project_id,
+            entity_id,
+            enriched_metadata,
+        )
         result = await _dispatch_to_tilda(
             change_type=normalized_change_type,
             project_id=project_id,
-            entity_id=entity_id,
+            page_id=page_id,
             changes=patch_ops,
-            metadata=enriched_metadata,
+            metadata={
+                **enriched_metadata,
+                "external_project_id": tilda_credentials.get("project_id"),
+            },
             correlation_id=correlation_id,
+            credentials={
+                "public_key": tilda_credentials["public_key"],
+                "secret_key": tilda_credentials["secret_key"],
+            },
         )
     else:
+        wordpress_credentials = _load_wordpress_credentials(db, project_id)
         result = await _dispatch_to_wordpress(
             change_type=normalized_change_type,
             project_id=project_id,
@@ -305,6 +359,8 @@ async def dispatch_change(
             changes=patch_ops,
             metadata=enriched_metadata,
             correlation_id=correlation_id,
+            base_url=wordpress_credentials["base_url"],
+            hmac_secret=wordpress_credentials["hmac_secret"],
         )
 
     result["changes"] = patch_ops
@@ -318,8 +374,6 @@ async def rollback_change(
     deployment_log,
     correlation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    del db
-
     metadata = dict(deployment_log.meta or {})
     rollback_changes = metadata.get("rollback_changes")
     if not rollback_changes:
@@ -333,7 +387,7 @@ async def rollback_change(
         }
 
     return await dispatch_change(
-        db=None,
+        db=db,
         change_type=deployment_log.change_type,
         project_id=deployment_log.project_id,
         entity_id=deployment_log.entity_id,
@@ -346,4 +400,3 @@ async def rollback_change(
         },
         correlation_id=correlation_id,
     )
-

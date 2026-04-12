@@ -39,7 +39,23 @@ def upgrade():
     op.create_index('idx_projects_owner_id', 'projects', ['owner_id'], schema='audit_schema')
     op.create_index('idx_projects_status', 'projects', ['status'], schema='audit_schema')
     op.create_index('idx_projects_url', 'projects', ['url'], schema='audit_schema')
-    
+
+    op.create_table(
+        'project_integrations',
+        sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v4()')),
+        sa.Column('project_id', sa.String(36), sa.ForeignKey('audit_schema.projects.id', ondelete='CASCADE'), nullable=False),
+        sa.Column('platform', sa.String(32), nullable=False),
+        sa.Column('encrypted_creds', sa.Text, nullable=False),
+        sa.Column('creds_hint', sa.String(32), nullable=False),
+        sa.Column('details', postgresql.JSONB, nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column('connected_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.UniqueConstraint('project_id', 'platform', name='uq_project_integrations_project_platform'),
+        schema='audit_schema'
+    )
+    op.create_index('idx_project_integrations_project_id', 'project_integrations', ['project_id'], schema='audit_schema')
+    op.create_index('idx_project_integrations_platform', 'project_integrations', ['platform'], schema='audit_schema')
+
     op.create_table(
         'crawls',
         sa.Column('id', sa.String(36), primary_key=True),
@@ -489,6 +505,7 @@ def upgrade():
     
     tables = [
         ('audit_schema', 'projects'),
+        ('audit_schema', 'project_integrations'),
         ('audit_schema', 'crawls'),
         ('audit_schema', 'pages'),
         ('audit_schema', 'core_web_vitals'),

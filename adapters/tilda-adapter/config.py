@@ -14,6 +14,8 @@ class Settings(BaseSettings):
 
     internal_api_key: str | None = None
     webhook_secret: str | None = None
+    webhook_forward_url: str | None = None
+    webhook_forward_api_key: str | None = None
     request_timeout_seconds: float = 20.0
     mock_mode: bool = False
     schema_policy: Literal['warn', 'require_hitl', 'strict'] = 'warn'

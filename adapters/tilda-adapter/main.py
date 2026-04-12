@@ -1,8 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 
 from config import settings
 from internal_routes import router as internal_router
-from tilda_api_client import TildaAPIClient
 from tilda_webhook_handler import router as webhook_router
 
 app = FastAPI(title='Tilda Adapter', version='0.2.0')
@@ -17,17 +16,20 @@ async def health() -> dict:
 
 @app.get('/health/ready')
 async def readiness() -> dict:
-    client = TildaAPIClient()
-    try:
-        result = await client.validate_credentials()
+    if settings.mock_mode:
         return {
             'status': 'ready',
             'service': 'tilda-adapter',
-            'mock_mode': settings.mock_mode,
-            'upstream': result.get('status'),
+            'mock_mode': True,
+            'upstream': 'mock',
         }
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f'tilda_upstream_unavailable: {exc}') from exc
+
+    return {
+        'status': 'ready',
+        'service': 'tilda-adapter',
+        'mock_mode': False,
+        'upstream': 'per-request-credentials',
+    }
 
 
 if __name__ == '__main__':

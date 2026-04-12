@@ -7,7 +7,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.api_gateway.config import settings, is_development
 from services.api_gateway.middleware import setup_cors, LoggingMiddleware, setup_error_handlers
-from services.api_gateway.routes import health_router, public_router, protected_router
+from services.api_gateway.routes import health_router, integrations_router, public_router, protected_router
 from config.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -27,6 +27,7 @@ setup_error_handlers(app)
 app.include_router(health_router)
 app.include_router(public_router)
 app.include_router(protected_router)
+app.include_router(integrations_router)
 
 
 @app.on_event("startup")

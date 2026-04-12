@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY config/ ./config/
 COPY services/client_api_gateway/ ./services/client_api_gateway/
+COPY services/project_integrations/ ./services/project_integrations/
 
 RUN mkdir -p /app/logs && chmod 777 /app/logs
 

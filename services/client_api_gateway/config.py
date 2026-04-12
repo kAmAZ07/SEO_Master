@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     WORDPRESS_BASE_URL: Optional[str] = None
     WORDPRESS_HMAC_SECRET: Optional[str] = None
 
+    TILDA_PUBLIC_KEY: Optional[str] = None
+    TILDA_SECRET_KEY: Optional[str] = None
+    TILDA_PROJECT_ID: Optional[str] = None
     TILDA_ADAPTER_URL: Optional[str] = None
     TILDA_INTERNAL_API_KEY: Optional[str] = None
 

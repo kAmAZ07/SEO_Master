@@ -5,9 +5,9 @@ from pydantic import BaseModel, Field
 
 from config import settings
 from meta_injector import TildaMetaInjector
+from tilda_api_client import TildaAPIClient
 
 router = APIRouter(prefix='/internal/tilda', tags=['internal'])
-injector = TildaMetaInjector()
 
 
 class PatchOp(BaseModel):
@@ -21,6 +21,7 @@ class TildaPatchRequest(BaseModel):
     page_id: str = Field(..., min_length=1)
     changes: List[PatchOp] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    credentials: Dict[str, str] = Field(default_factory=dict)
 
 
 def _require_internal_key(x_internal_api_key: str = Header(..., alias='X-Internal-API-Key')) -> None:
@@ -62,6 +63,23 @@ def _collect_interlinks(changes: List[PatchOp]) -> List[Dict[str, Any]]:
     return result
 
 
+def _build_injector(credentials: Dict[str, str]) -> TildaMetaInjector:
+    public_key = str(credentials.get('public_key') or '').strip()
+    secret_key = str(credentials.get('secret_key') or '').strip()
+    if not public_key or not secret_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Tilda credentials must be provided per request',
+        )
+
+    return TildaMetaInjector(
+        client=TildaAPIClient(
+            public_key=public_key,
+            secret_key=secret_key,
+        )
+    )
+
+
 def _wrap_result(page_id: str, result: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     warnings = result.get('warnings') if isinstance(result, dict) else None
     raw_status = str(result.get('status') or '') if isinstance(result, dict) else ''
@@ -91,6 +109,7 @@ async def apply_meta_patch(
     x_internal_api_key: str = Header(..., alias='X-Internal-API-Key'),
 ):
     _require_internal_key(x_internal_api_key)
+    injector = _build_injector(payload.credentials)
 
     title = _value_from_paths(payload.changes, ['/title', '/meta_title'])
     description = _value_from_paths(payload.changes, ['/description', '/meta_description'])
@@ -114,6 +133,7 @@ async def apply_schema_patch(
     x_internal_api_key: str = Header(..., alias='X-Internal-API-Key'),
 ):
     _require_internal_key(x_internal_api_key)
+    injector = _build_injector(payload.credentials)
 
     schema_value = _value_from_paths(payload.changes, ['/schema', '/schema_org', '/jsonld'])
     if schema_value is None:
@@ -129,6 +149,7 @@ async def apply_interlinks_patch(
     x_internal_api_key: str = Header(..., alias='X-Internal-API-Key'),
 ):
     _require_internal_key(x_internal_api_key)
+    injector = _build_injector(payload.credentials)
 
     links = _collect_interlinks(payload.changes)
     result = await injector.apply_interlinks(payload.page_id, links)

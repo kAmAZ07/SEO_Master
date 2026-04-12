@@ -15,7 +15,12 @@ from services.client_api_gateway.db import get_db, init_db
 from services.client_api_gateway.db.models import DeploymentLog
 from services.client_api_gateway.deployment_dispatcher import dispatch_change, rollback_change
 from services.client_api_gateway.logging.changelog_logger import log_deployment
-from services.client_api_gateway.routes import health_router, key_management_router, patch_router
+from services.client_api_gateway.routes import (
+    health_router,
+    key_management_router,
+    patch_router,
+    tilda_webhook_router,
+)
 
 logger = get_logger(__name__)
 
@@ -87,6 +92,7 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(patch_router)
 app.include_router(key_management_router)
+app.include_router(tilda_webhook_router)
 
 
 @app.on_event('startup')

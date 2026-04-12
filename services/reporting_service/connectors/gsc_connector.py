@@ -1,7 +1,10 @@
 import json
 from datetime import date, timedelta
+from typing import Any
+
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+
 from services.reporting_service.config import settings
 
 
@@ -45,3 +48,87 @@ def fetch_gsc_summary(property_url: str, days: int = 28, offset_days: int = 0) -
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
     }
+
+
+def _ok_result(records: list[dict[str, Any]], start_date: date, end_date: date) -> dict[str, Any]:
+    clicks = sum(int(row.get("clicks", 0) or 0) for row in records)
+    impressions = sum(int(row.get("impressions", 0) or 0) for row in records)
+    positions = [float(row["position"]) for row in records if row.get("position") is not None]
+    ctr = 0.0 if impressions <= 0 else clicks / impressions
+    return {
+        "source": "gsc",
+        "available": True,
+        "status": "ok",
+        "reason": None,
+        "records": records,
+        "aggregate": {
+            "clicks": clicks,
+            "impressions": impressions,
+            "ctr": round(ctr, 4),
+            "avg_position": None if not positions else round(sum(positions) / len(positions), 4),
+            "rows_count": len(records),
+            "period_start": start_date.isoformat(),
+            "period_end": end_date.isoformat(),
+        },
+    }
+
+
+def _degraded_result(reason: str, start_date: date, end_date: date) -> dict[str, Any]:
+    return {
+        "source": "gsc",
+        "available": False,
+        "status": "degraded",
+        "reason": reason,
+        "records": [],
+        "aggregate": {
+            "clicks": 0,
+            "impressions": 0,
+            "ctr": 0.0,
+            "avg_position": None,
+            "rows_count": 0,
+            "period_start": start_date.isoformat(),
+            "period_end": end_date.isoformat(),
+        },
+    }
+
+
+def fetch_gsc_rows(
+    project_id: str,
+    property_url: str,
+    start_date: date,
+    end_date: date,
+    row_limit: int = 500,
+) -> dict[str, Any]:
+    try:
+        creds = _load_credentials()
+        service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
+        body = {
+            "startDate": start_date.isoformat(),
+            "endDate": end_date.isoformat(),
+            "dimensions": ["date", "query", "page"],
+            "rowLimit": row_limit,
+        }
+        resp = service.searchanalytics().query(siteUrl=property_url, body=body).execute()
+    except Exception as exc:
+        return _degraded_result(str(exc), start_date, end_date)
+
+    records: list[dict[str, Any]] = []
+    for row in resp.get("rows", []) or []:
+        keys = list(row.get("keys", []) or [])
+        row_date = keys[0] if len(keys) > 0 else end_date.isoformat()
+        query = keys[1] if len(keys) > 1 else None
+        page = keys[2] if len(keys) > 2 else None
+        records.append(
+            {
+                "project_id": project_id,
+                "date": row_date,
+                "query": query,
+                "page": page,
+                "clicks": int(row.get("clicks", 0) or 0),
+                "impressions": int(row.get("impressions", 0) or 0),
+                "ctr": float(row.get("ctr", 0.0) or 0.0),
+                "position": None if row.get("position") is None else float(row.get("position")),
+                "raw_data": {"keys": keys, **{key: row.get(key) for key in ("clicks", "impressions", "ctr", "position")}},
+            }
+        )
+    return _ok_result(records, start_date, end_date)

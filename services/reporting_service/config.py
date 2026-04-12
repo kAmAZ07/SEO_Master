@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     ga4_credentials_json: str | None = None
 
     yandex_token: str | None = None
+    yandex_user_id: str | None = None
+    yandex_host_id: str | None = None
 
 
 settings = Settings()

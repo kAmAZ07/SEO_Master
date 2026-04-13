@@ -18,7 +18,11 @@ from services.audit_service.schemas.audit import (
     PublicAuditRequest,
     PublicAuditResponse,
 )
-from services.audit_service.crawler.technical_audit import run_full_audit_pipeline, run_public_audit_pipeline
+from services.audit_service.crawler.technical_audit import (
+    run_full_audit_pipeline,
+    run_public_audit_pipeline,
+    select_top_findings,
+)
 from services.audit_service.events.crawl_completed import publish_crawl_completed
 from services.audit_service.events.task_created_handler import maybe_start_task_created_consumer
 
@@ -260,6 +264,7 @@ async def get_audit_status(audit_id: str) -> AuditStatusResponse:
         status=row.status,
         summary=row.summary or {},
         findings=row.findings or [],
+        top_findings=select_top_findings(row.findings or []),
         pages=row.pages or [],
         created_at=row.created_at,
         updated_at=row.updated_at,

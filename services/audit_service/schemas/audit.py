@@ -56,6 +56,7 @@ class AuditStatusResponse(BaseModel):
     status: str
     summary: dict
     findings: list
+    top_findings: list = Field(default_factory=list)
     pages: list
     created_at: datetime
     updated_at: datetime

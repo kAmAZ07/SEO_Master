@@ -14,12 +14,12 @@ const projectTabs: Array<{ id: ProjectDetailTab; label: string; description: str
   {
     id: 'overview',
     label: 'Обзор',
-    description: 'Детали проекта и SEO-инструменты.',
+    description: 'Детали проекта, быстрый доступ к SEO-инструментам и статус сайта.',
   },
   {
     id: 'integrations',
     label: 'Интеграции',
-    description: 'Подключение Tilda и WordPress.',
+    description: 'Per-project подключение Tilda и WordPress без global env credentials.',
   },
 ]
 
@@ -115,9 +115,14 @@ const ProjectDetail = () => {
             {currentProject.url}
           </a>
         </div>
-        <Link to={`/audit?project=${currentProject.id}`}>
-          <Button className="w-full sm:w-auto">Run audit</Button>
-        </Link>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <Button type="button" variant="outline" onClick={() => handleSelectTab('integrations')}>
+            Интеграции
+          </Button>
+          <Link to={`/audit?project=${currentProject.id}`}>
+            <Button className="w-full sm:w-auto">Run audit</Button>
+          </Link>
+        </div>
       </div>
 
       <Card className="overflow-hidden p-0">

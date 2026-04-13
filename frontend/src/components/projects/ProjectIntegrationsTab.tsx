@@ -232,7 +232,8 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
               </p>
               <h2 className="mt-5 text-3xl font-bold tracking-tight">Интеграции проекта</h2>
               <p className="mt-3 text-sm leading-6 text-slate-200">
-                Подключите Tilda или WordPress. Секреты скрыты и показываются только как короткий hint.
+                Подключите Tilda или WordPress к конкретному проекту. Ключи отправляются в backend, шифруются через
+                MASTER_ENCRYPTION_KEY и дальше отображаются только как короткий hint.
               </p>
             </div>
             <div className="grid min-w-[220px] grid-cols-2 gap-3 rounded-2xl border border-white/15 bg-white/10 p-4 backdrop-blur">
@@ -276,7 +277,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
                 </span>
               </div>
               <p className="mt-2 text-sm leading-6 text-gray-600">
-                API-ключи и Project ID для деплоя в Tilda.
+                API-ключи и Project ID хранятся отдельно для этого проекта. Используется для деплоя Tilda change-set.
               </p>
             </div>
           </div>
@@ -308,7 +309,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
                 </span>
               </div>
               <p className="mt-2 text-sm leading-6 text-gray-600">
-                URL сайта и HMAC Secret для WordPress-плагина.
+                URL сайта и HMAC Secret проверяются через plugin health endpoint перед сохранением credentials.
               </p>
             </div>
           </div>
@@ -358,7 +359,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
                       <CheckCircle2 className="h-6 w-6 text-emerald-600" />
                       <div>
                         <h4 className="text-xl font-semibold text-emerald-950">Tilda подключена</h4>
-                        <p className="text-sm text-emerald-800">Секреты скрыты.</p>
+                        <p className="text-sm text-emerald-800">Секреты скрыты и не возвращаются в UI.</p>
                       </div>
                     </div>
                     <div className="grid grid-cols-1 gap-3 text-sm text-emerald-900 md:grid-cols-2">
@@ -421,7 +422,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
                 />
                 <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm leading-6 text-emerald-900">
                   <p className="font-semibold">Где взять ключи:</p>
-                  <p>Tilda - Настройки сайта - Экспорт - API Integration.</p>
+                  <p>Tilda - Настройки сайта - Экспорт - API Integration. ZIP-адаптер должен быть установлен на стороне сайта.</p>
                 </div>
                 <Button type="submit" disabled={savingPlatform === 'tilda'} className="w-full md:w-auto">
                   <KeyRound className="mr-2 h-4 w-4" />
@@ -442,7 +443,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
                       <CheckCircle2 className="h-6 w-6 text-blue-600" />
                       <div>
                         <h4 className="text-xl font-semibold text-blue-950">WordPress подключен</h4>
-                        <p className="text-sm text-blue-800">HMAC Secret скрыт.</p>
+                        <p className="text-sm text-blue-800">HMAC Secret скрыт и используется только на время запроса.</p>
                       </div>
                     </div>
                     <div className="grid grid-cols-1 gap-3 text-sm text-blue-900 md:grid-cols-2">
@@ -510,7 +511,8 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
                 <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-900">
                   <p className="font-semibold">Перед подключением:</p>
                   <p>
-                    Установите ZIP-адаптер, активируйте плагин и скопируйте HMAC Secret.
+                    Установите WordPress ZIP-адаптер, активируйте плагин и скопируйте HMAC Secret. Backend
+                    автоматически проверит доступность plugin health endpoint.
                   </p>
                 </div>
                 <Button type="submit" disabled={savingPlatform === 'wordpress'} className="w-full md:w-auto">

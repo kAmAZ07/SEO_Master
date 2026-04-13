@@ -213,6 +213,9 @@ SEVERITY_WEIGHTS = {
     "low": 1.5,
     "info": 0.0,
 }
+SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}
+NON_PROBLEM_CODES = {"audit_score_explanation"}
 
 
 def _is_private_ip(host: str) -> bool:
@@ -342,6 +345,34 @@ def _compute_score(summary: dict, findings: list[dict]) -> dict:
     }
 
 
+def select_top_findings(findings: list, limit: int = 5) -> list[dict]:
+    if limit <= 0:
+        return []
+
+    ranked: list[tuple[int, int, int, dict]] = []
+    for index, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            continue
+
+        code = str(finding.get("code") or "")
+        severity = str(finding.get("severity") or "info").lower()
+        if code in NON_PROBLEM_CODES or severity == "info":
+            continue
+
+        confidence = str(finding.get("confidence") or "medium").lower()
+        ranked.append(
+            (
+                SEVERITY_RANK.get(severity, SEVERITY_RANK["info"]),
+                CONFIDENCE_RANK.get(confidence, CONFIDENCE_RANK["medium"]),
+                index,
+                dict(finding),
+            )
+        )
+
+    ranked.sort(key=lambda item: item[:3])
+    return [finding for _, _, _, finding in ranked[:limit]]
+
+
 def _build_score_explanation_finding(summary: dict) -> dict:
     breakdown = summary.get("score_breakdown") or {}
     counts = summary.get("issue_counts") or {}
@@ -402,10 +433,12 @@ async def _run_audit_pipeline(
         findings = [_decorate_finding(finding) for finding in findings]
         summary.update(_compute_score(summary, findings))
         findings.append(_build_score_explanation_finding(summary))
-        return {"root_url": root_url, "summary": summary, "findings": findings, "pages": []}
+        return {"root_url": root_url, "summary": summary, "findings": findings, "top_findings": select_top_findings(findings), "pages": []}
 
     max_pages = int(options.get("max_pages", 10 if row.mode == "public" else 1000))
     max_depth = int(options.get("max_depth", 2 if row.mode == "public" else 4))
+    if row.mode == "public":
+        max_depth = min(max_depth, 2)
     js_render = bool(options.get("js_render", False))
     respect_robots = bool(options.get("respect_robots", True))
     timeout = float(options.get("timeout", settings.default_timeout_s))
@@ -423,7 +456,7 @@ async def _run_audit_pipeline(
         findings = [_decorate_finding(finding) for finding in findings]
         summary.update(_compute_score(summary, findings))
         findings.append(_build_score_explanation_finding(summary))
-        return {"root_url": root_url, "summary": summary, "findings": findings, "pages": []}
+        return {"root_url": root_url, "summary": summary, "findings": findings, "top_findings": select_top_findings(findings), "pages": []}
 
     crawled = await crawl_public(
         root_url=root_url,
@@ -507,6 +540,7 @@ async def _run_audit_pipeline(
         "root_url": root_url,
         "summary": summary,
         "findings": findings,
+        "top_findings": select_top_findings(findings),
         "pages": pages,
     }
 

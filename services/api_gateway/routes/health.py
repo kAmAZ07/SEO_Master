@@ -34,13 +34,16 @@ def check_database(db: Session) -> Dict[str, Any]:
 def check_redis() -> Dict[str, Any]:
     try:
         redis_config = get_redis_config()
-        r = redis.Redis(
-            host=redis_config["host"],
-            port=redis_config["port"],
-            password=redis_config["password"],
-            db=redis_config["db"],
-            socket_connect_timeout=2
-        )
+        if redis_config["url"]:
+            r = redis.Redis.from_url(redis_config["url"], socket_connect_timeout=2)
+        else:
+            r = redis.Redis(
+                host=redis_config["host"],
+                port=redis_config["port"],
+                password=redis_config["password"],
+                db=redis_config["db"],
+                socket_connect_timeout=2
+            )
         r.ping()
         return {
             "status": "healthy",

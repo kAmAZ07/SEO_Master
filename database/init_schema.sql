@@ -732,7 +732,7 @@ DECLARE
     deleted_count INTEGER;
 BEGIN
     DELETE FROM audit_schema.public_audit_results
-    WHERE created_at < NOW() - (retention_days || ' days')::INTERVAL
+    WHERE created_at < NOW() - (retention_days || ' days')::INTERVAL;
     
     GET DIAGNOSTICS deleted_count = ROW_COUNT;
     RETURN deleted_count;

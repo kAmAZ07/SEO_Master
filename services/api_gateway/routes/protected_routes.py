@@ -151,6 +151,19 @@ def _extract_score(results: Any) -> float:
     return 0.0
 
 
+def _serialize_audit_row(row: PublicAuditResult) -> Dict[str, Any]:
+    summary = getattr(row, "summary", None)
+    legacy_results = getattr(row, "results", None)
+    results = summary if isinstance(summary, dict) else legacy_results
+
+    return {
+        "id": str(getattr(row, "audit_id", None) or getattr(row, "id", "")),
+        "url": getattr(row, "root_url", None) or getattr(row, "url", ""),
+        "score": _extract_score(results),
+        "status": (getattr(row, "status", None) or "completed").lower(),
+    }
+
+
 async def _proxy_management(
     method: str,
     path_candidates: List[str],
@@ -469,14 +482,15 @@ async def get_dashboard_stats(current_user: User = Depends(get_current_user), db
     recent_audits = []
     active_audits = 0
     for row in audit_rows:
-        status_value = (row.status or "completed").lower()
+        audit_item = _serialize_audit_row(row)
+        status_value = audit_item["status"]
         if status_value in {"queued", "running", "pending", "processing", "in_progress"}:
             active_audits += 1
         recent_audits.append(
             {
-                "id": str(row.id),
-                "url": row.url,
-                "score": _extract_score(row.results),
+                "id": audit_item["id"],
+                "url": audit_item["url"],
+                "score": audit_item["score"],
                 "status": "completed" if status_value not in {"queued", "running", "pending", "processing", "in_progress", "failed"} else status_value,
             }
         )
@@ -581,17 +595,23 @@ async def get_audit_history(
 
     items = []
     for row in rows:
-        score = _extract_score(row.results)
+        audit_item = _serialize_audit_row(row)
+        findings = getattr(row, "findings", None)
+        legacy_results = getattr(row, "results", None)
+        issues = findings if isinstance(findings, list) else None
+        if issues is None and isinstance(legacy_results, dict):
+            issues = legacy_results.get("issues")
+        details = legacy_results.get("details") if isinstance(legacy_results, dict) else None
         items.append(
             {
-                "id": str(row.id),
-                "uid": str(row.id),
-                "url": row.url,
-                "status": row.status or "completed",
-                "score": score,
+                "id": audit_item["id"],
+                "uid": audit_item["id"],
+                "url": audit_item["url"],
+                "status": audit_item["status"],
+                "score": audit_item["score"],
                 "createdAt": row.created_at.isoformat() if row.created_at else None,
-                "issues": row.results.get("issues") if isinstance(row.results, dict) else None,
-                "details": row.results.get("details") if isinstance(row.results, dict) else None,
+                "issues": issues,
+                "details": details,
             }
         )
 

@@ -492,7 +492,51 @@ def upgrade():
     op.create_index('idx_event_processed', 'domain_events', ['processed'])
     op.create_index('idx_event_aggregate_id', 'domain_events', ['aggregate_id'])
     op.create_index('idx_event_created_at', 'domain_events', ['created_at'])
-    
+
+    op.create_table(
+        'processed_events',
+        sa.Column('id', sa.String(255), primary_key=True),
+        sa.Column('event_id', sa.String(128), nullable=False),
+        sa.Column('consumer_name', sa.String(128), nullable=False),
+        sa.Column('event_name', sa.String(128), nullable=True),
+        sa.Column('routing_key', sa.String(255), nullable=True),
+        sa.Column('payload', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('metadata', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('processed_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.UniqueConstraint('consumer_name', 'event_id', name='uq_processed_events_consumer_event'),
+    )
+    op.create_index('idx_processed_events_event_id', 'processed_events', ['event_id'])
+    op.create_index('idx_processed_events_consumer', 'processed_events', ['consumer_name'])
+    op.create_index('idx_processed_events_processed_at', 'processed_events', ['processed_at'])
+
+    op.create_table(
+        'failed_events',
+        sa.Column('id', sa.String(255), primary_key=True),
+        sa.Column('event_id', sa.String(128), nullable=False),
+        sa.Column('consumer_name', sa.String(128), nullable=False),
+        sa.Column('event_name', sa.String(128), nullable=True),
+        sa.Column('routing_key', sa.String(255), nullable=True),
+        sa.Column('payload', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('error', sa.Text, nullable=False),
+        sa.Column('attempt', sa.Integer, server_default='1', nullable=False),
+        sa.Column('retry_policy', postgresql.JSONB, server_default=sa.text("'[10, 60, 300]'::jsonb"), nullable=False),
+        sa.Column('next_retry_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('resolved', sa.Boolean, server_default='false', nullable=False),
+        sa.Column('resolved_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('failed_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('metadata', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.UniqueConstraint('consumer_name', 'event_id', name='uq_failed_events_consumer_event'),
+    )
+    op.create_index('idx_failed_events_event_id', 'failed_events', ['event_id'])
+    op.create_index('idx_failed_events_consumer', 'failed_events', ['consumer_name'])
+    op.create_index('idx_failed_events_resolved', 'failed_events', ['resolved'])
+    op.create_index('idx_failed_events_next_retry_at', 'failed_events', ['next_retry_at'])
+    op.create_index('idx_failed_events_failed_at', 'failed_events', ['failed_at'])
+
     op.execute("""
         CREATE OR REPLACE FUNCTION update_updated_at_column()
         RETURNS TRIGGER AS $$
@@ -530,6 +574,8 @@ def upgrade():
         ('public', 'users'),
         ('public', 'changelog'),
         ('public', 'domain_events'),
+        ('public', 'processed_events'),
+        ('public', 'failed_events'),
     ]
     
     for schema, table in tables:
@@ -667,6 +713,8 @@ def downgrade():
     op.execute('DROP SCHEMA IF EXISTS semantic_schema CASCADE')
     op.execute('DROP SCHEMA IF EXISTS audit_schema CASCADE')
     
+    op.drop_table('failed_events')
+    op.drop_table('processed_events')
     op.drop_table('domain_events')
     op.drop_table('changelog')
     op.drop_table('users')

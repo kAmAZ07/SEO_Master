@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     database_url: str = Field(default="postgresql+asyncpg://postgres:postgres@postgres:5432/audit_db")
     rabbitmq_url: str | None = Field(default=None)
+    redis_url: str | None = Field(default="redis://redis:6379/0")
 
     psi_api_key: str | None = Field(default=None)
 

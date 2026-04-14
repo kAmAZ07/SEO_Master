@@ -564,6 +564,56 @@ CREATE INDEX idx_event_created_at ON public.domain_events(created_at DESC);
 CREATE TRIGGER update_domain_events_updated_at BEFORE UPDATE ON public.domain_events
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+CREATE TABLE IF NOT EXISTS public.processed_events (
+    id VARCHAR(255) PRIMARY KEY,
+    event_id VARCHAR(128) NOT NULL,
+    consumer_name VARCHAR(128) NOT NULL,
+    event_name VARCHAR(128),
+    routing_key VARCHAR(255),
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_processed_events_consumer_event UNIQUE (consumer_name, event_id)
+);
+
+CREATE INDEX idx_processed_events_event_id ON public.processed_events(event_id);
+CREATE INDEX idx_processed_events_consumer ON public.processed_events(consumer_name);
+CREATE INDEX idx_processed_events_processed_at ON public.processed_events(processed_at DESC);
+
+CREATE TRIGGER update_processed_events_updated_at BEFORE UPDATE ON public.processed_events
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TABLE IF NOT EXISTS public.failed_events (
+    id VARCHAR(255) PRIMARY KEY,
+    event_id VARCHAR(128) NOT NULL,
+    consumer_name VARCHAR(128) NOT NULL,
+    event_name VARCHAR(128),
+    routing_key VARCHAR(255),
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error TEXT NOT NULL,
+    attempt INTEGER NOT NULL DEFAULT 1,
+    retry_policy JSONB NOT NULL DEFAULT '[10, 60, 300]'::jsonb,
+    next_retry_at TIMESTAMP WITH TIME ZONE,
+    resolved BOOLEAN NOT NULL DEFAULT FALSE,
+    resolved_at TIMESTAMP WITH TIME ZONE,
+    failed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_failed_events_consumer_event UNIQUE (consumer_name, event_id)
+);
+
+CREATE INDEX idx_failed_events_event_id ON public.failed_events(event_id);
+CREATE INDEX idx_failed_events_consumer ON public.failed_events(consumer_name);
+CREATE INDEX idx_failed_events_resolved ON public.failed_events(resolved);
+CREATE INDEX idx_failed_events_next_retry_at ON public.failed_events(next_retry_at);
+CREATE INDEX idx_failed_events_failed_at ON public.failed_events(failed_at DESC);
+
+CREATE TRIGGER update_failed_events_updated_at BEFORE UPDATE ON public.failed_events
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
 CREATE OR REPLACE VIEW reporting_schema.project_performance AS
 WITH latest_ff_scores AS (
     SELECT DISTINCT ON (project_id)

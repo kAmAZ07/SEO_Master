@@ -69,10 +69,13 @@ services:
       AUDIT_PORT: 8001
       AUDIT_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
       AUDIT_RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
+      AUDIT_REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     ports:
       - "8001:8001"
@@ -114,10 +117,13 @@ services:
       REPORTING_PORT: 8003
       REPORTING_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
       REPORTING_RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
+      REPORTING_REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     ports:
       - "8003:8003"

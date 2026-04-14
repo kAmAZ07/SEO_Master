@@ -183,6 +183,10 @@ CELERY_ROUTES = {
         'queue': 'maintenance',
         'routing_key': 'maintenance'
     },
+    'shared.tasks.cleanup_old_crawl_aggregates': {
+        'queue': 'maintenance',
+        'routing_key': 'maintenance'
+    },
     'shared.tasks.cleanup_public_audit_results': {
         'queue': 'maintenance',
         'routing_key': 'maintenance'
@@ -352,6 +356,14 @@ CELERY_BEAT_SCHEDULE = {
     'cleanup-old-crawl-data': {
         'task': 'shared.tasks.cleanup_old_crawl_data',
         'schedule': crontab(hour=3, minute=0),
+        'kwargs': {'retention_days': 30},
+        'options': {'queue': 'maintenance'}
+    },
+
+    'cleanup-old-crawl-aggregates': {
+        'task': 'shared.tasks.cleanup_old_crawl_aggregates',
+        'schedule': crontab(hour=3, minute=30),
+        'kwargs': {'retention_days': 365},
         'options': {'queue': 'maintenance'}
     },
     

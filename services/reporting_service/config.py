@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     database_url: str = Field(default="postgresql+asyncpg://postgres:postgres@postgres:5432/reporting_db")
     auto_create_tables: bool = False
     rabbitmq_url: str | None = None
+    redis_url: str | None = "redis://redis:6379/0"
 
     gsc_credentials_json: str | None = None
     gsc_token_json: str | None = None

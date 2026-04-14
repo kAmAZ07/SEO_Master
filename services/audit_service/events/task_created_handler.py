@@ -1,10 +1,15 @@
 import asyncio
-import json
 
 import aio_pika
 
 from config.logging_config import get_logger
 from services.audit_service.config import settings
+from services.audit_service.db.session import get_session
+from services.event_resilience import (
+    ResilientConsumerConfig,
+    declare_resilient_queue,
+    process_resilient_message,
+)
 
 logger = get_logger(__name__)
 
@@ -27,12 +32,7 @@ def _extract_event_payload(message: dict) -> dict:
     return message
 
 
-async def _handle_message(body: bytes) -> None:
-    try:
-        event = json.loads(body.decode("utf-8"))
-    except Exception:
-        return
-
+async def _handle_event(event: dict) -> None:
     if event.get("event_name") not in (None, "TaskCreated"):
         return
 
@@ -88,12 +88,21 @@ async def maybe_start_task_created_consumer() -> None:
 
     async with conn:
         ch = await conn.channel()
-        ex = await ch.declare_exchange("seo_master.events", aio_pika.ExchangeType.TOPIC, durable=True)
-        q = await ch.declare_queue("audit.task_created", durable=True)
-        await q.bind(ex, routing_key="management.task.created")
+        config = ResilientConsumerConfig(
+            consumer_name="audit.task_created",
+            queue_name="audit.task_created",
+            routing_key="management.task.created",
+            redis_url=settings.redis_url,
+        )
+        q = await declare_resilient_queue(ch, config)
 
         async with q.iterator() as it:
             async for msg in it:
-                async with msg.process(requeue=False):
-                    await _handle_message(msg.body)
+                await process_resilient_message(
+                    msg,
+                    config=config,
+                    session_factory=get_session,
+                    handler=_handle_event,
+                    expected_event_names=("TaskCreated", None),
+                )
                 await asyncio.sleep(0)

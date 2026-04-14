@@ -141,13 +141,13 @@ services:
     networks:
       - backend
 
-  management-service:
-    build:
+  management-web:
+    build: &management-dev-build
       context: .
       dockerfile: services/management_service/Dockerfile
-    container_name: seo-management-service-dev
+    container_name: seo-management-web-dev
     command: python -m uvicorn services.management_service.main:app --host 0.0.0.0 --port 8004 --reload
-    environment:
+    environment: &management-dev-env
       HOST: 0.0.0.0
       PORT: 8004
       DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
@@ -164,7 +164,7 @@ services:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-change-me}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       LOG_LEVEL: ${LOG_LEVEL:-DEBUG}
-    depends_on:
+    depends_on: &management-dev-depends
       postgres:
         condition: service_healthy
       redis:
@@ -184,7 +184,43 @@ services:
     volumes:
       - ./:/app
     networks:
+      backend:
+        aliases:
+          - management-service
+
+  management-worker:
+    build: *management-dev-build
+    container_name: seo-management-worker-dev
+    command: celery -A services.management_service.tasks.celery_app:celery_app worker --loglevel=INFO --queues=management,management_periodic --hostname=management-worker@%h
+    environment: *management-dev-env
+    depends_on: *management-dev-depends
+    volumes:
+      - ./:/app
+    networks:
       - backend
+    healthcheck:
+      disable: true
+
+  management-beat:
+    build: *management-dev-build
+    container_name: seo-management-beat-dev
+    command: celery -A services.management_service.tasks.celery_app:celery_app beat --loglevel=INFO --schedule=/tmp/management-celerybeat-schedule
+    environment: *management-dev-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      management-worker:
+        condition: service_started
+    volumes:
+      - ./:/app
+    networks:
+      - backend
+    healthcheck:
+      disable: true
 
   api-gateway:
     build:
@@ -198,7 +234,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-32-chars-minimum}
       AUDIT_SERVICE_URL: http://audit-service:8001
-      MANAGEMENT_SERVICE_URL: http://management-service:8004
+      MANAGEMENT_SERVICE_URL: http://management-web:8004
       SEMANTIC_SERVICE_URL: http://semantic-service:8002
       REPORTING_SERVICE_URL: http://reporting-service:8003
       ENVIRONMENT: ${ENVIRONMENT:-development}
@@ -210,7 +246,7 @@ services:
         condition: service_healthy
       audit-service:
         condition: service_started
-      management-service:
+      management-web:
         condition: service_started
     ports:
       - "8000:8000"

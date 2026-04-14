@@ -1,10 +1,15 @@
 import asyncio
-import json
 
 import aio_pika
 
 from services.semantic_service.config import settings
 from services.semantic_service.analysis.pipeline import create_semantic_analysis
+from services.semantic_service.db.session import get_session
+from services.event_resilience import (
+    ResilientConsumerConfig,
+    declare_resilient_queue,
+    process_resilient_message,
+)
 
 
 def _extract_event_payload(message: dict) -> dict:
@@ -14,12 +19,7 @@ def _extract_event_payload(message: dict) -> dict:
     return message
 
 
-async def _handle_message(body: bytes) -> None:
-    try:
-        event = json.loads(body.decode("utf-8"))
-    except Exception:
-        return
-
+async def _handle_event(event: dict) -> None:
     if event.get("event_name") not in (None, "CrawlCompleted"):
         return
 
@@ -56,12 +56,21 @@ async def maybe_start_crawl_completed_consumer() -> None:
 
     async with conn:
         ch = await conn.channel()
-        ex = await ch.declare_exchange("seo_master.events", aio_pika.ExchangeType.TOPIC, durable=True)
-        q = await ch.declare_queue("semantic.crawl_completed", durable=True)
-        await q.bind(ex, routing_key="audit.crawl.completed")
+        config = ResilientConsumerConfig(
+            consumer_name="semantic.crawl_completed",
+            queue_name="semantic.crawl_completed",
+            routing_key="audit.crawl.completed",
+            redis_url=settings.redis_url,
+        )
+        q = await declare_resilient_queue(ch, config)
 
         async with q.iterator() as it:
             async for msg in it:
-                async with msg.process(requeue=False):
-                    await _handle_message(msg.body)
+                await process_resilient_message(
+                    msg,
+                    config=config,
+                    session_factory=get_session,
+                    handler=_handle_event,
+                    expected_event_names=("CrawlCompleted", None),
+                )
                 await asyncio.sleep(0)

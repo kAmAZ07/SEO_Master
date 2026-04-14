@@ -22,6 +22,7 @@ logger = get_logger(__name__)
 
 _consumer_tasks: list[asyncio.Task] = []
 _connections: list[aio_pika.RobustConnection] = []
+_CONSUMER_STARTUP_TIMEOUT_SECONDS = 15
 
 
 def _event_correlation_id(event: dict) -> str | None:
@@ -41,6 +42,7 @@ async def _consume(
     config: ResilientConsumerConfig,
     handler: Callable[[Session, dict], None],
     expected_event_names: tuple[str | None, ...],
+    started: asyncio.Event,
 ) -> None:
     try:
         conn = await aio_pika.connect_robust(settings.rabbitmq_url)
@@ -51,13 +53,14 @@ async def _consume(
             extra={"consumer_name": config.consumer_name, "error": str(exc)},
             exc_info=True,
         )
-        return
+        raise RuntimeError(f"Failed to connect Management Service consumer {config.consumer_name}") from exc
 
     try:
         async with conn:
             ch = await conn.channel()
             q = await declare_resilient_queue(ch, config)
             logger.info("Management Service event consumer started", extra={"consumer_name": config.consumer_name})
+            started.set()
 
             async with q.iterator() as it:
                 async for msg in it:
@@ -77,14 +80,26 @@ async def _consume(
             extra={"consumer_name": config.consumer_name, "error": str(exc)},
             exc_info=True,
         )
+        raise
+
+
+async def _wait_for_consumer_startup(started_events: list[asyncio.Event]) -> None:
+    while not all(event.is_set() for event in started_events):
+        failed_tasks = [task for task in _consumer_tasks if task.done()]
+        if failed_tasks:
+            first_failure = failed_tasks[0]
+            exc = first_failure.exception()
+            if exc:
+                raise RuntimeError("Management Service consumer failed during startup") from exc
+            raise RuntimeError("Management Service consumer stopped during startup")
+        await asyncio.sleep(0.05)
 
 
 async def start_consumers() -> None:
     if _consumer_tasks:
         return
     if not settings.rabbitmq_url:
-        logger.info("RabbitMQ URL is not configured; Management Service consumers are disabled")
-        return
+        raise RuntimeError("RabbitMQ URL is required for mandatory Management Service consumers")
 
     redis_url = str(settings.REDIS_URL) if settings.REDIS_URL else None
     consumer_specs = (
@@ -110,13 +125,29 @@ async def start_consumers() -> None:
         ),
     )
 
+    started_events: list[asyncio.Event] = []
     for config, handler, expected_event_names in consumer_specs:
+        started = asyncio.Event()
+        started_events.append(started)
         _consumer_tasks.append(
             asyncio.create_task(
-                _consume(config, handler, expected_event_names),
+                _consume(config, handler, expected_event_names, started),
                 name=f"management-event-consumer:{config.consumer_name}",
             )
         )
+
+    try:
+        await asyncio.wait_for(
+            _wait_for_consumer_startup(started_events),
+            timeout=_CONSUMER_STARTUP_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        await stop_consumers()
+        raise
+
+
+def consumers_are_running() -> bool:
+    return bool(_consumer_tasks) and all(not task.done() for task in _consumer_tasks)
 
 
 async def stop_consumers() -> None:

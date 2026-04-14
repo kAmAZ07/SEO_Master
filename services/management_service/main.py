@@ -1,8 +1,6 @@
 from contextlib import asynccontextmanager
-import asyncio
 import uuid
 
-import aio_pika
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -11,58 +9,14 @@ import uvicorn
 
 from services.management_service.config import settings
 from services.management_service.db.session import SessionLocal, init_db
+from services.management_service.events.consumers import consumers_are_running, start_consumers, stop_consumers
+from services.management_service.events.publishers import check_rabbitmq_connection
+from services.management_service.api.endpoints import hitl, internal, projects, tasks
 from config.logging_config import setup_logging, get_logger
 
 
 setup_logging("management-service")
 logger = get_logger(__name__, service_name="management-service")
-
-
-try:
-    from services.management_service.events.consumers import start_consumers, stop_consumers
-except Exception as exc:
-    _consumers_import_error = str(exc)
-
-    async def start_consumers():
-        logger.info(
-            "Event consumers are not configured; skipping startup",
-            extra={"error": _consumers_import_error},
-        )
-
-    async def stop_consumers():
-        return None
-
-
-try:
-    from services.management_service.scheduler.beat import start_scheduler, stop_scheduler
-except Exception as exc:
-    _scheduler_import_error = str(exc)
-
-    async def start_scheduler():
-        logger.info(
-            "Scheduler is not configured; skipping startup",
-            extra={"error": _scheduler_import_error},
-        )
-
-    async def stop_scheduler():
-        return None
-
-
-try:
-    from services.management_service.events.publishers import check_rabbitmq_connection
-except Exception:
-
-    async def check_rabbitmq_connection() -> bool:
-        if not settings.rabbitmq_url:
-            return False
-
-        try:
-            connection = await aio_pika.connect_robust(settings.rabbitmq_url)
-            await connection.close()
-            return True
-        except Exception as exc:
-            logger.error(f"RabbitMQ health check failed: {exc}")
-            return False
 
 
 @asynccontextmanager
@@ -75,8 +29,11 @@ async def lifespan(app: FastAPI):
         logger.error("Failed to initialize management database", extra={"error": str(exc)})
         raise
 
-    consumer_task = asyncio.create_task(start_consumers())
-    scheduler_task = asyncio.create_task(start_scheduler())
+    try:
+        await start_consumers()
+    except Exception as exc:
+        logger.error("Failed to start mandatory Management Service consumers", extra={"error": str(exc)})
+        raise
 
     try:
         logger.info("Management Service started successfully")
@@ -85,11 +42,6 @@ async def lifespan(app: FastAPI):
         logger.info("Shutting down Management Service")
 
         await stop_consumers()
-        await stop_scheduler()
-
-        for task in (consumer_task, scheduler_task):
-            if task and not task.done():
-                task.cancel()
 
         logger.info("Management Service stopped")
 
@@ -182,6 +134,7 @@ async def health_check():
 async def readiness_check():
     db_healthy = False
     rabbitmq_healthy = False
+    consumers_healthy = consumers_are_running()
 
     db = SessionLocal()
     try:
@@ -197,13 +150,14 @@ async def readiness_check():
     except Exception as exc:
         logger.error(f"RabbitMQ health check failed: {exc}")
 
-    if not db_healthy or not rabbitmq_healthy:
+    if not db_healthy or not rabbitmq_healthy or not consumers_healthy:
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
                 "status": "unhealthy",
                 "database": "up" if db_healthy else "down",
                 "rabbitmq": "up" if rabbitmq_healthy else "down",
+                "consumers": "up" if consumers_healthy else "down",
             },
         )
 
@@ -211,26 +165,18 @@ async def readiness_check():
         "status": "ready",
         "database": "up",
         "rabbitmq": "up",
+        "consumers": "up",
     }
 
 
-def _include_optional_routers(fastapi_app: FastAPI) -> None:
-    try:
-        from services.management_service.api.endpoints import projects, tasks, hitl, internal
-    except Exception as exc:
-        logger.warning(
-            "API routers are not available; skipping registration",
-            extra={"error": str(exc)},
-        )
-        return
-
+def _include_routers(fastapi_app: FastAPI) -> None:
     fastapi_app.include_router(projects.router, prefix="/api/v1/projects", tags=["projects"])
     fastapi_app.include_router(tasks.router, prefix="/api/v1/tasks", tags=["tasks"])
     fastapi_app.include_router(hitl.router, prefix="/api/v1/hitl", tags=["hitl"])
     fastapi_app.include_router(internal.router, prefix="/internal", tags=["internal"])
 
 
-_include_optional_routers(app)
+_include_routers(app)
 
 
 if __name__ == "__main__":

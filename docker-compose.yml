@@ -149,12 +149,13 @@ services:
       - backend
     restart: unless-stopped
 
-  management-service:
-    build:
+  management-web:
+    build: &management-build
       context: .
       dockerfile: services/management_service/Dockerfile
-    container_name: seo-management-service
-    environment:
+    container_name: seo-management-web
+    command: ["uvicorn", "services.management_service.main:app", "--host", "0.0.0.0", "--port", "8004"]
+    environment: &management-env
       HOST: 0.0.0.0
       PORT: 8004
       DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
@@ -169,7 +170,7 @@ services:
       REPORTING_SERVICE_URL: http://reporting-service:8003
       CLIENT_GATEWAY_URL: http://client-api-gateway:8005
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-change-me}
-    depends_on:
+    depends_on: &management-depends
       postgres:
         condition: service_healthy
       redis:
@@ -187,6 +188,59 @@ services:
     ports:
       - "8004:8004"
     networks:
+      backend:
+        aliases:
+          - management-service
+      database: {}
+    restart: unless-stopped
+
+  management-worker:
+    build: *management-build
+    container_name: seo-management-worker
+    command:
+      [
+        "celery",
+        "-A",
+        "services.management_service.tasks.celery_app:celery_app",
+        "worker",
+        "--loglevel=INFO",
+        "--queues=management,management_periodic",
+        "--hostname=management-worker@%h"
+      ]
+    environment: *management-env
+    depends_on: *management-depends
+    healthcheck:
+      disable: true
+    networks:
+      - backend
+      - database
+    restart: unless-stopped
+
+  management-beat:
+    build: *management-build
+    container_name: seo-management-beat
+    command:
+      [
+        "celery",
+        "-A",
+        "services.management_service.tasks.celery_app:celery_app",
+        "beat",
+        "--loglevel=INFO",
+        "--schedule=/tmp/management-celerybeat-schedule"
+      ]
+    environment: *management-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      management-worker:
+        condition: service_started
+    healthcheck:
+      disable: true
+    networks:
       - backend
       - database
     restart: unless-stopped
@@ -202,7 +256,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-32-chars-minimum}
       AUDIT_SERVICE_URL: http://audit-service:8001
-      MANAGEMENT_SERVICE_URL: http://management-service:8004
+      MANAGEMENT_SERVICE_URL: http://management-web:8004
       SEMANTIC_SERVICE_URL: http://semantic-service:8002
       REPORTING_SERVICE_URL: http://reporting-service:8003
       ENVIRONMENT: ${ENVIRONMENT:-production}
@@ -214,7 +268,7 @@ services:
         condition: service_healthy
       audit-service:
         condition: service_started
-      management-service:
+      management-web:
         condition: service_started
     ports:
       - "8000:8000"

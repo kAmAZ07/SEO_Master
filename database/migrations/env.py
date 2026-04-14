@@ -37,7 +37,7 @@ def create_extensions(connection):
     connection.commit()
 
 def create_partitions(connection):
-    partitions = [
+    range_partitions = [
         ("reporting_schema.gsc_data", [
             ("gsc_data_2024", "2024-01-01", "2025-01-01"),
             ("gsc_data_2025", "2025-01-01", "2026-01-01"),
@@ -57,8 +57,8 @@ def create_partitions(connection):
             ("yandex_webmaster_data_2027", "2027-01-01", "2028-01-01"),
         ]),
     ]
-    
-    for parent_table, partition_configs in partitions:
+
+    for parent_table, partition_configs in range_partitions:
         for partition_name, start_date, end_date in partition_configs:
             check_sql = text(f"""
                 SELECT EXISTS (
@@ -77,7 +77,53 @@ def create_partitions(connection):
                     FOR VALUES FROM ('{start_date}') TO ('{end_date}')
                 """)
                 connection.execute(create_sql)
-    
+
+    hash_partitions = [
+        ("audit_schema", "crawl_results", 8),
+    ]
+    for schema_name, parent_table, modulus in hash_partitions:
+        is_partitioned = connection.execute(
+            text(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_partitioned_table pt
+                    JOIN pg_class c ON c.oid = pt.partrelid
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = :schema_name AND c.relname = :parent_table
+                )
+                """
+            ),
+            {"schema_name": schema_name, "parent_table": parent_table},
+        ).scalar()
+        if not is_partitioned:
+            continue
+
+        for remainder in range(modulus):
+            partition_name = f"{parent_table}_p{remainder}"
+            result = connection.execute(
+                text(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM pg_tables
+                        WHERE schemaname = :schema_name
+                            AND tablename = :partition_name
+                    )
+                    """
+                ),
+                {"schema_name": schema_name, "partition_name": partition_name},
+            ).scalar()
+            if not result:
+                connection.execute(
+                    text(
+                        f"""
+                        CREATE TABLE IF NOT EXISTS {schema_name}.{partition_name}
+                        PARTITION OF {schema_name}.{parent_table}
+                        FOR VALUES WITH (MODULUS {modulus}, REMAINDER {remainder})
+                        """
+                    )
+                )
+
     connection.commit()
 
 def run_migrations_offline():
@@ -130,7 +176,9 @@ def include_object_filter(object, name, type_, reflected, compare_to):
     if type_ == "table":
         if name.endswith(('_2024', '_2025', '_2026', '_2027')):
             return False
-    
+        if name.startswith("crawl_results_p") and name.removeprefix("crawl_results_p").isdigit():
+            return False
+
     return True
 
 if context.is_offline_mode():

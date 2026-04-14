@@ -4,6 +4,8 @@ import socket
 from typing import Type
 from urllib.parse import urlparse
 
+from sqlalchemy import select
+
 from services.audit_service.crawler.public_crawler import crawl_public
 from services.audit_service.analyzers.meta_checker import check_meta
 from services.audit_service.analyzers.link_checker import check_links_404
@@ -406,7 +408,8 @@ def _build_score_explanation_finding(summary: dict) -> dict:
 
 async def _load_audit_row(audit_id: str, row_cls: Type[PublicAuditResult] | Type[CrawlResult]) -> PublicAuditResult | CrawlResult:
     async with get_session() as session:
-        row = await session.get(row_cls, audit_id)
+        result = await session.execute(select(row_cls).where(row_cls.audit_id == audit_id))
+        row = result.scalar_one_or_none()
     if row is None:
         raise ValueError("audit_not_found")
     return row

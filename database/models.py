@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, JSON, Float, Date, ForeignKey, Index, BigInteger, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Text, JSON, Float, Date, ForeignKey, Index, BigInteger, Boolean, DateTime, Computed
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -152,12 +152,17 @@ class Backlink(Base, TimestampMixin, UUIDMixin):
 class CrawlResult(Base, TimestampMixin, AuditResultMixin):
     __tablename__ = "crawl_results"
     __table_args__ = (
-        Index("ix_crawl_results_project_created_at", "project_id", "created_at"),
+        Index("ix_crawl_results_project_crawled_at", "project_id", "crawled_at"),
+        Index("ix_crawl_results_url_hash", "url_hash"),
         Index("ix_crawl_results_mode_status", "mode", "status"),
-        {"schema": "audit_schema"}
+        {"schema": "audit_schema", "postgresql_partition_by": "HASH (project_id)"}
     )
 
+    project_id = Column(String(128), primary_key=True, nullable=False)
     audit_id = Column(String(64), primary_key=True)
+    root_url = Column(String(2048), nullable=False)
+    url_hash = Column(String(64), Computed("md5(root_url)", persisted=True), nullable=False)
+    crawled_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class PublicAuditResult(Base, TimestampMixin, AuditResultMixin):

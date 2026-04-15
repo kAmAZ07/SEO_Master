@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from services.client_api_gateway.auth.key_rotation import get_valid_keys
+from services.client_api_gateway.auth.key_rotation import HMACKeyConfigError, get_valid_key_candidates
 
 
 class SignatureValidationError(ValueError):
@@ -44,25 +44,6 @@ def _compute_signature(secret: str, message: bytes) -> str:
     return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
-
-
-def _validate_fallback_secret(
-    project_id: str,
-    normalized_signature: str,
-    message: bytes,
-) -> bool:
-    fallback_secret = os.getenv("CLIENT_API_HMAC_SECRET")
-    if not fallback_secret:
-        return False
-
-    configured_project_id = os.getenv("CLIENT_API_HMAC_PROJECT_ID")
-    if configured_project_id and not hmac.compare_digest(configured_project_id, project_id):
-        return False
-
-    expected = _compute_signature(fallback_secret, message)
-    return hmac.compare_digest(expected, normalized_signature)
-
-
 def validate_request_signature(
     db,
     project_id: str,
@@ -91,18 +72,17 @@ def validate_request_signature(
     body_hash = _hash_body(body or b"")
     message = _build_message(timestamp, method, path, body_hash)
 
-    keys = get_valid_keys(db, project_id=project_id, key_id=key_id, now=now)
-    if not keys:
-        if _validate_fallback_secret(project_id, normalized_sig, message):
-            return None
-        raise SignatureValidationError("No valid HMAC keys for project")
+    try:
+        candidates = get_valid_key_candidates(db, project_id=project_id, key_id=key_id, now=now)
+    except HMACKeyConfigError as exc:
+        raise SignatureValidationError(str(exc)) from exc
 
-    for key in keys:
-        expected = _compute_signature(key.secret, message)
+    if not candidates:
+        raise SignatureValidationError("No valid env-managed HMAC keys for project")
+
+    for candidate in candidates:
+        expected = _compute_signature(candidate.secret, message)
         if hmac.compare_digest(expected, normalized_sig):
-            return key
-
-    if _validate_fallback_secret(project_id, normalized_sig, message):
-        return None
+            return candidate.metadata
 
     raise SignatureValidationError("Invalid HMAC signature")

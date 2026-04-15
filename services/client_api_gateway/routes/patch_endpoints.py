@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
 from services.client_api_gateway.auth import HMACAuthContext, hmac_auth
+from services.client_api_gateway.auth.access_control import enforce_project_rate_limit, get_client_ip
 from services.client_api_gateway.db import get_db
 from services.client_api_gateway.deployment_dispatcher import dispatch_change
 from services.client_api_gateway.logging.changelog_logger import log_deployment
@@ -63,7 +64,21 @@ async def _handle_patch(
             detail='Project ID mismatch',
         )
 
+    rate_limit = enforce_project_rate_limit(db, payload.project_id)
     changes_payload = [op.model_dump(by_alias=True) for op in payload.changes]
+    audit_metadata = {
+        **payload.metadata,
+        'patch_audit': {
+            'method': request.method,
+            'path': request.url.path,
+            'change_type': change_type,
+            'auth_key_id': auth_ctx.key_id,
+            'client_ip': get_client_ip(request),
+            'user_agent': request.headers.get('user-agent'),
+            'rate_limit': rate_limit,
+            'received_at': datetime.now(timezone.utc).isoformat(),
+        },
+    }
 
     log_entry = log_deployment(
         db=db,
@@ -73,7 +88,7 @@ async def _handle_patch(
         entity_id=payload.entity_id,
         entity_type=payload.entity_type,
         changes=changes_payload,
-        metadata=payload.metadata,
+        metadata=audit_metadata,
         request=request,
         correlation_id=payload.correlation_id,
         status='received',
@@ -87,7 +102,7 @@ async def _handle_patch(
             entity_id=payload.entity_id,
             entity_type=payload.entity_type,
             changes=changes_payload,
-            metadata=payload.metadata,
+            metadata=audit_metadata,
             correlation_id=payload.correlation_id,
         )
 

@@ -36,6 +36,29 @@ function seo_master_parse_timestamp($raw_timestamp) {
     return (int) $parsed;
 }
 
+function seo_master_get_env_value($names) {
+    foreach ((array) $names as $name) {
+        if (defined($name)) {
+            return (string) constant($name);
+        }
+
+        $env_value = getenv($name);
+        if ($env_value !== false && $env_value !== '') {
+            return (string) $env_value;
+        }
+
+        if (isset($_ENV[$name]) && $_ENV[$name] !== '') {
+            return (string) $_ENV[$name];
+        }
+    }
+
+    return '';
+}
+
+function seo_master_get_hmac_secret() {
+    return seo_master_get_env_value(array('SEO_MASTER_HMAC_SECRET', 'WORDPRESS_HMAC_SECRET'));
+}
+
 /**
  * Validate HMAC signature and request freshness.
  */
@@ -53,9 +76,9 @@ function seo_master_validate_hmac($request_body, $method, $path) {
         return new WP_Error('seo_master_auth', 'Project ID mismatch', array('status' => 403));
     }
 
-    $secret = (string) get_option('seo_master_hmac_secret', '');
+    $secret = seo_master_get_hmac_secret();
     if ($secret === '') {
-        return new WP_Error('seo_master_auth', 'HMAC secret is not configured', array('status' => 503));
+        return new WP_Error('seo_master_auth', 'HMAC secret is not configured in env/wp-config', array('status' => 503));
     }
 
     $max_drift = (int) get_option('seo_master_max_drift', 300);

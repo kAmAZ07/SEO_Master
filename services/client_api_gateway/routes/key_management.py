@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from services.client_api_gateway.auth import ensure_active_key, get_valid_keys, rotate_project_key
+from services.client_api_gateway.auth import HMACKeyConfigError, ensure_active_key, get_valid_keys, rotate_project_key
 from services.client_api_gateway.config import settings
 from services.client_api_gateway.db import get_db
 
@@ -31,23 +31,27 @@ class ClientKeyResponse(BaseModel):
     project_id: str
     key_id: str
     is_active: bool
+    secret_ref: str
+    secret_fingerprint: Optional[str] = None
     created_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
     grace_until: Optional[datetime] = None
     rotated_at: Optional[datetime] = None
-    secret: Optional[str] = None
+    rotation_managed_by: str = "environment"
 
 
-def _serialize_key(key, include_secret: bool = False) -> ClientKeyResponse:
+def _serialize_key(key) -> ClientKeyResponse:
     return ClientKeyResponse(
         project_id=key.project_id,
         key_id=key.key_id,
         is_active=bool(key.is_active),
+        secret_ref=key.secret_ref,
+        secret_fingerprint=(key.meta or {}).get("secret_fingerprint"),
         created_at=key.created_at,
         expires_at=key.expires_at,
         grace_until=key.grace_until,
         rotated_at=key.rotated_at,
-        secret=key.secret if include_secret else None,
+        rotation_managed_by=(key.meta or {}).get("rotation_managed_by", "environment"),
     )
 
 
@@ -59,7 +63,10 @@ async def list_project_keys(
 ) -> List[ClientKeyResponse]:
     keys = get_valid_keys(db, project_id)
     if not keys:
-        key = ensure_active_key(db, project_id)
+        try:
+            key = ensure_active_key(db, project_id)
+        except HMACKeyConfigError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
         keys = [key]
     return [_serialize_key(key) for key in keys]
 
@@ -70,5 +77,8 @@ async def rotate_key(
     db: Session = Depends(get_db),
     _auth: None = Depends(_require_internal_api_key),
 ) -> ClientKeyResponse:
-    key = rotate_project_key(db, project_id)
-    return _serialize_key(key, include_secret=True)
+    try:
+        key = rotate_project_key(db, project_id)
+    except HMACKeyConfigError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    return _serialize_key(key)

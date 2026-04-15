@@ -24,13 +24,16 @@ Requests are protected with HMAC headers:
 1. Upload the plugin folder to `/wp-content/plugins/`.
 2. Activate **SEO Master Connector** in WordPress admin.
 3. Open **Settings -> SEO Master Connector**.
-4. Set Project ID and HMAC Secret shared with SEO Master platform.
+4. Set Project ID.
+5. Define `SEO_MASTER_HMAC_SECRET` in `wp-config.php` or the server environment.
+6. Optionally define `SEO_MASTER_PLUGIN_SIGNATURE` to enforce package signature checks during activation/update.
 
 == Changelog ==
 = 0.2.0 =
 * Added dedicated endpoints for meta/schema/interlinks.
 * Added timestamp drift validation and project binding.
 * Added admin settings page with configuration form.
+* Moved HMAC secret loading to env/wp-config and added plugin signature verification hooks.
 * Added meta description and JSON-LD output hook.
 
 = 0.1.0 =

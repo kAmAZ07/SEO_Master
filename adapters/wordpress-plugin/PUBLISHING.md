@@ -19,7 +19,8 @@ Output ZIP:
    - Verify REST endpoints do not expose secrets in responses/logs.
 3. **Functional checks**
    - Install ZIP on clean WordPress (latest + one previous minor).
-   - Configure options: `Project ID`, `HMAC Secret`, `Max timestamp drift`.
+   - Configure options: `Project ID`, `Max timestamp drift`.
+   - Define `SEO_MASTER_HMAC_SECRET` in `wp-config.php` or server env before sending signed PATCH requests.
    - Send signed PATCH requests to:
      - `/wp-json/seo-master/v1/meta`
      - `/wp-json/seo-master/v1/schema`
@@ -40,7 +41,7 @@ Output ZIP:
 
 ## Required credentials
 - **Project ID**: generated in SEO Master platform.
-- **WordPress HMAC Secret**: generated in SEO Master platform (shared with Client API Gateway).
+- **WordPress HMAC Secret**: generated in SEO Master platform and provided via `SEO_MASTER_HMAC_SECRET` or `WORDPRESS_HMAC_SECRET`; do not store it in `wp_options`.
 - **Internal API key** (optional, for internal fallback routes only): generated in SEO Master deployment env.
 
 No paid third-party key is required by this plugin itself.

@@ -4,6 +4,7 @@ const navigation = [
   { name: 'Панель управления', href: '/', icon: '📊' },
   { name: 'Проекты', href: '/projects', icon: '📁' },
   { name: 'Аудит сайта', href: '/audit', icon: '🔍' },
+  { name: 'HITL-согласования', href: '/hitl', icon: '✅' },
   { name: 'Ключевые слова', href: '/keywords', icon: '🔑' },
   { name: 'Контент', href: '/content', icon: '📝' },
   { name: 'Обратные ссылки', href: '/backlinks', icon: '🔗' },

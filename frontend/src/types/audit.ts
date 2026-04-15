@@ -1,6 +1,6 @@
 export interface AuditRequest {
   url: string
-  projectId?: number
+  projectId?: string
 }
 
 export type AuditWorkflowStatus = 'queued' | 'pending' | 'processing' | 'in_progress' | 'completed' | 'failed'

@@ -11,6 +11,7 @@ import Audit from './pages/Audit';
 import KeywordResearch from './pages/KeywordResearch';
 import ContentOptimization from './pages/ContentOptimization';
 import Backlinks from './pages/Backlinks';
+import HITL from './pages/HITL';
 import Settings from './pages/Settings';
 import NotFound from './pages/NotFound';
 import PrivateRoute from './components/PrivateRoute';
@@ -23,6 +24,14 @@ const router = createBrowserRouter([
   {
     path: '/register',
     element: <Register />,
+  },
+  {
+    path: '/audit',
+    element: <Audit />,
+  },
+  {
+    path: '/audit/results/:uid',
+    element: <Audit />,
   },
   {
     path: '/',
@@ -41,10 +50,6 @@ const router = createBrowserRouter([
         element: <ProjectDetail />,
       },
       {
-        path: 'audit',
-        element: <Audit />,
-      },
-      {
         path: 'keywords',
         element: <KeywordResearch />,
       },
@@ -55,6 +60,10 @@ const router = createBrowserRouter([
       {
         path: 'backlinks',
         element: <Backlinks />,
+      },
+      {
+        path: 'hitl',
+        element: <HITL />,
       },
       {
         path: 'settings',

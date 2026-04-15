@@ -1,12 +1,11 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit'
 import type { PayloadAction } from '@reduxjs/toolkit'
 import type { AuditRequest, AuditStatus } from '@/types/audit'
-import { submitAuditRequest, getAuditStatus, getAuditHistory } from '@/api/publicAuditAPI'
+import { submitAuditRequest, getAuditStatus } from '@/api/publicAuditAPI'
 import { getApiErrorMessage } from '@/api/authAPI'
 
 interface AuditState {
   currentAudit: AuditStatus | null
-  history: AuditStatus[]
   loading: boolean
   error: string | null
   polling: boolean
@@ -21,7 +20,6 @@ interface RejectedActionLike {
 
 const initialState: AuditState = {
   currentAudit: null,
-  history: [],
   loading: false,
   error: null,
   polling: false,
@@ -45,17 +43,6 @@ export const pollAuditStatus = createAsyncThunk(
       return await getAuditStatus(uid)
     } catch (error) {
       return rejectWithValue(getApiErrorMessage(error, 'Failed to fetch the audit status.'))
-    }
-  },
-)
-
-export const fetchAuditHistory = createAsyncThunk(
-  'audit/history',
-  async (_: number | undefined, { rejectWithValue }) => {
-    try {
-      return await getAuditHistory()
-    } catch (error) {
-      return rejectWithValue(getApiErrorMessage(error, 'Failed to load audit history.'))
     }
   },
 )
@@ -108,30 +95,11 @@ const auditSlice = createSlice({
         state.error = null
         if (action.payload.status === 'completed' || action.payload.status === 'failed') {
           state.polling = false
-          const existingIndex = state.history.findIndex((item) => item.uid === action.payload.uid)
-          if (existingIndex >= 0) {
-            state.history[existingIndex] = action.payload
-          } else {
-            state.history.unshift(action.payload)
-          }
         }
       })
       .addCase(pollAuditStatus.rejected, (state, action) => {
         state.error = getErrorPayload(action, 'Failed to fetch the audit status.')
         state.polling = false
-      })
-      .addCase(fetchAuditHistory.pending, (state) => {
-        state.loading = true
-        state.error = null
-      })
-      .addCase(fetchAuditHistory.fulfilled, (state, action) => {
-        state.loading = false
-        state.history = action.payload
-        state.error = null
-      })
-      .addCase(fetchAuditHistory.rejected, (state, action) => {
-        state.loading = false
-        state.error = getErrorPayload(action, 'Failed to load audit history.')
       })
   },
 })

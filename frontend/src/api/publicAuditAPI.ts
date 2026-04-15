@@ -142,7 +142,7 @@ const normalizeAudit = (payload: unknown): AuditStatus => {
 }
 
 export const submitAuditRequest = async (request: AuditRequest): Promise<AuditStatus> => {
-  const response = await api.post('/public/quick-audit', request)
+  const response = await api.post('/public/quick-audit', { url: request.url })
   const data = asObject(response.data)
 
   return {
@@ -164,12 +164,4 @@ export const submitAuditRequest = async (request: AuditRequest): Promise<AuditSt
 export const getAuditStatus = async (uid: string): Promise<AuditStatus> => {
   const response = await api.get(`/public/audit-status/${uid}`)
   return normalizeAudit(response.data)
-}
-
-export const getAuditHistory = async (): Promise<AuditStatus[]> => {
-  const response = await api.get('/audit/history')
-  if (!Array.isArray(response.data)) {
-    return []
-  }
-  return response.data.map((item: unknown) => normalizeAudit(item))
 }

@@ -320,6 +320,7 @@ services:
       SEMANTIC_SERVICE_URL: http://semantic-service:8002
       REPORTING_SERVICE_URL: http://reporting-service:8003
       CLIENT_GATEWAY_URL: http://client-api-gateway:8005
+      CLIENT_API_HMAC_KEYS_JSON: ${CLIENT_API_HMAC_KEYS_JSON}
       ENVIRONMENT: production
       LOG_LEVEL: INFO
       PYTHONUNBUFFERED: 1
@@ -396,6 +397,7 @@ services:
       SEMANTIC_SERVICE_URL: http://semantic-service:8002
       REPORTING_SERVICE_URL: http://reporting-service:8003
       CLIENT_GATEWAY_URL: http://client-api-gateway:8005
+      CLIENT_API_HMAC_KEYS_JSON: ${CLIENT_API_HMAC_KEYS_JSON}
       ENVIRONMENT: production
       LOG_LEVEL: INFO
       PYTHONUNBUFFERED: 1
@@ -463,6 +465,7 @@ services:
       SEMANTIC_SERVICE_URL: http://semantic-service:8002
       REPORTING_SERVICE_URL: http://reporting-service:8003
       CLIENT_GATEWAY_URL: http://client-api-gateway:8005
+      CLIENT_API_HMAC_KEYS_JSON: ${CLIENT_API_HMAC_KEYS_JSON}
       ENVIRONMENT: production
       LOG_LEVEL: INFO
       PYTHONUNBUFFERED: 1
@@ -517,6 +520,11 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       ENVIRONMENT: production
       LOG_LEVEL: INFO
+      CLIENT_API_HMAC_KEYS_JSON: ${CLIENT_API_HMAC_KEYS_JSON}
+      CLIENT_API_RATE_LIMIT_PER_PROJECT: ${CLIENT_API_RATE_LIMIT_PER_PROJECT:-100}
+      CLIENT_API_RATE_LIMIT_WINDOW_SECONDS: ${CLIENT_API_RATE_LIMIT_WINDOW_SECONDS:-3600}
+      CLIENT_API_IP_WHITELIST: ${CLIENT_API_IP_WHITELIST}
+      CLIENT_API_TRUST_PROXY_HEADERS: ${CLIENT_API_TRUST_PROXY_HEADERS:-false}
       PYTHONUNBUFFERED: 1
     env_file:
       - .env.production

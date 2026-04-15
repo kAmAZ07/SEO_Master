@@ -1,6 +1,6 @@
 
 from typing import Dict, Any, Optional, List, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
@@ -58,6 +58,61 @@ def _join_url(base_url: str, path: str) -> str:
     if not path.startswith("/"):
         path = f"/{path}"
     return f"{base_url.rstrip('/')}{path}"
+
+
+def _parse_env_hmac_datetime(value: Any) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    raw = str(value).strip()
+    if raw.isdigit():
+        return datetime.fromtimestamp(int(raw), tz=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _env_hmac_key_is_usable(item: Dict[str, Any]) -> bool:
+    now = datetime.now(timezone.utc)
+    is_active = str(item.get("is_active", item.get("active", True))).lower() in {"1", "true", "yes", "on"}
+    expires_at = _parse_env_hmac_datetime(item.get("expires_at") or item.get("expiresAt"))
+    grace_until = _parse_env_hmac_datetime(item.get("grace_until") or item.get("graceUntil"))
+
+    if is_active and (expires_at is None or expires_at > now):
+        return True
+    return bool(grace_until and grace_until >= now)
+
+
+def _iter_env_hmac_keys(project_id: str) -> List[Dict[str, Any]]:
+    raw = os.getenv("CLIENT_API_HMAC_KEYS_JSON")
+    if not raw:
+        return []
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.error("CLIENT_API_HMAC_KEYS_JSON is not valid JSON")
+        return []
+
+    projects = parsed.get("projects") if isinstance(parsed, dict) and "projects" in parsed else parsed
+    entries: List[Dict[str, Any]] = []
+    if isinstance(projects, list):
+        entries = [item for item in projects if isinstance(item, dict)]
+    elif isinstance(projects, dict):
+        project_entries = projects.get(project_id, [])
+        if isinstance(project_entries, dict):
+            project_entries = [project_entries]
+        entries = [item for item in project_entries if isinstance(item, dict)]
+
+    normalized: List[Dict[str, Any]] = []
+    for item in entries:
+        item_project_id = str(item.get("project_id") or item.get("projectId") or project_id).strip()
+        if item_project_id == project_id:
+            normalized.append(item)
+    return normalized
 
 
 def _escape_patch_segment(segment: str) -> str:
@@ -219,64 +274,70 @@ class ClientAPIAdapter:
             return PATCH_ENDPOINTS_BY_TYPE.get(change_type)
         return None
 
-    def _find_hmac_credentials(self, data: Any) -> Tuple[Optional[str], Optional[str]]:
+    def _find_hmac_key_id(self, data: Any) -> Optional[str]:
         if not isinstance(data, dict):
-            return None, None
+            return None
 
         nested_keys = ("hmac", "client_api", "client_api_gateway")
         for key in nested_keys:
             value = data.get(key)
             if isinstance(value, dict):
-                secret, key_id = self._find_hmac_credentials(value)
-                if secret:
-                    return secret, key_id
+                key_id = self._find_hmac_key_id(value)
+                if key_id:
+                    return key_id
 
-        secret = (
-            data.get("hmac_secret")
-            or data.get("client_api_secret")
-            or data.get("client_hmac_secret")
-            or data.get("secret")
-        )
-        key_id = (
+        return (
             data.get("hmac_key_id")
             or data.get("client_api_key_id")
             or data.get("client_hmac_key_id")
             or data.get("key_id")
         )
 
-        return secret, key_id
+    def _resolve_env_hmac_credentials(
+        self,
+        project_id: Optional[str],
+        preferred_key_id: Optional[str] = None,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        if not project_id:
+            return None, preferred_key_id
+
+        candidates = [item for item in _iter_env_hmac_keys(str(project_id)) if _env_hmac_key_is_usable(item)]
+        if preferred_key_id:
+            candidates = [
+                item
+                for item in candidates
+                if str(item.get("key_id") or item.get("keyId") or "").strip() == preferred_key_id
+            ]
+
+        if not candidates:
+            return None, preferred_key_id
+
+        selected = candidates[0]
+        secret = selected.get("secret") or selected.get("hmac_secret") or selected.get("hmacSecret")
+        key_id = selected.get("key_id") or selected.get("keyId") or preferred_key_id
+        return str(secret) if secret else None, str(key_id) if key_id else None
 
     def _resolve_hmac_credentials(
         self,
         changes_data: Dict[str, Any],
         task: Optional[Task] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
-        secret, key_id = self._find_hmac_credentials(changes_data)
-        if secret:
-            return secret, key_id
+        project_id = changes_data.get("project_id")
+        key_id = self._find_hmac_key_id(changes_data)
 
-        secret, key_id = self._find_hmac_credentials(changes_data.get("metadata", {}))
-        if secret:
-            return secret, key_id
+        metadata_key_id = self._find_hmac_key_id(changes_data.get("metadata", {}))
+        key_id = key_id or metadata_key_id
 
         if task:
-            secret, key_id = self._find_hmac_credentials(task.meta or {})
-            if secret:
-                return secret, key_id
+            key_id = key_id or self._find_hmac_key_id(task.meta or {})
+            project_id = project_id or str(task.project_id)
 
             project = task.project
             if project is not None:
-                secret, key_id = self._find_hmac_credentials(project.settings or {})
-                if secret:
-                    return secret, key_id
+                key_id = key_id or self._find_hmac_key_id(project.settings or {})
+                key_id = key_id or self._find_hmac_key_id(project.meta or {})
 
-                secret, key_id = self._find_hmac_credentials(project.meta or {})
-                if secret:
-                    return secret, key_id
-
-        env_secret = os.getenv("CLIENT_API_HMAC_SECRET")
-        env_key_id = os.getenv("CLIENT_API_HMAC_KEY_ID")
-        return env_secret, env_key_id
+        return self._resolve_env_hmac_credentials(str(project_id) if project_id else None, key_id)
 
     def _extract_json_patch_ops(
         self,

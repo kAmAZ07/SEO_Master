@@ -34,6 +34,12 @@ require_once SEO_MASTER_CONNECTOR_PATH . 'admin/settings.php';
  * Initialize default options.
  */
 function seo_master_activate_plugin() {
+    if (!seo_master_verify_current_plugin_signature()) {
+        wp_die(
+            esc_html__('SEO Master Connector signature verification failed. Check SEO_MASTER_PLUGIN_SIGNATURE before activation.', 'seo-master-connector')
+        );
+    }
+
     if (get_option('seo_master_max_drift') === false) {
         add_option('seo_master_max_drift', 300);
     }
@@ -42,9 +48,7 @@ function seo_master_activate_plugin() {
         add_option('seo_master_project_id', '');
     }
 
-    if (get_option('seo_master_hmac_secret') === false) {
-        add_option('seo_master_hmac_secret', '');
-    }
+    delete_option('seo_master_hmac_secret');
 }
 register_activation_hook(__FILE__, 'seo_master_activate_plugin');
 
@@ -56,5 +60,6 @@ function seo_master_bootstrap() {
     add_action('admin_menu', 'seo_master_register_settings_page');
     add_action('admin_init', 'seo_master_register_settings');
     add_action('wp_head', 'seo_master_output_meta_tags', 5);
+    add_filter('upgrader_source_selection', 'seo_master_verify_plugin_update_signature', 10, 4);
 }
 add_action('plugins_loaded', 'seo_master_bootstrap');

@@ -18,7 +18,7 @@ Output ZIP:
    - Verify HMAC validation rejects bad signature, expired timestamp, and wrong `X-Project-ID`.
    - Verify REST endpoints do not expose secrets in responses/logs.
 3. **Functional checks**
-   - Install ZIP on clean WordPress (latest + one previous minor).
+   - Install ZIP on clean WordPress 6.7, 6.8, and 6.9.
    - Configure options: `Project ID`, `Max timestamp drift`.
    - Define `SEO_MASTER_HMAC_SECRET` in `wp-config.php` or server env before sending signed PATCH requests.
    - Send signed PATCH requests to:
@@ -26,6 +26,8 @@ Output ZIP:
      - `/wp-json/seo-master/v1/schema`
      - `/wp-json/seo-master/v1/interlinks`
    - Confirm changes are applied and rendered in `wp_head`.
+   - Repeat title/description/schema smoke checks with Yoast SEO active and RankMath active.
+   - Confirm `/h1` patches replace the singular page heading rendered through the main loop title.
 4. **Upgrade/rollback checks**
    - Update plugin from previous version and confirm options persist.
    - Uninstall plugin and confirm cleanup from `uninstall.php`.

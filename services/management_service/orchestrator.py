@@ -12,11 +12,7 @@ from config.logging_config import get_logger
 from services.management_service.config import settings
 from services.management_service.client_api_adapter import deploy_changes as deploy_client_changes
 from services.management_service.db.models import HITLApproval, HITLStatus, Task, TaskStatus
-try:
-    from services.management_service.events.publishers import publish_event
-except ModuleNotFoundError:
-    async def publish_event(**kwargs):
-        return None
+from services.management_service.events.publishers import publish_event
 
 logger = get_logger(__name__)
 

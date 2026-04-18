@@ -1,22 +1,24 @@
+export interface HITLDiffData {
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+}
+
 export interface HITLTask {
   id: string;
+  taskId: string;
   projectId: string;
-  url: string;
-  changeType: string;
-  oldContent: Record<string, unknown>;
-  newContent: Record<string, unknown>;
-  priority: number;
-  impact: number;
-  effort: number;
   status: 'pending' | 'approved' | 'rejected';
+  diffData: HITLDiffData;
+  impactScore: number | null;
+  recommendation?: string | null;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  rejectedBy?: string | null;
+  rejectedAt?: string | null;
+  rejectionReason?: string | null;
+  metadata: Record<string, unknown>;
   createdAt: string;
-  expiresAt: string;
-  metadata: {
-    sagaId: string;
-    correlationId: string;
-    ffscore?: number;
-    eeatScore?: number;
-  };
+  updatedAt: string;
 }
 
 export interface HITLApproval {

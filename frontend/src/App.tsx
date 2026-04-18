@@ -25,6 +25,10 @@ const router = createBrowserRouter([
     element: <Register />,
   },
   {
+    path: '/audit',
+    element: <Audit />,
+  },
+  {
     path: '/',
     element: <PrivateRoute><Layout /></PrivateRoute>,
     children: [
@@ -39,10 +43,6 @@ const router = createBrowserRouter([
       {
         path: 'projects/:id',
         element: <ProjectDetail />,
-      },
-      {
-        path: 'audit',
-        element: <Audit />,
       },
       {
         path: 'keywords',

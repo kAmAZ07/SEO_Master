@@ -154,9 +154,10 @@ CREATE TRIGGER update_backlinks_updated_at BEFORE UPDATE ON audit_schema.backlin
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS audit_schema.crawl_results (
-    audit_id VARCHAR(64) PRIMARY KEY,
-    project_id VARCHAR(128),
+    audit_id VARCHAR(64) NOT NULL,
+    project_id VARCHAR(128) NOT NULL,
     root_url VARCHAR(2048) NOT NULL,
+    url_hash VARCHAR(64) GENERATED ALWAYS AS (md5(root_url)) STORED,
     mode VARCHAR(16) NOT NULL,
     site_type_hint VARCHAR(64) NOT NULL DEFAULT 'unknown',
     platform VARCHAR(64) NOT NULL DEFAULT 'generic',
@@ -166,11 +167,31 @@ CREATE TABLE IF NOT EXISTS audit_schema.crawl_results (
     findings JSONB NOT NULL DEFAULT '[]'::jsonb,
     pages JSONB NOT NULL DEFAULT '[]'::jsonb,
     options JSONB NOT NULL DEFAULT '{}'::jsonb,
+    crawled_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
-);
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    CONSTRAINT pk_crawl_results PRIMARY KEY (project_id, audit_id)
+) PARTITION BY HASH (project_id);
 
-CREATE INDEX ix_crawl_results_project_created_at ON audit_schema.crawl_results(project_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS audit_schema.crawl_results_p0
+    PARTITION OF audit_schema.crawl_results FOR VALUES WITH (MODULUS 8, REMAINDER 0);
+CREATE TABLE IF NOT EXISTS audit_schema.crawl_results_p1
+    PARTITION OF audit_schema.crawl_results FOR VALUES WITH (MODULUS 8, REMAINDER 1);
+CREATE TABLE IF NOT EXISTS audit_schema.crawl_results_p2
+    PARTITION OF audit_schema.crawl_results FOR VALUES WITH (MODULUS 8, REMAINDER 2);
+CREATE TABLE IF NOT EXISTS audit_schema.crawl_results_p3
+    PARTITION OF audit_schema.crawl_results FOR VALUES WITH (MODULUS 8, REMAINDER 3);
+CREATE TABLE IF NOT EXISTS audit_schema.crawl_results_p4
+    PARTITION OF audit_schema.crawl_results FOR VALUES WITH (MODULUS 8, REMAINDER 4);
+CREATE TABLE IF NOT EXISTS audit_schema.crawl_results_p5
+    PARTITION OF audit_schema.crawl_results FOR VALUES WITH (MODULUS 8, REMAINDER 5);
+CREATE TABLE IF NOT EXISTS audit_schema.crawl_results_p6
+    PARTITION OF audit_schema.crawl_results FOR VALUES WITH (MODULUS 8, REMAINDER 6);
+CREATE TABLE IF NOT EXISTS audit_schema.crawl_results_p7
+    PARTITION OF audit_schema.crawl_results FOR VALUES WITH (MODULUS 8, REMAINDER 7);
+
+CREATE INDEX ix_crawl_results_project_crawled_at ON audit_schema.crawl_results(project_id, crawled_at DESC);
+CREATE INDEX ix_crawl_results_url_hash ON audit_schema.crawl_results(url_hash);
 CREATE INDEX ix_crawl_results_mode_status ON audit_schema.crawl_results(mode, status);
 
 CREATE TRIGGER update_crawl_results_updated_at BEFORE UPDATE ON audit_schema.crawl_results
@@ -564,6 +585,56 @@ CREATE INDEX idx_event_created_at ON public.domain_events(created_at DESC);
 CREATE TRIGGER update_domain_events_updated_at BEFORE UPDATE ON public.domain_events
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+CREATE TABLE IF NOT EXISTS public.processed_events (
+    id VARCHAR(255) PRIMARY KEY,
+    event_id VARCHAR(128) NOT NULL,
+    consumer_name VARCHAR(128) NOT NULL,
+    event_name VARCHAR(128),
+    routing_key VARCHAR(255),
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_processed_events_consumer_event UNIQUE (consumer_name, event_id)
+);
+
+CREATE INDEX idx_processed_events_event_id ON public.processed_events(event_id);
+CREATE INDEX idx_processed_events_consumer ON public.processed_events(consumer_name);
+CREATE INDEX idx_processed_events_processed_at ON public.processed_events(processed_at DESC);
+
+CREATE TRIGGER update_processed_events_updated_at BEFORE UPDATE ON public.processed_events
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TABLE IF NOT EXISTS public.failed_events (
+    id VARCHAR(255) PRIMARY KEY,
+    event_id VARCHAR(128) NOT NULL,
+    consumer_name VARCHAR(128) NOT NULL,
+    event_name VARCHAR(128),
+    routing_key VARCHAR(255),
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error TEXT NOT NULL,
+    attempt INTEGER NOT NULL DEFAULT 1,
+    retry_policy JSONB NOT NULL DEFAULT '[10, 60, 300]'::jsonb,
+    next_retry_at TIMESTAMP WITH TIME ZONE,
+    resolved BOOLEAN NOT NULL DEFAULT FALSE,
+    resolved_at TIMESTAMP WITH TIME ZONE,
+    failed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_failed_events_consumer_event UNIQUE (consumer_name, event_id)
+);
+
+CREATE INDEX idx_failed_events_event_id ON public.failed_events(event_id);
+CREATE INDEX idx_failed_events_consumer ON public.failed_events(consumer_name);
+CREATE INDEX idx_failed_events_resolved ON public.failed_events(resolved);
+CREATE INDEX idx_failed_events_next_retry_at ON public.failed_events(next_retry_at);
+CREATE INDEX idx_failed_events_failed_at ON public.failed_events(failed_at DESC);
+
+CREATE TRIGGER update_failed_events_updated_at BEFORE UPDATE ON public.failed_events
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
 CREATE OR REPLACE VIEW reporting_schema.project_performance AS
 WITH latest_ff_scores AS (
     SELECT DISTINCT ON (project_id)
@@ -581,11 +652,11 @@ latest_audits AS (
         project_id,
         root_url,
         summary,
-        created_at
+        crawled_at
     FROM audit_schema.crawl_results
     WHERE project_id IS NOT NULL
         AND status = 'completed'
-    ORDER BY project_id, created_at DESC
+    ORDER BY project_id, crawled_at DESC
 ),
 gsc_rollup AS (
     SELECT
@@ -611,7 +682,7 @@ SELECT
     NULLIF(a.summary -> 'cwv' ->> 'LCP_grade', '') AS lcp_grade,
     NULLIF(a.summary -> 'cwv' ->> 'FID_grade', '') AS fid_grade,
     NULLIF(a.summary -> 'cwv' ->> 'CLS_grade', '') AS cls_grade,
-    a.created_at AS latest_audit_created_at,
+    a.crawled_at AS latest_audit_created_at,
     gsc.total_clicks,
     gsc.total_impressions,
     gsc.avg_position,
@@ -713,12 +784,41 @@ CREATE OR REPLACE FUNCTION audit_schema.cleanup_old_crawl_data(
 )
 RETURNS INTEGER AS $$
 DECLARE
+    purged_count INTEGER;
+BEGIN
+    UPDATE audit_schema.crawl_results
+    SET
+        pages = '[]'::jsonb,
+        summary = jsonb_set(
+            COALESCE(summary, '{}'::jsonb),
+            '{raw_retention}',
+            jsonb_build_object(
+                'raw_purged_at', NOW(),
+                'raw_retention_days', retention_days
+            ),
+            true
+        ),
+        updated_at = NOW()
+    WHERE crawled_at < NOW() - (retention_days || ' days')::INTERVAL
+        AND status = 'completed'
+        AND jsonb_array_length(COALESCE(pages, '[]'::jsonb)) > 0;
+
+    GET DIAGNOSTICS purged_count = ROW_COUNT;
+    RETURN purged_count;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION audit_schema.cleanup_old_crawl_aggregates(
+    retention_days INTEGER DEFAULT 365
+)
+RETURNS INTEGER AS $$
+DECLARE
     deleted_count INTEGER;
 BEGIN
     DELETE FROM audit_schema.crawl_results
-    WHERE created_at < NOW() - (retention_days || ' days')::INTERVAL
+    WHERE crawled_at < NOW() - (retention_days || ' days')::INTERVAL
         AND status = 'completed';
-    
+
     GET DIAGNOSTICS deleted_count = ROW_COUNT;
     RETURN deleted_count;
 END;

@@ -96,6 +96,10 @@ async def _enqueue_audit(
     row_options = payload.options.model_dump()
     if extra_options:
         row_options.update(extra_options)
+    now = datetime.now(timezone.utc)
+    row_kwargs = {}
+    if row_cls is CrawlResult:
+        row_kwargs["crawled_at"] = now
     async with get_session() as session:
         row = row_cls(
             audit_id=audit_id,
@@ -106,12 +110,13 @@ async def _enqueue_audit(
             platform=payload.platform or "generic",
             seeds=_serialize_seeds(payload.seeds),
             status="queued",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=now,
+            updated_at=now,
             summary={},
             findings=[],
             pages=[],
             options=row_options,
+            **row_kwargs,
         )
         session.add(row)
         await session.commit()
@@ -174,6 +179,8 @@ async def _run_audit_background(
             row.summary = result["summary"]
             row.findings = result["findings"]
             row.pages = result["pages"]
+            if hasattr(row, "crawled_at"):
+                row.crawled_at = datetime.now(timezone.utc)
             row.updated_at = datetime.now(timezone.utc)
             await session.commit()
 

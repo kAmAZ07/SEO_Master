@@ -90,3 +90,16 @@ async def publish_event(
         "correlation_id": correlation_id,
         "exchange": exchange_name,
     }
+
+
+async def check_rabbitmq_connection() -> bool:
+    if not settings.rabbitmq_url:
+        return False
+
+    try:
+        connection = await aio_pika.connect_robust(settings.rabbitmq_url)
+        await connection.close()
+        return True
+    except Exception as exc:
+        logger.error("RabbitMQ health check failed", extra={"error": str(exc)})
+        return False

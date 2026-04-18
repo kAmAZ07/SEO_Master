@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from config.logging_config import get_logger, setup_logging
+from services.client_api_gateway.auth.access_control import require_patch_ip_whitelisted
 from services.client_api_gateway.config import is_development, settings
 from services.client_api_gateway.db import get_db, init_db
 from services.client_api_gateway.db.models import DeploymentLog
@@ -116,6 +117,20 @@ async def startup_event():
 @app.on_event('shutdown')
 async def shutdown_event():
     logger.info(f'Shutting down {settings.SERVICE_NAME}')
+
+
+@app.middleware('http')
+async def client_patch_ip_whitelist_middleware(request: Request, call_next):
+    if request.method.upper() == 'PATCH' and request.url.path.startswith('/api/client/'):
+        try:
+            require_patch_ip_whitelisted(request)
+        except HTTPException as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={'detail': exc.detail},
+            )
+
+    return await call_next(request)
 
 
 @app.middleware('http')

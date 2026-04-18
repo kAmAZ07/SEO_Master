@@ -27,8 +27,11 @@ class Settings(BaseSettings):
     HMAC_ROTATION_DAYS: int = 90
     HMAC_GRACE_DAYS: int = 7
 
-    CLIENT_API_HMAC_SECRET: Optional[str] = None
-    CLIENT_API_HMAC_PROJECT_ID: Optional[str] = None
+    CLIENT_API_HMAC_KEYS_JSON: Optional[str] = None
+    CLIENT_API_RATE_LIMIT_PER_PROJECT: int = 100
+    CLIENT_API_RATE_LIMIT_WINDOW_SECONDS: int = 3600
+    CLIENT_API_IP_WHITELIST: str = ''
+    CLIENT_API_TRUST_PROXY_HEADERS: bool = False
 
     WORDPRESS_BASE_URL: Optional[str] = None
     WORDPRESS_HMAC_SECRET: Optional[str] = None

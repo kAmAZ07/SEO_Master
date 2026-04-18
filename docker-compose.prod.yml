@@ -294,21 +294,33 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  management-service:
+  management-web:
     build:
       context: .
       dockerfile: management_service/Dockerfile
       args:
         ENVIRONMENT: production
     image: seo-platform/management-service:${VERSION:-latest}
-    container_name: seo-management-service-prod
-    command: gunicorn management_service.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8004 --timeout 120 --graceful-timeout 30 --max-requests 1000 --max-requests-jitter 50
+    container_name: seo-management-web-prod
+    command: gunicorn management_service.main:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8004 --timeout 120 --graceful-timeout 30 --max-requests 1000 --max-requests-jitter 50
     environment:
-      SERVICE_NAME: management-service
+      SERVICE_NAME: management-web
       SERVICE_PORT: 8004
+      HOST: 0.0.0.0
+      PORT: 8004
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672//
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      RABBITMQ_VHOST: /
+      AUDIT_SERVICE_URL: http://audit-service:8001
+      SEMANTIC_SERVICE_URL: http://semantic-service:8002
+      REPORTING_SERVICE_URL: http://reporting-service:8003
+      CLIENT_GATEWAY_URL: http://client-api-gateway:8005
+      CLIENT_API_HMAC_KEYS_JSON: ${CLIENT_API_HMAC_KEYS_JSON}
       ENVIRONMENT: production
       LOG_LEVEL: INFO
       PYTHONUNBUFFERED: 1
@@ -319,14 +331,26 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      audit-service:
+        condition: service_healthy
+      semantic-service:
+        condition: service_healthy
+      reporting-service:
+        condition: service_healthy
+      client-api-gateway:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8004:8004"
     volumes:
       - ./logs:/app/logs
     networks:
-      - frontend
-      - backend
-      - database
+      frontend:
+      backend:
+        aliases:
+          - management-service
+      database:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
       interval: 30s
@@ -350,6 +374,136 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  management-worker:
+    build:
+      context: .
+      dockerfile: management_service/Dockerfile
+      args:
+        ENVIRONMENT: production
+    image: seo-platform/management-service:${VERSION:-latest}
+    container_name: seo-management-worker-prod
+    command: celery -A management_service.tasks.celery_app:celery_app worker --loglevel=INFO --queues=management,management_periodic --hostname=management-worker@%h --max-tasks-per-child=100
+    environment:
+      SERVICE_NAME: management-worker
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672//
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      RABBITMQ_VHOST: /
+      AUDIT_SERVICE_URL: http://audit-service:8001
+      SEMANTIC_SERVICE_URL: http://semantic-service:8002
+      REPORTING_SERVICE_URL: http://reporting-service:8003
+      CLIENT_GATEWAY_URL: http://client-api-gateway:8005
+      CLIENT_API_HMAC_KEYS_JSON: ${CLIENT_API_HMAC_KEYS_JSON}
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      PYTHONUNBUFFERED: 1
+    env_file:
+      - .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      audit-service:
+        condition: service_healthy
+      semantic-service:
+        condition: service_healthy
+      reporting-service:
+        condition: service_healthy
+      client-api-gateway:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - backend
+      - database
+    healthcheck:
+      disable: true
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+    security_opt:
+      - no-new-privileges:true
+
+  management-beat:
+    build:
+      context: .
+      dockerfile: management_service/Dockerfile
+      args:
+        ENVIRONMENT: production
+    image: seo-platform/management-service:${VERSION:-latest}
+    container_name: seo-management-beat-prod
+    command: celery -A management_service.tasks.celery_app:celery_app beat --loglevel=INFO --schedule=/tmp/management-celerybeat-schedule
+    environment:
+      SERVICE_NAME: management-beat
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672//
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      RABBITMQ_VHOST: /
+      AUDIT_SERVICE_URL: http://audit-service:8001
+      SEMANTIC_SERVICE_URL: http://semantic-service:8002
+      REPORTING_SERVICE_URL: http://reporting-service:8003
+      CLIENT_GATEWAY_URL: http://client-api-gateway:8005
+      CLIENT_API_HMAC_KEYS_JSON: ${CLIENT_API_HMAC_KEYS_JSON}
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      PYTHONUNBUFFERED: 1
+    env_file:
+      - .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      management-worker:
+        condition: service_started
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - backend
+      - database
+    healthcheck:
+      disable: true
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+
   client-api-gateway:
     build:
       context: .
@@ -366,6 +520,11 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       ENVIRONMENT: production
       LOG_LEVEL: INFO
+      CLIENT_API_HMAC_KEYS_JSON: ${CLIENT_API_HMAC_KEYS_JSON}
+      CLIENT_API_RATE_LIMIT_PER_PROJECT: ${CLIENT_API_RATE_LIMIT_PER_PROJECT:-100}
+      CLIENT_API_RATE_LIMIT_WINDOW_SECONDS: ${CLIENT_API_RATE_LIMIT_WINDOW_SECONDS:-3600}
+      CLIENT_API_IP_WHITELIST: ${CLIENT_API_IP_WHITELIST}
+      CLIENT_API_TRUST_PROXY_HEADERS: ${CLIENT_API_TRUST_PROXY_HEADERS:-false}
       PYTHONUNBUFFERED: 1
     env_file:
       - .env.production
@@ -654,7 +813,7 @@ services:
       - audit-service
       - semantic-service
       - reporting-service
-      - management-service
+      - management-web
       - client-api-gateway
     networks:
       - frontend

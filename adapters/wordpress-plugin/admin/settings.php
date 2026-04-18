@@ -20,12 +20,6 @@ function seo_master_register_settings() {
         'default' => '',
     ));
 
-    register_setting('seo_master_settings', 'seo_master_hmac_secret', array(
-        'type' => 'string',
-        'sanitize_callback' => 'sanitize_text_field',
-        'default' => '',
-    ));
-
     register_setting('seo_master_settings', 'seo_master_max_drift', array(
         'type' => 'integer',
         'sanitize_callback' => 'absint',
@@ -55,12 +49,17 @@ function seo_master_render_settings_page() {
                     </td>
                 </tr>
                 <tr>
-                    <th scope="row">
-                        <label for="seo_master_hmac_secret"><?php esc_html_e('HMAC Secret', 'seo-master-connector'); ?></label>
-                    </th>
+                    <th scope="row"><?php esc_html_e('HMAC Secret', 'seo-master-connector'); ?></th>
                     <td>
-                        <input name="seo_master_hmac_secret" id="seo_master_hmac_secret" type="password" class="regular-text" value="<?php echo esc_attr(get_option('seo_master_hmac_secret', '')); ?>" autocomplete="off" />
-                        <p class="description"><?php esc_html_e('Shared secret used to validate patch signatures.', 'seo-master-connector'); ?></p>
+                        <?php $secret_configured = function_exists('seo_master_get_hmac_secret') && seo_master_get_hmac_secret() !== ''; ?>
+                        <p>
+                            <strong>
+                                <?php echo $secret_configured ? esc_html__('Configured from environment/wp-config', 'seo-master-connector') : esc_html__('Not configured', 'seo-master-connector'); ?>
+                            </strong>
+                        </p>
+                        <p class="description">
+                            <?php esc_html_e('For security, the shared secret is no longer stored in wp_options. Define SEO_MASTER_HMAC_SECRET in wp-config.php or the server environment.', 'seo-master-connector'); ?>
+                        </p>
                     </td>
                 </tr>
                 <tr>

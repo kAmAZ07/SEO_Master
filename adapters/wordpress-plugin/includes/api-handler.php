@@ -159,8 +159,18 @@ function seo_master_apply_meta_change($post_id, $op, $path, $value) {
     $is_remove = ($op === 'remove');
 
     if ($path === '/title' || $path === '/meta_title') {
-        $new_title = $is_remove ? '' : sanitize_text_field((string) $value);
-        wp_update_post(array('ID' => $post_id, 'post_title' => $new_title));
+        if ($is_remove) {
+            delete_post_meta($post_id, '_seo_master_meta_title');
+            return true;
+        }
+
+        $new_title = sanitize_text_field((string) $value);
+        update_post_meta($post_id, '_seo_master_meta_title', $new_title);
+
+        if ($path === '/title') {
+            wp_update_post(array('ID' => $post_id, 'post_title' => $new_title));
+        }
+
         return true;
     }
 
@@ -195,8 +205,13 @@ function seo_master_apply_schema_change($post_id, $op, $path, $value) {
         return true;
     }
 
-    $schema = is_string($value) ? $value : wp_json_encode($value);
+    $schema = is_string($value) ? trim($value) : wp_json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     if (empty($schema)) {
+        return false;
+    }
+
+    json_decode($schema, true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
         return false;
     }
 

@@ -150,9 +150,10 @@ def upgrade():
     
     op.create_table(
         'crawl_results',
-        sa.Column('audit_id', sa.String(64), primary_key=True),
-        sa.Column('project_id', sa.String(128), nullable=True),
+        sa.Column('audit_id', sa.String(64), nullable=False),
+        sa.Column('project_id', sa.String(128), nullable=False),
         sa.Column('root_url', sa.String(2048), nullable=False),
+        sa.Column('url_hash', sa.String(64), sa.Computed("md5(root_url)", persisted=True), nullable=False),
         sa.Column('mode', sa.String(16), nullable=False),
         sa.Column('site_type_hint', sa.String(64), server_default='unknown', nullable=False),
         sa.Column('platform', sa.String(64), server_default='generic', nullable=False),
@@ -162,11 +163,23 @@ def upgrade():
         sa.Column('findings', postgresql.JSONB, server_default=sa.text("'[]'::jsonb"), nullable=False),
         sa.Column('pages', postgresql.JSONB, server_default=sa.text("'[]'::jsonb"), nullable=False),
         sa.Column('options', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('crawled_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
-        schema='audit_schema'
+        sa.PrimaryKeyConstraint('project_id', 'audit_id', name='pk_crawl_results'),
+        schema='audit_schema',
+        postgresql_partition_by='HASH (project_id)',
     )
-    op.create_index('ix_crawl_results_project_created_at', 'crawl_results', ['project_id', 'created_at'], schema='audit_schema')
+    for remainder in range(8):
+        op.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS audit_schema.crawl_results_p{remainder}
+            PARTITION OF audit_schema.crawl_results
+            FOR VALUES WITH (MODULUS 8, REMAINDER {remainder})
+            """
+        )
+    op.create_index('ix_crawl_results_project_crawled_at', 'crawl_results', ['project_id', 'crawled_at'], schema='audit_schema')
+    op.create_index('ix_crawl_results_url_hash', 'crawl_results', ['url_hash'], schema='audit_schema')
     op.create_index('ix_crawl_results_mode_status', 'crawl_results', ['mode', 'status'], schema='audit_schema')
 
     op.create_table(
@@ -492,7 +505,51 @@ def upgrade():
     op.create_index('idx_event_processed', 'domain_events', ['processed'])
     op.create_index('idx_event_aggregate_id', 'domain_events', ['aggregate_id'])
     op.create_index('idx_event_created_at', 'domain_events', ['created_at'])
-    
+
+    op.create_table(
+        'processed_events',
+        sa.Column('id', sa.String(255), primary_key=True),
+        sa.Column('event_id', sa.String(128), nullable=False),
+        sa.Column('consumer_name', sa.String(128), nullable=False),
+        sa.Column('event_name', sa.String(128), nullable=True),
+        sa.Column('routing_key', sa.String(255), nullable=True),
+        sa.Column('payload', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('metadata', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('processed_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.UniqueConstraint('consumer_name', 'event_id', name='uq_processed_events_consumer_event'),
+    )
+    op.create_index('idx_processed_events_event_id', 'processed_events', ['event_id'])
+    op.create_index('idx_processed_events_consumer', 'processed_events', ['consumer_name'])
+    op.create_index('idx_processed_events_processed_at', 'processed_events', ['processed_at'])
+
+    op.create_table(
+        'failed_events',
+        sa.Column('id', sa.String(255), primary_key=True),
+        sa.Column('event_id', sa.String(128), nullable=False),
+        sa.Column('consumer_name', sa.String(128), nullable=False),
+        sa.Column('event_name', sa.String(128), nullable=True),
+        sa.Column('routing_key', sa.String(255), nullable=True),
+        sa.Column('payload', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('error', sa.Text, nullable=False),
+        sa.Column('attempt', sa.Integer, server_default='1', nullable=False),
+        sa.Column('retry_policy', postgresql.JSONB, server_default=sa.text("'[10, 60, 300]'::jsonb"), nullable=False),
+        sa.Column('next_retry_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('resolved', sa.Boolean, server_default='false', nullable=False),
+        sa.Column('resolved_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('failed_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('metadata', postgresql.JSONB, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.UniqueConstraint('consumer_name', 'event_id', name='uq_failed_events_consumer_event'),
+    )
+    op.create_index('idx_failed_events_event_id', 'failed_events', ['event_id'])
+    op.create_index('idx_failed_events_consumer', 'failed_events', ['consumer_name'])
+    op.create_index('idx_failed_events_resolved', 'failed_events', ['resolved'])
+    op.create_index('idx_failed_events_next_retry_at', 'failed_events', ['next_retry_at'])
+    op.create_index('idx_failed_events_failed_at', 'failed_events', ['failed_at'])
+
     op.execute("""
         CREATE OR REPLACE FUNCTION update_updated_at_column()
         RETURNS TRIGGER AS $$
@@ -530,6 +587,8 @@ def upgrade():
         ('public', 'users'),
         ('public', 'changelog'),
         ('public', 'domain_events'),
+        ('public', 'processed_events'),
+        ('public', 'failed_events'),
     ]
     
     for schema, table in tables:
@@ -565,11 +624,11 @@ def upgrade():
                 project_id,
                 root_url,
                 summary,
-                created_at
+                crawled_at
             FROM audit_schema.crawl_results
             WHERE project_id IS NOT NULL
                 AND status = 'completed'
-            ORDER BY project_id, created_at DESC
+            ORDER BY project_id, crawled_at DESC
         ),
         gsc_rollup AS (
             SELECT
@@ -595,7 +654,7 @@ def upgrade():
             NULLIF(a.summary -> 'cwv' ->> 'LCP_grade', '') AS lcp_grade,
             NULLIF(a.summary -> 'cwv' ->> 'FID_grade', '') AS fid_grade,
             NULLIF(a.summary -> 'cwv' ->> 'CLS_grade', '') AS cls_grade,
-            a.created_at AS latest_audit_created_at,
+            a.crawled_at AS latest_audit_created_at,
             gsc.total_clicks,
             gsc.total_impressions,
             gsc.avg_position,
@@ -661,12 +720,63 @@ def upgrade():
             sa.created_at DESC
     """)
 
+    op.execute("""
+        CREATE OR REPLACE FUNCTION audit_schema.cleanup_old_crawl_data(
+            retention_days INTEGER DEFAULT 30
+        )
+        RETURNS INTEGER AS $$
+        DECLARE
+            purged_count INTEGER;
+        BEGIN
+            UPDATE audit_schema.crawl_results
+            SET
+                pages = '[]'::jsonb,
+                summary = jsonb_set(
+                    COALESCE(summary, '{}'::jsonb),
+                    '{raw_retention}',
+                    jsonb_build_object(
+                        'raw_purged_at', NOW(),
+                        'raw_retention_days', retention_days
+                    ),
+                    true
+                ),
+                updated_at = NOW()
+            WHERE crawled_at < NOW() - (retention_days || ' days')::INTERVAL
+                AND status = 'completed'
+                AND jsonb_array_length(COALESCE(pages, '[]'::jsonb)) > 0;
+
+            GET DIAGNOSTICS purged_count = ROW_COUNT;
+            RETURN purged_count;
+        END;
+        $$ LANGUAGE plpgsql
+    """)
+
+    op.execute("""
+        CREATE OR REPLACE FUNCTION audit_schema.cleanup_old_crawl_aggregates(
+            retention_days INTEGER DEFAULT 365
+        )
+        RETURNS INTEGER AS $$
+        DECLARE
+            deleted_count INTEGER;
+        BEGIN
+            DELETE FROM audit_schema.crawl_results
+            WHERE crawled_at < NOW() - (retention_days || ' days')::INTERVAL
+                AND status = 'completed';
+
+            GET DIAGNOSTICS deleted_count = ROW_COUNT;
+            RETURN deleted_count;
+        END;
+        $$ LANGUAGE plpgsql
+    """)
+
 
 def downgrade():
     op.execute('DROP SCHEMA IF EXISTS reporting_schema CASCADE')
     op.execute('DROP SCHEMA IF EXISTS semantic_schema CASCADE')
     op.execute('DROP SCHEMA IF EXISTS audit_schema CASCADE')
     
+    op.drop_table('failed_events')
+    op.drop_table('processed_events')
     op.drop_table('domain_events')
     op.drop_table('changelog')
     op.drop_table('users')

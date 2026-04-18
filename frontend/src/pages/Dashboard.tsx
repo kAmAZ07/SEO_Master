@@ -115,12 +115,12 @@ const Dashboard = () => {
                         </span>
                       </div>
                       <p className="mt-2 text-sm text-gray-600">
-                        Project: {task.projectId} • Created: {new Date(task.createdAt).toLocaleString('ru-RU')}
+                        Project: {task.projectId} • Created: {task.createdAt ? new Date(task.createdAt).toLocaleString('ru-RU') : 'n/a'}
                       </p>
                       {task.recommendation && (
                         <p className="mt-3 text-sm text-gray-700">Recommendation: {task.recommendation}</p>
                       )}
-                      {task.impactScore !== null && (
+                      {task.impactScore != null && (
                         <p className="mt-2 text-sm text-gray-600">Impact score: {task.impactScore.toFixed(2)}</p>
                       )}
                     </div>

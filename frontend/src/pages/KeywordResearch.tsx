@@ -76,7 +76,7 @@ const KeywordResearch = () => {
         difficulty: item.difficulty,
         cpc: item.cpc,
       })
-      setSuccess(`Now tracking “${item.keyword}”.`)
+      setSuccess(`Now tracking "${item.keyword}".`)
       await loadTrackedKeywords()
     } catch (requestError) {
       setError(getApiErrorMessage(requestError, 'Failed to save the keyword.'))
@@ -158,7 +158,7 @@ const KeywordResearch = () => {
         <div className="mb-4 flex items-center justify-between gap-4">
           <div>
             <h2 className="text-xl font-semibold text-gray-900">Tracked keywords</h2>
-            <p className="mt-1 text-sm text-gray-600">Saved items remain attached to the current project bucket.</p>
+            <p className="mt-1 text-sm text-gray-600">Saved items are persisted as project-linked semantic events.</p>
           </div>
           <Button type="button" variant="outline" onClick={() => void loadTrackedKeywords()} disabled={loading}>
             Refresh

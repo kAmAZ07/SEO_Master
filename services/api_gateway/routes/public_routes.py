@@ -11,6 +11,19 @@ from services.api_gateway.config import settings, get_redis_config
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/public", tags=["Public"])
 
+RATE_LIMIT_SCRIPT = """
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+local ttl = redis.call('TTL', KEYS[1])
+if ttl < 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+  ttl = tonumber(ARGV[1])
+end
+return {current, ttl}
+"""
+
 
 def _build_redis_client() -> Optional[redis.Redis]:
     try:
@@ -25,11 +38,46 @@ def _build_redis_client() -> Optional[redis.Redis]:
             socket_timeout=1,
         )
     except Exception as exc:
-        logger.warning("Redis client init failed; rate-limit disabled", extra={"error": str(exc)})
+        logger.error("Redis client init failed; public audit rate-limit unavailable", extra={"error": str(exc)})
         return None
 
 
 redis_client = _build_redis_client()
+
+
+def _rate_limit_unavailable(exc: Exception | None = None) -> HTTPException:
+    if exc:
+        logger.error("Public audit rate-limit unavailable", extra={"error": str(exc)})
+    return HTTPException(
+        status_code=503,
+        detail={
+            "error": "rate_limit_unavailable",
+            "message": "Public audit rate limiting is temporarily unavailable. Please try again later.",
+        },
+    )
+
+
+def _get_redis_client() -> redis.Redis:
+    global redis_client
+    if redis_client is None:
+        redis_client = _build_redis_client()
+    if redis_client is None:
+        raise _rate_limit_unavailable()
+    return redis_client
+
+
+def _rate_limit_key(request: Request) -> str:
+    client_ip = request.client.host if request.client else "unknown"
+    return f"rate_limit:public_audit:{client_ip}"
+
+
+def _rate_limit_headers(limit: int, remaining: int, reset_in_seconds: int) -> Dict[str, str]:
+    return {
+        "X-RateLimit-Limit": str(limit),
+        "X-RateLimit-Remaining": str(max(0, remaining)),
+        "X-RateLimit-Reset": str(reset_in_seconds),
+        "Retry-After": str(reset_in_seconds),
+    }
 
 
 class QuickAuditRequest(BaseModel):
@@ -81,38 +129,49 @@ def _status_to_message(status: str) -> str:
     return messages.get(status, "Audit status unknown")
 
 
-async def check_rate_limit(request: Request) -> bool:
-    if redis_client is None:
-        return True
-
-    client_ip = request.client.host if request.client else "unknown"
-    key = f"rate_limit:public_audit:{client_ip}"
+async def check_rate_limit(request: Request) -> Dict[str, int]:
+    client = _get_redis_client()
+    key = _rate_limit_key(request)
+    limit = settings.PUBLIC_RATE_LIMIT
+    window = settings.PUBLIC_RATE_LIMIT_WINDOW_SECONDS
 
     try:
-        current_count = redis_client.get(key)
+        current_count, ttl = client.eval(RATE_LIMIT_SCRIPT, 1, key, window)
     except Exception as exc:
-        logger.warning("Rate-limit check failed; allowing request", extra={"error": str(exc)})
-        return True
+        raise _rate_limit_unavailable(exc) from exc
 
-    if current_count and int(current_count) >= settings.PUBLIC_RATE_LIMIT:
+    current = int(current_count or 0)
+    reset_in_seconds = int(ttl or window)
+    if reset_in_seconds <= 0:
+        reset_in_seconds = window
+
+    remaining = max(0, limit - current)
+    if current > limit:
         raise HTTPException(
             status_code=429,
             detail={
                 "error": "Rate limit exceeded",
-                "limit": settings.PUBLIC_RATE_LIMIT,
-                "window_seconds": settings.PUBLIC_RATE_LIMIT_WINDOW_SECONDS,
-                "message": f"Maximum {settings.PUBLIC_RATE_LIMIT} audits per hour.",
+                "limit": limit,
+                "remaining": 0,
+                "reset_in_seconds": reset_in_seconds,
+                "window_seconds": window,
+                "message": f"Maximum {limit} audits per hour.",
             },
+            headers=_rate_limit_headers(limit, 0, reset_in_seconds),
         )
 
-    return True
+    return {
+        "limit": limit,
+        "remaining": remaining,
+        "reset_in_seconds": reset_in_seconds,
+        "window_seconds": window,
+    }
 
 
 @router.post("/quick-audit", response_model=Dict[str, Any])
 async def create_quick_audit(
     audit_request: QuickAuditRequest,
-    request: Request,
-    _: bool = Depends(check_rate_limit),
+    rate_limit: Dict[str, int] = Depends(check_rate_limit),
 ):
     try:
         payload = {
@@ -139,17 +198,6 @@ async def create_quick_audit(
         if not audit_uid:
             raise HTTPException(status_code=502, detail="Audit service returned invalid response")
 
-        if redis_client is not None:
-            client_ip = request.client.host if request.client else "unknown"
-            key = f"rate_limit:public_audit:{client_ip}"
-            try:
-                pipe = redis_client.pipeline()
-                pipe.incr(key)
-                pipe.expire(key, settings.PUBLIC_RATE_LIMIT_WINDOW_SECONDS)
-                pipe.execute()
-            except Exception as exc:
-                logger.warning("Rate-limit increment failed", extra={"error": str(exc)})
-
         return {
             "success": True,
             "uid": audit_uid,
@@ -157,6 +205,7 @@ async def create_quick_audit(
             "status": "processing",
             "message": "Audit started",
             "estimated_time_seconds": settings.PUBLIC_AUDIT_TIMEOUT_SECONDS,
+            "rate_limit": rate_limit,
         }
 
     except httpx.HTTPStatusError as exc:
@@ -182,6 +231,10 @@ async def get_audit_status(uid: str):
         status_value = result.get("status", "unknown")
         created_at = result.get("created_at") or datetime.utcnow().isoformat()
         completed_at = result.get("updated_at") if status_value in {"completed", "failed"} else None
+        all_findings = result.get("findings", [])
+        top_findings = result.get("top_findings")
+        if not isinstance(top_findings, list):
+            top_findings = all_findings[:5] if isinstance(all_findings, list) else []
 
         return AuditStatusResponse(
             uid=uid,
@@ -190,7 +243,9 @@ async def get_audit_status(uid: str):
             message=_status_to_message(status_value),
             results={
                 "summary": result.get("summary", {}),
-                "findings": result.get("findings", []),
+                "findings": top_findings,
+                "top_findings": top_findings,
+                "findings_count": len(all_findings) if isinstance(all_findings, list) else 0,
                 "pages": result.get("pages", []),
             },
             created_at=created_at,
@@ -204,30 +259,20 @@ async def get_audit_status(uid: str):
 
 @router.get("/rate-limit-info")
 async def get_rate_limit_info(request: Request):
-    if redis_client is None:
-        return {
-            "limit": settings.PUBLIC_RATE_LIMIT,
-            "remaining": settings.PUBLIC_RATE_LIMIT,
-            "reset_in_seconds": settings.PUBLIC_RATE_LIMIT_WINDOW_SECONDS,
-            "window_seconds": settings.PUBLIC_RATE_LIMIT_WINDOW_SECONDS,
-            "mode": "disabled",
-        }
-
-    client_ip = request.client.host if request.client else "unknown"
-    key = f"rate_limit:public_audit:{client_ip}"
+    client = _get_redis_client()
+    key = _rate_limit_key(request)
 
     try:
-        current_count = redis_client.get(key)
+        current_count = client.get(key)
         remaining = settings.PUBLIC_RATE_LIMIT - (int(current_count) if current_count else 0)
-        ttl = redis_client.ttl(key)
+        ttl = client.ttl(key)
     except Exception as exc:
-        logger.warning("Rate-limit info read failed", extra={"error": str(exc)})
-        remaining = settings.PUBLIC_RATE_LIMIT
-        ttl = settings.PUBLIC_RATE_LIMIT_WINDOW_SECONDS
+        raise _rate_limit_unavailable(exc) from exc
 
     return {
         "limit": settings.PUBLIC_RATE_LIMIT,
         "remaining": max(0, remaining),
         "reset_in_seconds": ttl if ttl and ttl > 0 else settings.PUBLIC_RATE_LIMIT_WINDOW_SECONDS,
         "window_seconds": settings.PUBLIC_RATE_LIMIT_WINDOW_SECONDS,
+        "mode": "redis",
     }

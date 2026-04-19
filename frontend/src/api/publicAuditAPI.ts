@@ -119,7 +119,7 @@ const normalizeAudit = (payload: unknown): AuditStatus => {
   const data = asObject(payload)
   const results = asObject(data.results)
   const summary = asObject(results.summary) as AuditSummary
-  const details = mapFindings(results.findings)
+  const details = mapFindings(results.top_findings || results.findings)
   const issues = summarizeIssues(details)
   const pages = mapPages(results.pages)
   const uid = asString(data.uid || data.audit_id || data.id)

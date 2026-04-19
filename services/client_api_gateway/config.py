@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     TILDA_ADAPTER_URL: Optional[str] = None
     TILDA_INTERNAL_API_KEY: Optional[str] = None
 
+    MANAGEMENT_SERVICE_URL: str = 'http://localhost:8004'
+
     CORS_ORIGINS: str = '*'
     CORS_ALLOW_CREDENTIALS: bool = True
     CORS_ALLOW_METHODS: str = 'GET,POST,PATCH,OPTIONS'

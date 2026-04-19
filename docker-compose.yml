@@ -143,6 +143,8 @@ services:
       TILDA_SECRET_KEY: ${TILDA_SECRET_KEY:-}
       TILDA_INTERNAL_API_KEY: ${TILDA_INTERNAL_API_KEY:-change-me}
       TILDA_WEBHOOK_SECRET: ${TILDA_WEBHOOK_SECRET:-}
+      TILDA_WEBHOOK_FORWARD_URL: ${TILDA_WEBHOOK_FORWARD_URL:-http://client-api-gateway:8005/internal/tilda/webhook/published}
+      TILDA_WEBHOOK_FORWARD_API_KEY: ${TILDA_WEBHOOK_FORWARD_API_KEY:-change-me}
     ports:
       - "8010:8010"
     networks:
@@ -298,6 +300,7 @@ services:
       CLIENT_API_TRUST_PROXY_HEADERS: ${CLIENT_API_TRUST_PROXY_HEADERS:-false}
       TILDA_ADAPTER_URL: ${TILDA_ADAPTER_URL:-http://tilda-adapter:8010}
       TILDA_INTERNAL_API_KEY: ${TILDA_INTERNAL_API_KEY:-change-me}
+      MANAGEMENT_SERVICE_URL: ${MANAGEMENT_SERVICE_URL:-http://management-web:8004}
     depends_on:
       postgres:
         condition: service_healthy

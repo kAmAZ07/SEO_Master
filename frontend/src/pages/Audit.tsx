@@ -129,10 +129,10 @@ const Audit = () => {
         </Link>
         <div className="flex items-center gap-3">
           <Link to="/login" className="text-sm font-medium text-gray-700 transition-colors hover:text-blue-700">
-            Войти
+            Р’РѕР№С‚Рё
           </Link>
           <Link to="/register">
-            <Button size="sm">Создать аккаунт</Button>
+            <Button size="sm">РЎРѕР·РґР°С‚СЊ Р°РєРєР°СѓРЅС‚</Button>
           </Link>
         </div>
       </header>
@@ -141,32 +141,32 @@ const Audit = () => {
         <section className="grid items-center gap-8 py-10 lg:grid-cols-[1.05fr_0.95fr] lg:py-16">
           <div>
             <div className="mb-5 inline-flex rounded-full border border-blue-100 bg-white/70 px-4 py-2 text-sm font-medium text-blue-700 shadow-sm backdrop-blur">
-              Публичный SEO-аудит без регистрации
+              РџСѓР±Р»РёС‡РЅС‹Р№ SEO-Р°СѓРґРёС‚ Р±РµР· СЂРµРіРёСЃС‚СЂР°С†РёРё
             </div>
             <h1 className="max-w-3xl text-4xl font-black tracking-tight text-gray-950 md:text-6xl">
-              Быстрая проверка сайта и понятный top-5 проблем за один запуск
+              Р‘С‹СЃС‚СЂР°СЏ РїСЂРѕРІРµСЂРєР° СЃР°Р№С‚Р° Рё РїРѕРЅСЏС‚РЅС‹Р№ top-5 РїСЂРѕР±Р»РµРј Р·Р° РѕРґРёРЅ Р·Р°РїСѓСЃРє
             </h1>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-gray-700">
-              Введите URL, получите публичный результат по прямой ссылке, а для истории аудитов, HITL-согласований и внедрения правок переходите в приватный кабинет.
+              Р’РІРµРґРёС‚Рµ URL, РїРѕР»СѓС‡РёС‚Рµ РїСѓР±Р»РёС‡РЅС‹Р№ СЂРµР·СѓР»СЊС‚Р°С‚ РїРѕ РїСЂСЏРјРѕР№ СЃСЃС‹Р»РєРµ, Р° РґР»СЏ РёСЃС‚РѕСЂРёРё Р°СѓРґРёС‚РѕРІ, HITL-СЃРѕРіР»Р°СЃРѕРІР°РЅРёР№ Рё РІРЅРµРґСЂРµРЅРёСЏ РїСЂР°РІРѕРє РїРµСЂРµС…РѕРґРёС‚Рµ РІ РїСЂРёРІР°С‚РЅС‹Р№ РєР°Р±РёРЅРµС‚.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <a href="#quick-audit">
                 <Button size="lg" className="w-full sm:w-auto">
-                  Запустить quick audit
+                  Р—Р°РїСѓСЃС‚РёС‚СЊ quick audit
                 </Button>
               </a>
               <Link to="/register">
                 <Button type="button" variant="outline" size="lg" className="w-full bg-white/70 sm:w-auto">
-                  Сохранить результаты в проект
+                  РЎРѕС…СЂР°РЅРёС‚СЊ СЂРµР·СѓР»СЊС‚Р°С‚С‹ РІ РїСЂРѕРµРєС‚
                 </Button>
               </Link>
             </div>
           </div>
 
           <Card id="quick-audit" className="border-blue-100 bg-white/85 p-6 shadow-xl shadow-blue-100/40 backdrop-blur">
-            <h2 className="text-2xl font-bold text-gray-950">Проверить сайт</h2>
+            <h2 className="text-2xl font-bold text-gray-950">РџСЂРѕРІРµСЂРёС‚СЊ СЃР°Р№С‚</h2>
             <p className="mt-2 text-sm leading-6 text-gray-600">
-              Public flow использует только открытый quick-audit контур и не запрашивает приватную историю проекта.
+              Public flow РёСЃРїРѕР»СЊР·СѓРµС‚ С‚РѕР»СЊРєРѕ РѕС‚РєСЂС‹С‚С‹Р№ quick-audit РєРѕРЅС‚СѓСЂ Рё РЅРµ Р·Р°РїСЂР°С€РёРІР°РµС‚ РїСЂРёРІР°С‚РЅСѓСЋ РёСЃС‚РѕСЂРёСЋ РїСЂРѕРµРєС‚Р°.
             </p>
             <form onSubmit={handleStartAudit} className="mt-6 space-y-4">
               <Input
@@ -174,16 +174,16 @@ const Audit = () => {
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
                 placeholder="https://example.com"
-                label="URL сайта"
+                label="URL СЃР°Р№С‚Р°"
                 required
               />
               <Button type="submit" disabled={loading} className="w-full">
-                {loading ? 'Запускаем аудит...' : 'Получить публичный результат'}
+                {loading ? 'Р—Р°РїСѓСЃРєР°РµРј Р°СѓРґРёС‚...' : 'РџРѕР»СѓС‡РёС‚СЊ РїСѓР±Р»РёС‡РЅС‹Р№ СЂРµР·СѓР»СЊС‚Р°С‚'}
               </Button>
             </form>
             {hasResultRoute && currentAudit?.uid && (
               <p className="mt-4 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-700">
-                Прямая ссылка на результат: /audit/results/{currentAudit.uid}
+                РџСЂСЏРјР°СЏ СЃСЃС‹Р»РєР° РЅР° СЂРµР·СѓР»СЊС‚Р°С‚: /audit/results/{currentAudit.uid}
               </p>
             )}
           </Card>
@@ -198,15 +198,15 @@ const Audit = () => {
         {showProgress && (
           <Card className="mt-6 p-8 text-center">
             <Loader />
-            <h2 className="mt-5 text-xl font-semibold text-gray-950">Аудит выполняется</h2>
-            <p className="mt-2 text-gray-600">Проверяем технические сигналы, страницы, ссылки и базовые SEO-проблемы.</p>
+            <h2 className="mt-5 text-xl font-semibold text-gray-950">РђСѓРґРёС‚ РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ</h2>
+            <p className="mt-2 text-gray-600">РџСЂРѕРІРµСЂСЏРµРј С‚РµС…РЅРёС‡РµСЃРєРёРµ СЃРёРіРЅР°Р»С‹, СЃС‚СЂР°РЅРёС†С‹, СЃСЃС‹Р»РєРё Рё Р±Р°Р·РѕРІС‹Рµ SEO-РїСЂРѕР±Р»РµРјС‹.</p>
           </Card>
         )}
 
         {currentAudit?.status === 'failed' && (
           <Card className="mt-6 border-red-200 bg-red-50 p-6">
-            <h2 className="text-xl font-semibold text-red-900">Аудит завершился с ошибкой</h2>
-            <p className="mt-2 text-sm text-red-700">{currentAudit.error || 'Попробуйте запустить проверку ещё раз.'}</p>
+            <h2 className="text-xl font-semibold text-red-900">РђСѓРґРёС‚ Р·Р°РІРµСЂС€РёР»СЃСЏ СЃ РѕС€РёР±РєРѕР№</h2>
+            <p className="mt-2 text-sm text-red-700">{currentAudit.error || 'РџРѕРїСЂРѕР±СѓР№С‚Рµ Р·Р°РїСѓСЃС‚РёС‚СЊ РїСЂРѕРІРµСЂРєСѓ РµС‰С‘ СЂР°Р·.'}</p>
           </Card>
         )}
 
@@ -216,7 +216,7 @@ const Audit = () => {
               <div className="grid gap-0 lg:grid-cols-[1fr_300px]">
                 <div className="p-6">
                   <p className="text-sm font-medium uppercase tracking-wide text-blue-700">Public result</p>
-                  <h2 className="mt-2 text-2xl font-bold text-gray-950">Результаты quick audit</h2>
+                  <h2 className="mt-2 text-2xl font-bold text-gray-950">Р РµР·СѓР»СЊС‚Р°С‚С‹ quick audit</h2>
                   <p className="mt-1 break-all text-sm text-gray-600">{currentAudit.url}</p>
                   {currentAudit.summary?.score_explanation && (
                     <p className="mt-4 max-w-3xl text-sm leading-6 text-gray-600">{currentAudit.summary.score_explanation}</p>
@@ -253,11 +253,11 @@ const Audit = () => {
             <Card className="p-6">
               <div className="mb-5 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
                 <div>
-                  <h3 className="text-xl font-bold text-gray-950">Top-5 проблем</h3>
-                  <p className="mt-1 text-sm text-gray-600">Публичная выдача показывает краткий приоритетный срез, без приватной истории проекта.</p>
+                  <h3 className="text-xl font-bold text-gray-950">Top-5 РїСЂРѕР±Р»РµРј</h3>
+                  <p className="mt-1 text-sm text-gray-600">РџСѓР±Р»РёС‡РЅР°СЏ РІС‹РґР°С‡Р° РїРѕРєР°Р·С‹РІР°РµС‚ РєСЂР°С‚РєРёР№ РїСЂРёРѕСЂРёС‚РµС‚РЅС‹Р№ СЃСЂРµР·, Р±РµР· РїСЂРёРІР°С‚РЅРѕР№ РёСЃС‚РѕСЂРёРё РїСЂРѕРµРєС‚Р°.</p>
                 </div>
                 <Link to="/register">
-                  <Button type="button" variant="outline">Разобрать все правки в кабинете</Button>
+                  <Button type="button" variant="outline">Р Р°Р·РѕР±СЂР°С‚СЊ РІСЃРµ РїСЂР°РІРєРё РІ РєР°Р±РёРЅРµС‚Рµ</Button>
                 </Link>
               </div>
 
@@ -273,26 +273,26 @@ const Audit = () => {
                       </div>
                       <p className="text-sm leading-6">{detail.description}</p>
                       {detail.recommendation && (
-                        <p className="mt-3 text-sm font-medium">Что сделать: {detail.recommendation}</p>
+                        <p className="mt-3 text-sm font-medium">Р§С‚Рѕ СЃРґРµР»Р°С‚СЊ: {detail.recommendation}</p>
                       )}
                     </div>
                   ))}
                 </div>
               ) : (
-                <p className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-700">Критичных публичных проблем не найдено.</p>
+                <p className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-700">РљСЂРёС‚РёС‡РЅС‹С… РїСѓР±Р»РёС‡РЅС‹С… РїСЂРѕР±Р»РµРј РЅРµ РЅР°Р№РґРµРЅРѕ.</p>
               )}
             </Card>
 
             <Card className="border-blue-100 bg-blue-50 p-6">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <h3 className="text-lg font-bold text-blue-950">Нужны история, приватные задачи и HITL-одобрение?</h3>
+                  <h3 className="text-lg font-bold text-blue-950">РќСѓР¶РЅС‹ РёСЃС‚РѕСЂРёСЏ, РїСЂРёРІР°С‚РЅС‹Рµ Р·Р°РґР°С‡Рё Рё HITL-РѕРґРѕР±СЂРµРЅРёРµ?</h3>
                   <p className="mt-1 text-sm text-blue-800">
-                    Зарегистрируйтесь, чтобы привязать аудит к проекту, видеть историю и согласовывать изменения через DiffViewer.
+                    Р—Р°СЂРµРіРёСЃС‚СЂРёСЂСѓР№С‚РµСЃСЊ, С‡С‚РѕР±С‹ РїСЂРёРІСЏР·Р°С‚СЊ Р°СѓРґРёС‚ Рє РїСЂРѕРµРєС‚Сѓ, РІРёРґРµС‚СЊ РёСЃС‚РѕСЂРёСЋ Рё СЃРѕРіР»Р°СЃРѕРІС‹РІР°С‚СЊ РёР·РјРµРЅРµРЅРёСЏ С‡РµСЂРµР· DiffViewer.
                   </p>
                 </div>
                 <Link to="/register">
-                  <Button type="button">Перейти в полный режим</Button>
+                  <Button type="button">РџРµСЂРµР№С‚Рё РІ РїРѕР»РЅС‹Р№ СЂРµР¶РёРј</Button>
                 </Link>
               </div>
             </Card>

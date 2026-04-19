@@ -166,7 +166,7 @@ FINDING_CATALOG = {
     "cwv_unavailable": {
         "title": "Core Web Vitals were not collected",
         "description": "The audit could not fetch PageSpeed data for this URL, so performance scoring is partially estimated.",
-        "recommendation": "Provide a valid PageSpeed API key or rerun the audit when external performance data is available.",
+        "recommendation": "Rerun the audit later or configure a PageSpeed API key for higher quota and more stable collection.",
         "category": "performance",
     },
     "backlinks_unavailable": {
@@ -493,7 +493,7 @@ async def _run_audit_pipeline(
             "code": "cwv_unavailable",
             "severity": "info",
             "confidence": "high",
-            "details": {"reason": "psi_api_key_missing_or_error"},
+            "details": {"reason": "pagespeed_unavailable_or_quota_limited"},
         })
 
     if include_external_data:

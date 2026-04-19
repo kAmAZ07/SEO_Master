@@ -1,17 +1,30 @@
 import uuid
 from datetime import datetime
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field, root_validator, validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from config.database_config import get_db
 from config.logging_config import get_logger
-from database.models import Project, PublicAuditResult, User
+from database.models import (
+    Backlink,
+    Crawl,
+    CrawlResult,
+    FFScore,
+    GSCData,
+    Page,
+    Project,
+    PublicAuditResult,
+    SemanticAnalysis,
+    SemanticEvent,
+    User,
+)
 from services.api_gateway.events.hitl_approved import publish_hitl_approved_event
 from services.api_gateway.auth import (
     authenticate_user,
@@ -27,11 +40,6 @@ from services.api_gateway.config import settings
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api", tags=["Protected"])
-
-
-_tracked_keywords: Dict[str, List[Dict[str, Any]]] = {}
-_backlink_snapshots: Dict[str, List[Dict[str, Any]]] = {}
-_content_history: Dict[str, List[Dict[str, Any]]] = {}
 
 
 class RegisterRequest(BaseModel):
@@ -164,36 +172,452 @@ def _serialize_audit_row(row: PublicAuditResult) -> Dict[str, Any]:
     }
 
 
-async def _proxy_management(
+def _serialize_datetime(value: Any) -> Optional[str]:
+    return value.isoformat() if value else None
+
+
+def _active_status(status_value: str) -> bool:
+    return status_value in {"queued", "running", "pending", "processing", "in_progress"}
+
+
+def _get_owned_project(
+    project_id: str,
+    current_user: User,
+    db: Session,
+    *,
+    not_found_detail: str = "Project not found",
+) -> Project:
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=not_found_detail)
+    return project
+
+
+def _get_owned_projects(current_user: User, db: Session) -> List[Project]:
+    return db.query(Project).filter(Project.owner_id == current_user.id).order_by(Project.created_at.desc()).all()
+
+
+def _resolve_project_for_private_flow(
+    project_id: Optional[str],
+    current_user: User,
+    db: Session,
+) -> Project:
+    if project_id:
+        return _get_owned_project(project_id, current_user, db)
+
+    project = db.query(Project).filter(Project.owner_id == current_user.id).order_by(Project.created_at.desc()).first()
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project_required")
+    return project
+
+
+def _project_ids(projects: Iterable[Project]) -> List[str]:
+    return [str(project.id) for project in projects]
+
+
+def _normalize_keyword_record(row: SemanticEvent) -> Dict[str, Any]:
+    data = row.event_data if isinstance(row.event_data, dict) else {}
+    keyword = str(data.get("keyword") or "").strip()
+    keyword_id = str(data.get("id") or data.get("keyword_id") or row.id)
+    return {
+        "id": keyword_id,
+        "keyword": keyword,
+        "volume": data.get("volume"),
+        "difficulty": data.get("difficulty"),
+        "cpc": data.get("cpc"),
+        "position": data.get("position"),
+        "change": data.get("change"),
+        "projectId": str(row.project_id) if row.project_id else None,
+        "createdAt": _serialize_datetime(row.created_at),
+        "source": "semantic_events",
+    }
+
+
+def _load_tracked_keywords(db: Session, project_ids: List[str]) -> List[Dict[str, Any]]:
+    if not project_ids:
+        return []
+
+    events = (
+        db.query(SemanticEvent)
+        .filter(
+            SemanticEvent.project_id.in_(project_ids),
+            SemanticEvent.event_type.in_(["keyword_tracked", "keyword_untracked"]),
+        )
+        .order_by(SemanticEvent.created_at.asc())
+        .all()
+    )
+    tracked: Dict[str, Dict[str, Any]] = {}
+    keyword_index: Dict[tuple[str, str], str] = {}
+
+    for event in events:
+        data = event.event_data if isinstance(event.event_data, dict) else {}
+        project_id = str(event.project_id or "")
+        keyword = str(data.get("keyword") or "").strip()
+        keyword_key = (project_id, keyword.lower())
+        keyword_id = str(data.get("id") or data.get("keyword_id") or event.id)
+
+        if event.event_type == "keyword_untracked":
+            tracked.pop(keyword_id, None)
+            existing_id = keyword_index.pop(keyword_key, None)
+            if existing_id:
+                tracked.pop(existing_id, None)
+            continue
+
+        record = _normalize_keyword_record(event)
+        if not record["keyword"]:
+            continue
+        existing_id = keyword_index.get(keyword_key)
+        if existing_id:
+            tracked.pop(existing_id, None)
+        tracked[keyword_id] = record
+        keyword_index[keyword_key] = keyword_id
+
+    return sorted(tracked.values(), key=lambda item: item.get("createdAt") or "", reverse=True)
+
+
+def _lookup_keyword_metrics_from_gsc(db: Session, project_id: str, keyword: str) -> Dict[str, Any]:
+    normalized = keyword.strip()
+    if not normalized:
+        return {}
+
+    row = (
+        db.query(
+            GSCData.query.label("keyword"),
+            func.sum(GSCData.impressions).label("volume"),
+            func.avg(GSCData.position).label("position"),
+            func.sum(GSCData.clicks).label("clicks"),
+        )
+        .filter(GSCData.project_id == project_id, GSCData.query.ilike(normalized), GSCData.query.isnot(None))
+        .group_by(GSCData.query)
+        .order_by(func.sum(GSCData.impressions).desc())
+        .first()
+    )
+    if row is None:
+        return {}
+    return {
+        "volume": int(row.volume or 0),
+        "position": round(float(row.position), 2) if row.position is not None else None,
+        "clicks": int(row.clicks or 0),
+    }
+
+
+def _search_keywords_from_gsc(db: Session, project_id: str, keyword: str, *, limit: int = 10) -> List[Dict[str, Any]]:
+    normalized = keyword.strip()
+    if not normalized:
+        return []
+
+    rows = (
+        db.query(
+            GSCData.query.label("keyword"),
+            func.sum(GSCData.impressions).label("volume"),
+            func.avg(GSCData.position).label("position"),
+            func.sum(GSCData.clicks).label("clicks"),
+            func.avg(GSCData.ctr).label("ctr"),
+        )
+        .filter(GSCData.project_id == project_id, GSCData.query.ilike(f"%{normalized}%"), GSCData.query.isnot(None))
+        .group_by(GSCData.query)
+        .order_by(func.sum(GSCData.impressions).desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{project_id}:{row.keyword}")),
+            "keyword": row.keyword,
+            "volume": int(row.volume or 0),
+            "difficulty": None,
+            "cpc": None,
+            "position": round(float(row.position), 2) if row.position is not None else None,
+            "change": None,
+            "clicks": int(row.clicks or 0),
+            "ctr": round(float(row.ctr), 4) if row.ctr is not None else None,
+            "source": "reporting_schema.gsc_data",
+        }
+        for row in rows
+        if row.keyword
+    ]
+
+
+def _load_content_history(db: Session, project_ids: List[str], *, limit: int = 50) -> List[Dict[str, Any]]:
+    if not project_ids:
+        return []
+
+    events = (
+        db.query(SemanticEvent)
+        .filter(SemanticEvent.project_id.in_(project_ids), SemanticEvent.event_type == "content_analyzed")
+        .order_by(SemanticEvent.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    items = [
+        {
+            "id": str((event.event_data or {}).get("analysis_id") or event.id),
+            "url": str((event.event_data or {}).get("url") or ""),
+            "keyword": str((event.event_data or {}).get("keyword") or ""),
+            "score": float((event.event_data or {}).get("score") or 0),
+            "projectId": str(event.project_id) if event.project_id else None,
+            "analyzedAt": _serialize_datetime(event.created_at) or "",
+            "source": "semantic_service",
+        }
+        for event in events
+        if isinstance(event.event_data, dict)
+    ]
+    known_ids = {item["id"] for item in items}
+
+    analyses = (
+        db.query(SemanticAnalysis)
+        .filter(SemanticAnalysis.project_id.in_(project_ids))
+        .order_by(SemanticAnalysis.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    for analysis in analyses:
+        analysis_id = str(analysis.analysis_id)
+        if analysis_id in known_ids:
+            continue
+        keyword_coverage = analysis.keyword_coverage if isinstance(analysis.keyword_coverage, dict) else {}
+        items.append(
+            {
+                "id": analysis_id,
+                "url": analysis.root_url,
+                "keyword": "",
+                "score": float(keyword_coverage.get("coverage") or 0),
+                "projectId": str(analysis.project_id) if analysis.project_id else None,
+                "analyzedAt": _serialize_datetime(analysis.created_at) or "",
+                "source": "semantic_schema.semantic_analysis",
+            }
+        )
+
+    return sorted(items, key=lambda item: item.get("analyzedAt") or "", reverse=True)[:limit]
+
+
+def _semantic_analysis_to_content_result(payload: Dict[str, Any], content: str, keyword: str) -> Dict[str, Any]:
+    keyword_coverage = payload.get("keyword_coverage") if isinstance(payload.get("keyword_coverage"), dict) else {}
+    content_gap = payload.get("content_gap") if isinstance(payload.get("content_gap"), dict) else {}
+    inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+    words = [word for word in re.findall(r"\b[\w-]+\b", content, flags=re.UNICODE) if word.strip()]
+    normalized_keyword = keyword.strip().lower()
+    keyword_density = 0.0
+    if normalized_keyword and words:
+        keyword_density = (content.lower().count(normalized_keyword) / max(len(words), 1)) * 100.0
+    coverage_score = float(keyword_coverage.get("coverage") or 0.0)
+    missing_keywords = keyword_coverage.get("missing") if isinstance(keyword_coverage.get("missing"), list) else []
+    recommendations = []
+    if missing_keywords:
+        recommendations.append(
+            {
+                "title": "Improve keyword coverage",
+                "description": "Add missing target terms naturally: " + ", ".join(str(item) for item in missing_keywords[:5]),
+            }
+        )
+    if "serp_top10_texts" in (inputs.get("unavailable") or []):
+        recommendations.append(
+            {
+                "title": "SERP context unavailable",
+                "description": "Connect SERP inputs to compare this draft against top-ranking pages.",
+            }
+        )
+
+    issues = []
+    gap_missing = content_gap.get("missing_keywords") if isinstance(content_gap.get("missing_keywords"), list) else []
+    if gap_missing:
+        issues.append(
+            {
+                "title": "Content gap detected",
+                "description": "The semantic analysis found missing topical coverage.",
+            }
+        )
+
+    return {
+        "score": int(round(max(0.0, min(100.0, coverage_score)))),
+        "wordCount": len(words),
+        "keywordDensity": round(keyword_density, 2),
+        "uniqueness": 0,
+        "recommendations": recommendations,
+        "issues": issues,
+        "analysisId": payload.get("analysis_id"),
+        "source": "semantic_service",
+    }
+
+
+def _latest_ff_score(db: Session, project_id: str) -> Optional[FFScore]:
+    return (
+        db.query(FFScore)
+        .filter(FFScore.project_id == project_id)
+        .order_by(FFScore.created_at.desc())
+        .first()
+    )
+
+
+def _serialize_ff_score(row: Optional[FFScore]) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+
+    components = row.components if isinstance(row.components, dict) else {}
+    return {
+        "total": float(row.ff_score),
+        "freshness": float(components.get("freshness", 0) or 0),
+        "familiarity": float(components.get("familiarity", 0) or 0),
+        "quality": float(components.get("quality", 0) or 0),
+        "timestamp": _serialize_datetime(row.created_at) or "",
+    }
+
+
+def _count_project_backlinks(db: Session, project_ids: List[str]) -> int:
+    if not project_ids:
+        return 0
+    return int(
+        db.query(func.count(Backlink.id))
+        .join(Page, Backlink.page_id == Page.id)
+        .join(Crawl, Page.crawl_id == Crawl.id)
+        .filter(Crawl.project_id.in_(project_ids))
+        .scalar()
+        or 0
+    )
+
+
+def _serialize_backlink_row(row: Backlink, page: Page) -> Dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "sourceUrl": row.source_url,
+        "targetUrl": page.url,
+        "type": row.link_type or "unknown",
+        "domainAuthority": None,
+        "anchorText": row.anchor_text,
+        "discoveredAt": _serialize_datetime(row.discovered_at or row.created_at) or "",
+        "source": "audit_schema.backlinks",
+    }
+
+
+def _load_project_backlinks(db: Session, project_ids: List[str], *, limit: int = 200) -> List[Dict[str, Any]]:
+    if not project_ids:
+        return []
+
+    rows = (
+        db.query(Backlink, Page)
+        .join(Page, Backlink.page_id == Page.id)
+        .join(Crawl, Page.crawl_id == Crawl.id)
+        .filter(Crawl.project_id.in_(project_ids))
+        .order_by(Backlink.discovered_at.desc(), Backlink.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_serialize_backlink_row(backlink, page) for backlink, page in rows]
+
+
+def _count_project_pages(db: Session, project_id: str) -> int:
+    return int(
+        db.query(func.count(Page.id))
+        .join(Crawl, Page.crawl_id == Crawl.id)
+        .filter(Crawl.project_id == project_id)
+        .scalar()
+        or 0
+    )
+
+
+def _count_project_audits(db: Session, project_id: str) -> int:
+    full_count = db.query(func.count(CrawlResult.audit_id)).filter(CrawlResult.project_id == project_id).scalar() or 0
+    public_count = db.query(func.count(PublicAuditResult.audit_id)).filter(PublicAuditResult.project_id == project_id).scalar() or 0
+    return int(full_count + public_count)
+
+
+def _latest_project_audit_at(db: Session, project_id: str) -> Optional[str]:
+    full_at = db.query(func.max(CrawlResult.created_at)).filter(CrawlResult.project_id == project_id).scalar()
+    public_at = db.query(func.max(PublicAuditResult.created_at)).filter(PublicAuditResult.project_id == project_id).scalar()
+    values = [value for value in (full_at, public_at) if value is not None]
+    return max(values).isoformat() if values else None
+
+
+def _serialize_project_private(project: Project, db: Session) -> Dict[str, Any]:
+    project_id = str(project.id)
+    tracked_keywords = _load_tracked_keywords(db, [project_id])
+    backlink_count = _count_project_backlinks(db, [project_id])
+    return {
+        **_serialize_project(project),
+        "ffScore": _serialize_ff_score(_latest_ff_score(db, project_id)),
+        "lastAudit": _latest_project_audit_at(db, project_id),
+        "stats": {
+            "audits": _count_project_audits(db, project_id),
+            "keywords": len(tracked_keywords),
+            "pages": _count_project_pages(db, project_id),
+            "backlinks": backlink_count,
+        },
+    }
+
+
+def _collect_recent_audits(db: Session, project_ids: List[str], *, limit: int = 50) -> List[Dict[str, Any]]:
+    if not project_ids:
+        return []
+
+    full_rows = (
+        db.query(CrawlResult)
+        .filter(CrawlResult.project_id.in_(project_ids))
+        .order_by(CrawlResult.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    public_rows = (
+        db.query(PublicAuditResult)
+        .filter(PublicAuditResult.project_id.in_(project_ids))
+        .order_by(PublicAuditResult.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    items: List[Dict[str, Any]] = []
+    for row in [*full_rows, *public_rows]:
+        audit_item = _serialize_audit_row(row)
+        findings = getattr(row, "findings", None)
+        pages = getattr(row, "pages", None)
+        items.append(
+            {
+                "id": audit_item["id"],
+                "uid": audit_item["id"],
+                "projectId": str(getattr(row, "project_id", "") or ""),
+                "url": audit_item["url"],
+                "mode": getattr(row, "mode", None),
+                "status": audit_item["status"],
+                "score": audit_item["score"],
+                "createdAt": _serialize_datetime(getattr(row, "created_at", None)),
+                "updatedAt": _serialize_datetime(getattr(row, "updated_at", None)),
+                "issues": findings if isinstance(findings, list) else [],
+                "details": {
+                    "summary": getattr(row, "summary", {}) or {},
+                    "pages": pages if isinstance(pages, list) else [],
+                    "source": row.__tablename__,
+                },
+            }
+        )
+
+    return sorted(items, key=lambda item: item.get("createdAt") or "", reverse=True)[:limit]
+
+
+async def _proxy_service(
+    service_url: str,
     method: str,
-    path_candidates: List[str],
+    path: str,
     *,
     params: Optional[Dict[str, Any]] = None,
     payload: Optional[Dict[str, Any]] = None,
-) -> Optional[Any]:
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        for path in path_candidates:
-            url = f"{settings.MANAGEMENT_SERVICE_URL.rstrip('/')}{path}"
-            try:
-                response = await client.request(method, url, params=params, json=payload)
-            except httpx.RequestError:
-                continue
+    timeout: float = 15.0,
+) -> httpx.Response:
+    url = f"{service_url.rstrip('/')}{path}"
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            response = await client.request(method, url, params=params, json=payload)
+        except httpx.RequestError as exc:
+            logger.warning("Private service proxy unavailable", extra={"url": url, "error": str(exc)})
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="private_service_unavailable") from exc
 
-            if response.status_code == 404:
-                continue
-            if response.status_code >= 400:
-                logger.warning(
-                    "Management proxy returned error",
-                    extra={"url": url, "status_code": response.status_code, "body": response.text[:300]},
-                )
-                continue
+    if response.status_code >= 400:
+        detail: Any
+        try:
+            detail = response.json().get("detail")
+        except ValueError:
+            detail = response.text[:300] or "private_service_error"
+        raise HTTPException(status_code=response.status_code, detail=detail)
 
-            try:
-                return response.json()
-            except ValueError:
-                return None
-
-    return None
+    return response
 
 
 async def _proxy_management_response(
@@ -203,6 +627,7 @@ async def _proxy_management_response(
     params: Optional[Dict[str, Any]] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Optional[httpx.Response]:
+    not_found_response: Optional[httpx.Response] = None
     async with httpx.AsyncClient(timeout=10.0) as client:
         for path in path_candidates:
             url = f"{settings.MANAGEMENT_SERVICE_URL.rstrip('/')}{path}"
@@ -212,14 +637,55 @@ async def _proxy_management_response(
                 continue
 
             if response.status_code == 404:
+                not_found_response = response
                 continue
             return response
 
-    return None
+    return not_found_response
 
 
-def _project_bucket(project_id: Optional[str]) -> str:
-    return str(project_id or "default")
+async def _proxy_management_required_json(
+    method: str,
+    path_candidates: List[str],
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    payload: Optional[Dict[str, Any]] = None,
+    unavailable_detail: str = "management_service_unavailable",
+) -> Any:
+    response = await _proxy_management_response(method, path_candidates, params=params, payload=payload)
+    if response is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=unavailable_detail)
+    if response.status_code >= 400:
+        detail: Any
+        try:
+            detail = response.json().get("detail")
+        except ValueError:
+            detail = response.text[:300] or unavailable_detail
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    try:
+        return response.json()
+    except ValueError:
+        return None
+
+
+async def _get_owned_hitl_task(
+    task_id: str,
+    current_user: User,
+    db: Session,
+) -> Dict[str, Any]:
+    data = await _proxy_management_required_json(
+        "GET",
+        [f"/api/v1/hitl/tasks/{task_id}", f"/api/hitl/tasks/{task_id}"],
+        unavailable_detail="hitl_task_unavailable",
+    )
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="hitl_task_invalid_response")
+
+    project_id = str(data.get("project_id") or data.get("projectId") or "")
+    if not project_id:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="hitl_task_missing_project")
+    _get_owned_project(project_id, current_user, db, not_found_detail="hitl_task_not_found")
+    return data
 
 
 def _normalize_domain(url: str) -> str:
@@ -281,92 +747,6 @@ async def _analyze_backlinks_live(url: str) -> List[Dict[str, Any]]:
             break
 
     return rows
-
-
-def _keyword_variants(keyword: str) -> List[str]:
-    base = " ".join(keyword.strip().lower().split())
-    if not base:
-        return []
-
-    variants = [
-        base,
-        f"{base} цена",
-        f"{base} отзывы",
-        f"{base} для бизнеса",
-        f"{base} под ключ",
-        f"как выбрать {base}",
-        f"лучший {base}",
-        f"{base} сравнение",
-        f"{base} примеры",
-        f"{base} услуги",
-    ]
-    unique: List[str] = []
-    for item in variants:
-        if item not in unique:
-            unique.append(item)
-    return unique
-
-
-def _estimate_keyword_metrics(keyword: str, index: int) -> Dict[str, Any]:
-    token_count = max(1, len(keyword.split()))
-    volume = max(40, 1800 - (index * 170) - ((token_count - 1) * 130))
-    difficulty = max(18, min(82, 28 + len(keyword) + (index * 4)))
-    cpc = round(max(0.2, min(9.5, 0.35 * token_count + index * 0.22 + len(keyword) / 20.0)), 2)
-    position = max(1, min(50, 8 + index * 3 + token_count))
-    change = 2 - index
-    return {
-        "volume": volume,
-        "difficulty": float(difficulty),
-        "cpc": cpc,
-        "position": position,
-        "change": change,
-    }
-
-
-def _analyze_content_payload(content: str, keyword: str = "") -> Dict[str, Any]:
-    words = [w for w in re.findall(r"\b[\w-]+\b", content, flags=re.UNICODE) if w.strip()]
-    word_count = len(words)
-    lowered = content.lower()
-    normalized_keyword = keyword.strip().lower()
-    keyword_density = 0.0
-    if normalized_keyword and word_count:
-        keyword_density = (lowered.count(normalized_keyword) / max(word_count, 1)) * 100.0
-
-    unique_ratio = 0.0 if word_count == 0 else min(100.0, (len(set(w.lower() for w in words)) / word_count) * 140.0)
-    headings = len(re.findall(r"(?im)^\s*(#+|\b[hH][1-6]\b)", content))
-    paragraphs = len([p for p in re.split(r"\n\s*\n", content) if p.strip()])
-
-    issues: List[Dict[str, str]] = []
-    recommendations: List[Dict[str, str]] = []
-
-    if word_count < 300:
-        issues.append({"title": "Content length is too short", "description": "The page is below the recommended baseline for a useful SEO landing page."})
-        recommendations.append({"title": "Expand topical depth", "description": "Add sections, comparisons, FAQs, or examples that match user intent."})
-    if normalized_keyword and keyword_density < 0.8:
-        issues.append({"title": "Low keyword coverage", "description": "The target keyword appears too rarely in the text."})
-        recommendations.append({"title": "Improve keyword distribution", "description": "Use the keyword naturally in title, intro, subheadings, and conclusion."})
-    if headings < 2:
-        issues.append({"title": "Weak structure", "description": "The text has too few visible structural sections."})
-        recommendations.append({"title": "Add subheadings", "description": "Split the text into scannable blocks with descriptive H2 or H3 sections."})
-    if paragraphs < 3:
-        recommendations.append({"title": "Improve readability", "description": "Break long text walls into shorter paragraphs and bullet-ready sections."})
-
-    score = 40.0
-    score += min(25.0, word_count / 25.0)
-    score += min(12.0, keyword_density * 8.0)
-    score += min(10.0, headings * 2.5)
-    score += min(13.0, unique_ratio / 8.0)
-    score -= len(issues) * 6.0
-    score = max(0, min(100, int(round(score))))
-
-    return {
-        "score": score,
-        "wordCount": word_count,
-        "keywordDensity": round(keyword_density, 2),
-        "uniqueness": int(round(unique_ratio)),
-        "recommendations": recommendations,
-        "issues": issues,
-    }
 
 
 @router.post("/auth/register")
@@ -474,53 +854,57 @@ async def logout(_: User = Depends(get_current_user)):
 
 @router.get("/dashboard/stats")
 async def get_dashboard_stats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    projects = db.query(Project).filter(Project.owner_id == current_user.id).all()
-    recent_projects = [_serialize_project(project) for project in sorted(projects, key=lambda p: p.created_at or datetime.min, reverse=True)[:5]]
-    project_ids = {str(project.id) for project in projects}
+    projects = _get_owned_projects(current_user, db)
+    recent_projects = [_serialize_project_private(project, db) for project in projects[:5]]
+    project_ids = _project_ids(projects)
 
-    audit_rows = db.query(PublicAuditResult).order_by(PublicAuditResult.created_at.desc()).limit(50).all()
-    recent_audits = []
-    active_audits = 0
-    for row in audit_rows:
-        audit_item = _serialize_audit_row(row)
-        status_value = audit_item["status"]
-        if status_value in {"queued", "running", "pending", "processing", "in_progress"}:
-            active_audits += 1
-        recent_audits.append(
-            {
-                "id": audit_item["id"],
-                "url": audit_item["url"],
-                "score": audit_item["score"],
-                "status": "completed" if status_value not in {"queued", "running", "pending", "processing", "in_progress", "failed"} else status_value,
-            }
-        )
-        if len(recent_audits) >= 5:
-            break
+    recent_audit_items = _collect_recent_audits(db, project_ids, limit=50)
+    active_audits = sum(1 for item in recent_audit_items if _active_status(str(item.get("status") or "")))
+    recent_audits = [
+        {
+            "id": item["id"],
+            "url": item["url"],
+            "score": item["score"],
+            "status": "completed" if item["status"] not in {"queued", "running", "pending", "processing", "in_progress", "failed"} else item["status"],
+        }
+        for item in recent_audit_items[:5]
+    ]
 
     pending_tasks = 0
     completed_tasks = 0
     for project_id in project_ids:
-        pending_data = await _proxy_management("GET", ["/api/v1/tasks"], params={"project_id": project_id, "status": "pending", "limit": 200})
-        completed_data = await _proxy_management("GET", ["/api/v1/tasks"], params={"project_id": project_id, "status": "completed", "limit": 200})
+        pending_data = await _proxy_management_required_json(
+            "GET",
+            ["/api/v1/tasks"],
+            params={"project_id": project_id, "status": "pending", "limit": 200},
+            unavailable_detail="management_tasks_unavailable",
+        )
+        completed_data = await _proxy_management_required_json(
+            "GET",
+            ["/api/v1/tasks"],
+            params={"project_id": project_id, "status": "completed", "limit": 200},
+            unavailable_detail="management_tasks_unavailable",
+        )
         pending_tasks += len(pending_data or [])
         completed_tasks += len(completed_data or [])
 
-    backlink_count = sum(len(_backlink_snapshots.get(project_id, [])) for project_id in project_ids)
-    content_scores = [
-        item.get("score", 0)
+    backlink_count = _count_project_backlinks(db, project_ids)
+    tracked_keywords = _load_tracked_keywords(db, project_ids)
+    latest_scores = [
+        latest_score.ff_score
         for project_id in project_ids
-        for item in _content_history.get(project_id, [])
-        if isinstance(item.get("score"), (int, float))
+        if (latest_score := _latest_ff_score(db, project_id)) is not None
     ]
+    avg_ff_score = (sum(latest_scores) / len(latest_scores)) if latest_scores else 0.0
 
     return {
         "totalProjects": len(projects),
         "activeAudits": active_audits,
-        "totalKeywords": sum(len(_tracked_keywords.get(str(project.id), [])) for project in projects),
+        "totalKeywords": len(tracked_keywords),
         "totalBacklinks": backlink_count,
         "pendingTasks": pending_tasks,
         "completedTasks": completed_tasks,
-        "avgFFScore": round(sum(content_scores) / len(content_scores), 2) if content_scores else 0,
+        "avgFFScore": round(avg_ff_score, 2),
         "recentProjects": recent_projects,
         "recentAudits": recent_audits,
     }
@@ -540,7 +924,7 @@ async def get_dashboard_alias(current_user: User = Depends(get_current_user), db
 @router.get("/projects")
 async def list_projects(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     projects = db.query(Project).filter(Project.owner_id == current_user.id).order_by(Project.created_at.desc()).all()
-    return [_serialize_project(project) for project in projects]
+    return [_serialize_project_private(project, db) for project in projects]
 
 
 @router.post("/projects")
@@ -563,15 +947,13 @@ async def create_project_endpoint(
     db.add(project)
     db.commit()
     db.refresh(project)
-    return _serialize_project(project)
+    return _serialize_project_private(project, db)
 
 
 @router.get("/projects/{project_id}")
 async def get_project(project_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    return _serialize_project(project)
+    project = _get_owned_project(project_id, current_user, db)
+    return _serialize_project_private(project, db)
 
 
 @router.delete("/projects/{project_id}")
@@ -588,60 +970,46 @@ async def delete_project(project_id: str, current_user: User = Depends(get_curre
 @router.get("/audit/history")
 async def get_audit_history(
     projectId: Optional[str] = None,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    rows = db.query(PublicAuditResult).order_by(PublicAuditResult.created_at.desc()).limit(50).all()
-
-    items = []
-    for row in rows:
-        audit_item = _serialize_audit_row(row)
-        findings = getattr(row, "findings", None)
-        legacy_results = getattr(row, "results", None)
-        issues = findings if isinstance(findings, list) else None
-        if issues is None and isinstance(legacy_results, dict):
-            issues = legacy_results.get("issues")
-        details = legacy_results.get("details") if isinstance(legacy_results, dict) else None
-        items.append(
-            {
-                "id": audit_item["id"],
-                "uid": audit_item["id"],
-                "url": audit_item["url"],
-                "status": audit_item["status"],
-                "score": audit_item["score"],
-                "createdAt": row.created_at.isoformat() if row.created_at else None,
-                "issues": issues,
-                "details": details,
-            }
-        )
-
     if projectId:
-        # History rows are not linked to project in current schema.
-        return items
+        project_ids = [str(_get_owned_project(projectId, current_user, db).id)]
+    else:
+        project_ids = _project_ids(_get_owned_projects(current_user, db))
 
-    return items
+    return _collect_recent_audits(db, project_ids, limit=50)
 
 
 @router.get("/hitl/tasks")
 async def get_hitl_tasks(
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
     status_filter: Optional[str] = "pending",
     limit: int = 50,
 ):
-    data = await _proxy_management(
-        "GET",
-        ["/api/v1/hitl/tasks", "/api/hitl/tasks"],
-        params={"status": status_filter, "limit": limit, "user_id": str(current_user.id)},
-    )
-    return data or []
+    items: List[Dict[str, Any]] = []
+    project_ids = _project_ids(_get_owned_projects(current_user, db))
+    for project_id in project_ids:
+        data = await _proxy_management_required_json(
+            "GET",
+            ["/api/v1/hitl/tasks", "/api/hitl/tasks"],
+            params={"status": status_filter, "limit": limit, "project_id": project_id},
+            unavailable_detail="hitl_tasks_unavailable",
+        )
+        if isinstance(data, list):
+            items.extend(item for item in data if isinstance(item, dict))
+
+    return sorted(items, key=lambda item: item.get("created_at") or item.get("createdAt") or "", reverse=True)[:limit]
 
 
 @router.get("/hitl/tasks/{task_id}")
-async def get_hitl_task_details(task_id: str, _: User = Depends(get_current_user)):
-    data = await _proxy_management("GET", [f"/api/v1/hitl/tasks/{task_id}", f"/api/hitl/tasks/{task_id}"])
-    if data is None:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return data
+async def get_hitl_task_details(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return await _get_owned_hitl_task(task_id, current_user, db)
 
 
 @router.post("/hitl/tasks/{task_id}/approve")
@@ -649,7 +1017,9 @@ async def approve_task(
     task_id: str,
     request: ApprovalRequest,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
+    await _get_owned_hitl_task(task_id, current_user, db)
     correlation_id = str(uuid.uuid4())
     payload = {"user_id": str(current_user.id), "comment": request.comment}
     response = await _proxy_management_response(
@@ -674,7 +1044,6 @@ async def approve_task(
     if not project_id or not approved_at:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="hitl_approval_missing_context")
 
-    event_published = True
     try:
         await publish_hitl_approved_event(
             task_id=task_id,
@@ -685,17 +1054,17 @@ async def approve_task(
             notes=request.comment,
             correlation_id=correlation_id,
         )
-    except Exception:
-        event_published = False
+    except Exception as exc:
         logger.error(
             "HITL approval succeeded but event publication failed",
             extra={"task_id": task_id, "project_id": project_id, "correlation_id": correlation_id},
             exc_info=True,
         )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="hitl_approval_event_unavailable") from exc
 
     return {
         **data,
-        "event_published": event_published,
+        "event_published": True,
         "correlation_id": correlation_id,
     }
 
@@ -705,7 +1074,9 @@ async def reject_task(
     task_id: str,
     request: ApprovalRequest,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
+    await _get_owned_hitl_task(task_id, current_user, db)
     payload = {"user_id": str(current_user.id), "comment": request.comment}
     response = await _proxy_management_response(
         "POST",
@@ -726,125 +1097,209 @@ async def reject_task(
 
 
 @router.post("/hitl/approve/{task_id}")
-async def approve_task_legacy(task_id: str, request: ApprovalRequest, current_user: User = Depends(get_current_user)):
-    return await approve_task(task_id=task_id, request=request, current_user=current_user)
+async def approve_task_legacy(
+    task_id: str,
+    request: ApprovalRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return await approve_task(task_id=task_id, request=request, current_user=current_user, db=db)
 
 
 @router.post("/hitl/reject/{task_id}")
-async def reject_task_legacy(task_id: str, request: ApprovalRequest, current_user: User = Depends(get_current_user)):
-    return await reject_task(task_id=task_id, request=request, current_user=current_user)
+async def reject_task_legacy(
+    task_id: str,
+    request: ApprovalRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return await reject_task(task_id=task_id, request=request, current_user=current_user, db=db)
 
 
 @router.get("/backlinks")
-async def get_backlinks(projectId: Optional[str] = None, _: User = Depends(get_current_user)):
-    return _backlink_snapshots.get(_project_bucket(projectId), [])
+async def get_backlinks(
+    projectId: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if projectId:
+        project_ids = [str(_get_owned_project(projectId, current_user, db).id)]
+    else:
+        project_ids = _project_ids(_get_owned_projects(current_user, db))
+    return _load_project_backlinks(db, project_ids)
 
 
 @router.get("/projects/{project_id}/backlinks")
-async def get_project_backlinks(project_id: str, _: User = Depends(get_current_user)):
-    return _backlink_snapshots.get(_project_bucket(project_id), [])
+async def get_project_backlinks(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = _get_owned_project(project_id, current_user, db)
+    return _load_project_backlinks(db, [str(project.id)])
 
 
 @router.post("/backlinks/analyze")
-async def analyze_backlink(request: AnalyzeBacklinkRequest, _: User = Depends(get_current_user)):
+async def analyze_backlink(
+    request: AnalyzeBacklinkRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = _resolve_project_for_private_flow(request.projectId, current_user, db)
     try:
         rows = await _analyze_backlinks_live(request.url)
     except Exception as exc:
-        logger.warning("Backlink analysis fallback triggered", extra={"url": request.url, "error": str(exc)})
-        rows = []
+        logger.warning("Backlink live analysis failed", extra={"url": request.url, "project_id": str(project.id), "error": str(exc)})
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="backlink_analysis_unavailable") from exc
 
-    if not rows:
-        host = _normalize_domain(request.url) or request.url
-        rows = [
-            {
-                "id": str(uuid.uuid4()),
-                "sourceUrl": f"https://{host}/partners",
-                "targetUrl": request.url,
-                "type": "nofollow",
-                "domainAuthority": 25,
-                "anchorText": host,
-                "discoveredAt": datetime.utcnow().isoformat(),
-            }
-        ]
-
-    bucket = _project_bucket(request.projectId)
-    _backlink_snapshots[bucket] = rows
     return rows
 
 
 @router.get("/content/optimized")
-async def get_optimized_content(projectId: Optional[str] = None, _: User = Depends(get_current_user)):
-    return _content_history.get(_project_bucket(projectId), [])
+async def get_optimized_content(
+    projectId: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if projectId:
+        project_ids = [str(_get_owned_project(projectId, current_user, db).id)]
+    else:
+        project_ids = _project_ids(_get_owned_projects(current_user, db))
+    return _load_content_history(db, project_ids)
 
 
 @router.get("/projects/{project_id}/content/optimized")
-async def get_project_optimized_content(project_id: str, _: User = Depends(get_current_user)):
-    return _content_history.get(_project_bucket(project_id), [])
+async def get_project_optimized_content(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = _get_owned_project(project_id, current_user, db)
+    return _load_content_history(db, [str(project.id)])
 
 
 @router.post("/content/analyze")
-async def analyze_content(request: AnalyzeContentRequest, _: User = Depends(get_current_user)):
-    result = _analyze_content_payload(request.content, request.keyword or "")
-    bucket = _project_bucket(request.projectId)
-    _content_history.setdefault(bucket, []).insert(
-        0,
-        {
-            "id": str(uuid.uuid4()),
-            "url": request.url or "",
-            "keyword": request.keyword or "",
-            "score": result["score"],
-            "analyzedAt": datetime.utcnow().isoformat(),
+async def analyze_content(
+    request: AnalyzeContentRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = _resolve_project_for_private_flow(request.projectId, current_user, db)
+    root_url = request.url or project.url
+    keyword = request.keyword or ""
+    response = await _proxy_service(
+        settings.SEMANTIC_SERVICE_URL,
+        "POST",
+        "/semantic/analyze",
+        payload={
+            "project_id": str(project.id),
+            "root_url": root_url,
+            "mode": "private_content_review",
+            "content_text": request.content,
+            "keywords": [keyword] if keyword else [],
         },
+        timeout=30.0,
     )
-    _content_history[bucket] = _content_history[bucket][:30]
+    analysis_payload = response.json()
+    result = _semantic_analysis_to_content_result(analysis_payload, request.content, keyword)
+
+    db.add(
+        SemanticEvent(
+            id=str(uuid.uuid4()),
+            event_type="content_analyzed",
+            project_id=str(project.id),
+            event_data={
+                "analysis_id": analysis_payload.get("analysis_id"),
+                "url": root_url,
+                "keyword": keyword,
+                "score": result["score"],
+                "source": "semantic_service",
+            },
+        )
+    )
+    db.commit()
     return result
 
 
 @router.post("/keywords/search")
-async def search_keywords(request: KeywordSearchRequest, _: User = Depends(get_current_user)):
+async def search_keywords(
+    request: KeywordSearchRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = _resolve_project_for_private_flow(request.projectId, current_user, db)
     keyword = request.keyword.strip()
     if not keyword:
         return []
-    variants = _keyword_variants(keyword)
-    result = []
-    for index, item in enumerate(variants):
-        metrics = _estimate_keyword_metrics(item, index)
-        result.append({"id": str(uuid.uuid4()), "keyword": item, **metrics})
-    return result
+    return _search_keywords_from_gsc(db, str(project.id), keyword)
 
 
 @router.get("/keywords/tracked")
-async def get_tracked_keywords(projectId: Optional[str] = None, _: User = Depends(get_current_user)):
-    project_key = _project_bucket(projectId)
-    return _tracked_keywords.get(project_key, [])
+async def get_tracked_keywords(
+    projectId: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if projectId:
+        project_ids = [str(_get_owned_project(projectId, current_user, db).id)]
+    else:
+        project_ids = _project_ids(_get_owned_projects(current_user, db))
+    return _load_tracked_keywords(db, project_ids)
 
 
 @router.post("/keywords/tracked")
-async def add_tracked_keyword(request: TrackKeywordRequest, _: User = Depends(get_current_user)):
-    project_key = _project_bucket(request.projectId)
-    metrics = _estimate_keyword_metrics(request.keyword, len(_tracked_keywords.get(project_key, [])))
+async def add_tracked_keyword(
+    request: TrackKeywordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = _resolve_project_for_private_flow(request.projectId, current_user, db)
+    metrics = _lookup_keyword_metrics_from_gsc(db, str(project.id), request.keyword)
     record = {
         "id": str(uuid.uuid4()),
         "keyword": request.keyword,
-        "volume": request.volume if request.volume is not None else metrics["volume"],
-        "difficulty": request.difficulty if request.difficulty is not None else metrics["difficulty"],
-        "cpc": request.cpc if request.cpc is not None else metrics["cpc"],
-        "position": metrics["position"],
-        "change": metrics["change"],
-        "projectId": request.projectId,
+        "volume": request.volume if request.volume is not None else metrics.get("volume"),
+        "difficulty": request.difficulty,
+        "cpc": request.cpc,
+        "position": metrics.get("position"),
+        "change": None,
+        "projectId": str(project.id),
         "createdAt": datetime.utcnow().isoformat(),
+        "source": "semantic_events",
     }
-    _tracked_keywords.setdefault(project_key, []).insert(0, record)
+    db.add(
+        SemanticEvent(
+            id=str(uuid.uuid4()),
+            event_type="keyword_tracked",
+            project_id=str(project.id),
+            event_data=record,
+        )
+    )
+    db.commit()
     return record
 
 
 @router.delete("/keywords/tracked/{keyword_id}")
-async def remove_tracked_keyword(keyword_id: str, _: User = Depends(get_current_user)):
-    for project_key, rows in _tracked_keywords.items():
-        filtered = [row for row in rows if str(row.get("id")) != str(keyword_id)]
-        if len(filtered) != len(rows):
-            _tracked_keywords[project_key] = filtered
-            break
+async def remove_tracked_keyword(keyword_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    project_ids = _project_ids(_get_owned_projects(current_user, db))
+    tracked = _load_tracked_keywords(db, project_ids)
+    record = next((item for item in tracked if str(item.get("id")) == str(keyword_id)), None)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="keyword_not_found")
+
+    db.add(
+        SemanticEvent(
+            id=str(uuid.uuid4()),
+            event_type="keyword_untracked",
+            project_id=str(record.get("projectId")),
+            event_data={
+                "keyword_id": keyword_id,
+                "keyword": record.get("keyword"),
+                "source": "api_gateway",
+            },
+        )
+    )
+    db.commit()
     return {"success": True}
 
 

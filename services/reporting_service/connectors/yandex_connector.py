@@ -1,15 +1,28 @@
-from datetime import date
+﻿from datetime import date
 from typing import Any
 
 import httpx
 
-from services.reporting_service.config import settings
+from services.project_integrations.runtime import load_project_integration
 
 
-def fetch_yandex_summary() -> dict:
-    if not settings.yandex_token or not settings.yandex_user_id or not settings.yandex_host_id:
-        return {"available": False, "reason": "yandex_credentials_missing"}
-    return {"available": True, "host_id": settings.yandex_host_id}
+def _load_integration(project_id: str) -> dict[str, Any]:
+    return load_project_integration(project_id, "yandex")
+
+
+def fetch_yandex_summary(project_id: str) -> dict:
+    try:
+        integration = _load_integration(project_id)
+    except Exception as exc:
+        return {"available": False, "reason": str(exc)}
+    host_id = str(integration.get("host_id") or "").strip()
+    if not host_id:
+        return {"available": False, "reason": "yandex_host_id_missing"}
+    return {
+        "available": True,
+        "host_id": host_id,
+        "user_id": integration.get("user_id"),
+    }
 
 
 def _degraded_result(reason: str, start_date: date, end_date: date) -> dict[str, Any]:
@@ -67,18 +80,21 @@ def _metric(payload: dict[str, Any], *keys: str) -> float:
 
 
 def fetch_yandex_rows(project_id: str, start_date: date, end_date: date, row_limit: int = 500) -> dict[str, Any]:
-    if not settings.yandex_token or not settings.yandex_user_id or not settings.yandex_host_id:
-        return _degraded_result("yandex_credentials_missing", start_date, end_date)
-
-    url = (
-        f"https://api.webmaster.yandex.net/v4/user/{settings.yandex_user_id}"
-        f"/hosts/{settings.yandex_host_id}/search-queries/all/history"
-    )
     try:
+        integration = _load_integration(project_id)
+        token = str(integration.get("token") or "").strip()
+        user_id = str(integration.get("user_id") or "").strip()
+        host_id = str(integration.get("host_id") or "").strip()
+        if not token or not user_id or not host_id:
+            raise ValueError("yandex_credentials_missing")
+        url = (
+            f"https://api.webmaster.yandex.net/v4/user/{user_id}"
+            f"/hosts/{host_id}/search-queries/all/history"
+        )
         response = httpx.get(
             url,
             params={"date_from": start_date.isoformat(), "date_to": end_date.isoformat()},
-            headers={"Authorization": f"OAuth {settings.yandex_token}"},
+            headers={"Authorization": f"OAuth {token}"},
             timeout=20.0,
         )
         response.raise_for_status()

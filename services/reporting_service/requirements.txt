@@ -21,3 +21,6 @@ google-auth-oauthlib==1.2.1
 pytest==8.3.3
 
 greenlet==3.1.1
+
+cryptography==41.0.7
+psycopg2-binary==2.9.9

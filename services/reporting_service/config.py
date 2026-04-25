@@ -1,5 +1,5 @@
+﻿from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -11,16 +11,6 @@ class Settings(BaseSettings):
     auto_create_tables: bool = False
     rabbitmq_url: str | None = None
     redis_url: str | None = "redis://redis:6379/0"
-
-    gsc_credentials_json: str | None = None
-    gsc_token_json: str | None = None
-
-    ga4_property_id: str | None = None
-    ga4_credentials_json: str | None = None
-
-    yandex_token: str | None = None
-    yandex_user_id: str | None = None
-    yandex_host_id: str | None = None
 
 
 settings = Settings()

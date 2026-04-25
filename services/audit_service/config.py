@@ -1,5 +1,5 @@
+﻿from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -12,9 +12,6 @@ class Settings(BaseSettings):
     redis_url: str | None = Field(default="redis://redis:6379/0")
 
     psi_api_key: str | None = Field(default=None)
-
-    gsc_credentials_json: str | None = Field(default=None)
-    gsc_token_json: str | None = Field(default=None)
 
     user_agent: str = Field(default="SEO-Master-AuditBot/1.0")
     default_timeout_s: float = Field(default=10.0)

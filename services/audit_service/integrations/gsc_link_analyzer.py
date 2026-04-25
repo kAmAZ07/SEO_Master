@@ -1,29 +1,34 @@
-import json
-from datetime import date, timedelta
+﻿from datetime import date, timedelta
+from typing import Any
 
-from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-from services.audit_service.config import settings
+from services.project_integrations.google_auth import build_google_credentials
+from services.project_integrations.runtime import load_project_integration
 
 
-def _load_credentials() -> Credentials:
-    if not settings.gsc_credentials_json or not settings.gsc_token_json:
+def _load_integration(project_id: str) -> dict[str, Any]:
+    if not project_id:
+        raise ValueError("gsc_project_id_missing")
+    return load_project_integration(project_id, "gsc")
+
+
+def analyze_links(project_id: str, property_url: str | None = None, days: int = 28) -> dict[str, Any]:
+    integration = _load_integration(project_id)
+    resolved_property_url = str(integration.get("property_url") or property_url or "").strip()
+    if not resolved_property_url:
+        raise ValueError("gsc_property_url_missing")
+
+    credentials_payload = dict(integration.get("credentials") or {})
+    token_payload = integration.get("token") if isinstance(integration.get("token"), dict) else None
+    if not credentials_payload:
         raise ValueError("gsc_credentials_missing")
-    info = json.loads(settings.gsc_credentials_json)
-    token = json.loads(settings.gsc_token_json)
-    return Credentials(
-        token=token.get("token"),
-        refresh_token=token.get("refresh_token"),
-        token_uri=token.get("token_uri"),
-        client_id=info.get("installed", {}).get("client_id") or info.get("web", {}).get("client_id"),
-        client_secret=info.get("installed", {}).get("client_secret") or info.get("web", {}).get("client_secret"),
+
+    creds = build_google_credentials(
+        credentials_payload,
+        token_payload,
         scopes=["https://www.googleapis.com/auth/webmasters.readonly"],
     )
-
-
-def analyze_links(property_url: str, days: int = 28) -> dict:
-    creds = _load_credentials()
     service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
     end = date.today()
     start = end - timedelta(days=days)
@@ -33,10 +38,16 @@ def analyze_links(property_url: str, days: int = 28) -> dict:
         "dimensions": ["linkingSite"],
         "rowLimit": 50,
     }
-    resp = service.searchanalytics().query(siteUrl=property_url, body=body).execute()
+    resp = service.searchanalytics().query(siteUrl=resolved_property_url, body=body).execute()
     rows = resp.get("rows", []) or []
-    top = []
-    for r in rows:
-        keys = r.get("keys", []) or []
-        top.append({"linking_site": keys[0] if keys else None, "clicks": r.get("clicks"), "impressions": r.get("impressions")})
-    return {"property_url": property_url, "range_days": days, "top_linking_sites": top}
+    top: list[dict[str, Any]] = []
+    for row in rows:
+        keys = row.get("keys", []) or []
+        top.append(
+            {
+                "linking_site": keys[0] if keys else None,
+                "clicks": row.get("clicks"),
+                "impressions": row.get("impressions"),
+            }
+        )
+    return {"property_url": resolved_property_url, "range_days": days, "top_linking_sites": top}

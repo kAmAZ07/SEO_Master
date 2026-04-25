@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import ipaddress
 import socket
 from typing import Type
@@ -500,7 +500,7 @@ async def _run_audit_pipeline(
         try:
             from services.audit_service.integrations.gsc_link_analyzer import analyze_links
 
-            backlink_summary = await asyncio.to_thread(analyze_links, root_url)
+            backlink_summary = await asyncio.to_thread(analyze_links, row.project_id, root_url)
             summary["backlinks"] = backlink_summary
         except Exception as exc:
             findings.append({
@@ -562,3 +562,4 @@ async def run_full_audit_pipeline(audit_id: str) -> dict:
         row_cls=CrawlResult,
         include_external_data=True,
     )
+

@@ -70,6 +70,7 @@ services:
       AUDIT_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
       AUDIT_RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
       AUDIT_REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
+      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -118,6 +119,7 @@ services:
       REPORTING_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
       REPORTING_RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
       REPORTING_REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
+      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -264,6 +266,7 @@ services:
       REPORTING_SERVICE_URL: http://reporting-service:8003
       ENVIRONMENT: ${ENVIRONMENT:-production}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -291,6 +294,7 @@ services:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-change-me}
       ENVIRONMENT: ${ENVIRONMENT:-production}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:-}
       WORDPRESS_BASE_URL: ${WORDPRESS_BASE_URL:-}
       WORDPRESS_HMAC_SECRET: ${WORDPRESS_HMAC_SECRET:-}
       CLIENT_API_HMAC_KEYS_JSON: ${CLIENT_API_HMAC_KEYS_JSON:-}

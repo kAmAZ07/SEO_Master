@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+﻿import { useEffect } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import { loadProjectDetails } from '../store/slices/dashboardSlice'
@@ -13,13 +13,13 @@ type ProjectDetailTab = 'overview' | 'integrations'
 const projectTabs: Array<{ id: ProjectDetailTab; label: string; description: string }> = [
   {
     id: 'overview',
-    label: 'Обзор',
-    description: 'Детали проекта, быстрый доступ к SEO-инструментам и статус сайта.',
+    label: 'РћР±Р·РѕСЂ',
+    description: 'Р”РµС‚Р°Р»Рё РїСЂРѕРµРєС‚Р°, Р±С‹СЃС‚СЂС‹Р№ РґРѕСЃС‚СѓРї Рє SEO-РёРЅСЃС‚СЂСѓРјРµРЅС‚Р°Рј Рё СЃС‚Р°С‚СѓСЃ СЃР°Р№С‚Р°.',
   },
   {
     id: 'integrations',
-    label: 'Интеграции',
-    description: 'Per-project подключение Tilda и WordPress без global env credentials.',
+    label: 'РРЅС‚РµРіСЂР°С†РёРё',
+    description: 'Per-project connections for Tilda, WordPress, GSC, GA4, and Yandex without shared global credentials.',
   },
 ]
 
@@ -117,7 +117,7 @@ const ProjectDetail = () => {
         </div>
         <div className="flex flex-col gap-3 sm:flex-row">
           <Button type="button" variant="outline" onClick={() => handleSelectTab('integrations')}>
-            Интеграции
+            РРЅС‚РµРіСЂР°С†РёРё
           </Button>
           <Link to={`/audit?project=${currentProject.id}`}>
             <Button className="w-full sm:w-auto">Run audit</Button>
@@ -190,3 +190,4 @@ const ProjectDetail = () => {
 }
 
 export default ProjectDetail
+

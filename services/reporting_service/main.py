@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 from datetime import datetime, timezone
 from typing import Any
 from fastapi import FastAPI, HTTPException, Query
@@ -195,8 +195,8 @@ async def get_project_summary(project_id: str, root_url: str | None = None) -> d
     gsc_previous = None
     if resolved_root_url:
         try:
-            gsc_recent = await asyncio.to_thread(fetch_gsc_summary, resolved_root_url, 14, 0)
-            gsc_previous = await asyncio.to_thread(fetch_gsc_summary, resolved_root_url, 14, 14)
+            gsc_recent = await asyncio.to_thread(fetch_gsc_summary, project_id, resolved_root_url, 14, 0)
+            gsc_previous = await asyncio.to_thread(fetch_gsc_summary, project_id, resolved_root_url, 14, 14)
         except Exception:
             gsc_recent = None
             gsc_previous = None
@@ -317,3 +317,4 @@ async def _value_error_handler(_, exc: ValueError):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("services.reporting_service.main:app", host="0.0.0.0", port=settings.port, reload=False)
+

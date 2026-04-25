@@ -1,21 +1,43 @@
-import json
-from datetime import date
+﻿from datetime import date
 from typing import Any
 
-from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-from services.reporting_service.config import settings
+from services.project_integrations.google_auth import build_google_credentials
+from services.project_integrations.runtime import load_project_integration
 
 
-def fetch_ga4_summary() -> dict:
-    if not settings.ga4_property_id or not settings.ga4_credentials_json:
-        return {"available": False, "reason": "ga4_credentials_missing"}
+def _load_integration(project_id: str) -> dict[str, Any]:
+    return load_project_integration(project_id, "ga4")
+
+
+def fetch_ga4_summary(project_id: str) -> dict:
     try:
-        json.loads(settings.ga4_credentials_json)
-    except Exception:
-        return {"available": False, "reason": "ga4_credentials_invalid"}
-    return {"available": True, "property_id": settings.ga4_property_id}
+        integration = _load_integration(project_id)
+    except Exception as exc:
+        return {"available": False, "reason": str(exc)}
+    property_id = str(integration.get("property_id") or "").strip()
+    if not property_id:
+        return {"available": False, "reason": "ga4_property_id_missing"}
+    return {
+        "available": True,
+        "property_id": property_id,
+        "auth_mode": integration.get("auth_mode"),
+        "account_identifier": integration.get("account_identifier"),
+    }
+
+
+def _load_credentials(project_id: str):
+    integration = _load_integration(project_id)
+    credentials_payload = dict(integration.get("credentials") or {})
+    token_payload = integration.get("token") if isinstance(integration.get("token"), dict) else None
+    if not credentials_payload:
+        raise ValueError("ga4_credentials_missing")
+    return build_google_credentials(
+        credentials_payload,
+        token_payload,
+        scopes=["https://www.googleapis.com/auth/analytics.readonly"],
+    )
 
 
 def _degraded_result(reason: str, start_date: date, end_date: date) -> dict[str, Any]:
@@ -80,16 +102,12 @@ def _metric_value(row: dict[str, Any], index: int, default: float = 0.0) -> floa
 
 
 def fetch_ga4_rows(project_id: str, start_date: date, end_date: date, row_limit: int = 500) -> dict[str, Any]:
-    if not settings.ga4_property_id or not settings.ga4_credentials_json:
-        return _degraded_result("ga4_credentials_missing", start_date, end_date)
-
     try:
-        credentials_info = json.loads(settings.ga4_credentials_json)
-        creds = service_account.Credentials.from_service_account_info(
-            credentials_info,
-            scopes=["https://www.googleapis.com/auth/analytics.readonly"],
-        )
-        property_name = settings.ga4_property_id
+        integration = _load_integration(project_id)
+        property_name = str(integration.get("property_id") or "").strip()
+        if not property_name:
+            raise ValueError("ga4_property_id_missing")
+        creds = _load_credentials(project_id)
         if not property_name.startswith("properties/"):
             property_name = f"properties/{property_name}"
         service = build("analyticsdata", "v1beta", credentials=creds, cache_discovery=False)

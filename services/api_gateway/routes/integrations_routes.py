@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+﻿from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -36,6 +36,33 @@ class WordpressIntegrationRequest(BaseModel):
         allow_population_by_field_name = True
 
 
+class GSCIntegrationRequest(BaseModel):
+    property_url: str = Field(..., alias="propertyUrl")
+    credentials_json: str = Field(..., alias="credentialsJson")
+    token_json: Optional[str] = Field(default=None, alias="tokenJson")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class GA4IntegrationRequest(BaseModel):
+    property_id: str = Field(..., alias="propertyId")
+    credentials_json: str = Field(..., alias="credentialsJson")
+    token_json: Optional[str] = Field(default=None, alias="tokenJson")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class YandexIntegrationRequest(BaseModel):
+    token: str
+    user_id: str = Field(..., alias="userId")
+    host_id: str = Field(..., alias="hostId")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
 class IntegrationResponse(BaseModel):
     platform: str
     connected: bool
@@ -47,6 +74,8 @@ class IntegrationResponse(BaseModel):
     site_url: Optional[str] = None
     page_mappings_count: Optional[int] = None
     plugin_health: Optional[Dict[str, Any]] = None
+    account_identifier: Optional[str] = None
+    auth_mode: Optional[str] = None
 
 
 class IntegrationsListResponse(BaseModel):
@@ -132,6 +161,78 @@ async def save_wordpress_integration(
         raise _map_integration_error(exc) from exc
 
     logger.info("Saved WordPress integration", extra={"project_id": project_id, "platform": "wordpress"})
+    return IntegrationResponse(**integration)
+
+
+@router.post("/projects/{project_id}/integrations/gsc", response_model=IntegrationResponse)
+async def save_gsc_integration(
+    project_id: str,
+    payload: GSCIntegrationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> IntegrationResponse:
+    _get_owned_project(db, project_id, str(current_user.id))
+
+    try:
+        integration = await service.save_gsc_credentials(
+            db,
+            project_id,
+            property_url=payload.property_url,
+            credentials_json=payload.credentials_json,
+            token_json=payload.token_json,
+        )
+    except Exception as exc:
+        raise _map_integration_error(exc) from exc
+
+    logger.info("Saved GSC integration", extra={"project_id": project_id, "platform": "gsc"})
+    return IntegrationResponse(**integration)
+
+
+@router.post("/projects/{project_id}/integrations/ga4", response_model=IntegrationResponse)
+async def save_ga4_integration(
+    project_id: str,
+    payload: GA4IntegrationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> IntegrationResponse:
+    _get_owned_project(db, project_id, str(current_user.id))
+
+    try:
+        integration = await service.save_ga4_credentials(
+            db,
+            project_id,
+            property_id=payload.property_id,
+            credentials_json=payload.credentials_json,
+            token_json=payload.token_json,
+        )
+    except Exception as exc:
+        raise _map_integration_error(exc) from exc
+
+    logger.info("Saved GA4 integration", extra={"project_id": project_id, "platform": "ga4"})
+    return IntegrationResponse(**integration)
+
+
+@router.post("/projects/{project_id}/integrations/yandex", response_model=IntegrationResponse)
+async def save_yandex_integration(
+    project_id: str,
+    payload: YandexIntegrationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> IntegrationResponse:
+    _get_owned_project(db, project_id, str(current_user.id))
+
+    try:
+        integration = await service.save_yandex_credentials(
+            db,
+            project_id,
+            token=payload.token,
+            user_id=payload.user_id,
+            host_id=payload.host_id,
+        )
+    except Exception as exc:
+        raise _map_integration_error(exc) from exc
+
+    logger.info("Saved Yandex integration", extra={"project_id": project_id, "platform": "yandex"})
     return IntegrationResponse(**integration)
 
 

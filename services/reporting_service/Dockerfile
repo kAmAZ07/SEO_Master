@@ -13,5 +13,6 @@ COPY services/reporting_service/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY services/reporting_service /app/services/reporting_service
+COPY services/project_integrations /app/services/project_integrations
 
 CMD ["uvicorn", "services.reporting_service.main:app", "--host", "0.0.0.0", "--port", "8003"]

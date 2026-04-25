@@ -15,5 +15,6 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 RUN python -m playwright install chromium
 
 COPY services/audit_service /app/services/audit_service
+COPY services/project_integrations /app/services/project_integrations
 
 CMD ["uvicorn", "services.audit_service.main:app", "--host", "0.0.0.0", "--port", "8001"]

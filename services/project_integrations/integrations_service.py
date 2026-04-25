@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
+import json
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -20,7 +21,7 @@ class IntegrationNotFoundError(LookupError):
 
 
 class IntegrationsService:
-    SUPPORTED_PLATFORMS = ("tilda", "wordpress")
+    SUPPORTED_PLATFORMS = ("tilda", "wordpress", "gsc", "ga4", "yandex")
 
     def __init__(self, vault: CredentialsVault | None = None) -> None:
         self._vault = vault
@@ -104,6 +105,102 @@ class IntegrationsService:
         )
         return self.serialize_integration(integration)
 
+    async def save_gsc_credentials(
+        self,
+        db: Session,
+        project_id: str,
+        *,
+        property_url: str,
+        credentials_json: str,
+        token_json: str | None = None,
+    ) -> Dict[str, Any]:
+        normalized_property_url = self._normalize_gsc_property_url(property_url)
+        credentials = self._parse_json_payload(credentials_json, "GSC credentials_json")
+        token = self._parse_optional_json_payload(token_json, "GSC token_json")
+        auth_mode = self._detect_google_auth_mode(credentials, token, platform="gsc")
+        account_identifier = self._extract_google_account_identifier(credentials)
+
+        integration = self._upsert_integration(
+            db=db,
+            project_id=str(project_id),
+            platform="gsc",
+            credentials={
+                "property_url": normalized_property_url,
+                "credentials": credentials,
+                "token": token,
+            },
+            hint_source=normalized_property_url,
+            details={
+                "property_url": normalized_property_url,
+                "auth_mode": auth_mode,
+                "account_identifier": account_identifier,
+            },
+        )
+        return self.serialize_integration(integration)
+
+    async def save_ga4_credentials(
+        self,
+        db: Session,
+        project_id: str,
+        *,
+        property_id: str,
+        credentials_json: str,
+        token_json: str | None = None,
+    ) -> Dict[str, Any]:
+        normalized_property_id = self._normalize_required_identifier(property_id, "GA4 property_id")
+        credentials = self._parse_json_payload(credentials_json, "GA4 credentials_json")
+        token = self._parse_optional_json_payload(token_json, "GA4 token_json")
+        auth_mode = self._detect_google_auth_mode(credentials, token, platform="ga4")
+        account_identifier = self._extract_google_account_identifier(credentials)
+
+        integration = self._upsert_integration(
+            db=db,
+            project_id=str(project_id),
+            platform="ga4",
+            credentials={
+                "property_id": normalized_property_id,
+                "credentials": credentials,
+                "token": token,
+            },
+            hint_source=normalized_property_id,
+            details={
+                "property_id": normalized_property_id,
+                "auth_mode": auth_mode,
+                "account_identifier": account_identifier,
+            },
+        )
+        return self.serialize_integration(integration)
+
+    async def save_yandex_credentials(
+        self,
+        db: Session,
+        project_id: str,
+        *,
+        token: str,
+        user_id: str,
+        host_id: str,
+    ) -> Dict[str, Any]:
+        normalized_token = self._normalize_required_identifier(token, "Yandex token")
+        normalized_user_id = self._normalize_required_identifier(user_id, "Yandex user_id")
+        normalized_host_id = self._normalize_required_identifier(host_id, "Yandex host_id")
+
+        integration = self._upsert_integration(
+            db=db,
+            project_id=str(project_id),
+            platform="yandex",
+            credentials={
+                "token": normalized_token,
+                "user_id": normalized_user_id,
+                "host_id": normalized_host_id,
+            },
+            hint_source=normalized_host_id,
+            details={
+                "host_id": normalized_host_id,
+                "user_id": normalized_user_id,
+            },
+        )
+        return self.serialize_integration(integration)
+
     def get_tilda_credentials(self, db: Session, project_id: str) -> Dict[str, Any]:
         integration = self._require_integration(db, str(project_id), "tilda")
         credentials = self.vault.decrypt(integration.encrypted_creds)
@@ -124,6 +221,54 @@ class IntegrationsService:
             "hmac_secret": credentials["hmac_secret"],
             "plugin_health": details.get("plugin_health") or {},
         }
+
+    def get_gsc_credentials(self, db: Session, project_id: str) -> Dict[str, Any]:
+        integration = self._require_integration(db, str(project_id), "gsc")
+        credentials = self.vault.decrypt(integration.encrypted_creds)
+        details = dict(integration.details or {})
+        return {
+            "property_url": credentials.get("property_url") or details.get("property_url"),
+            "credentials": dict(credentials.get("credentials") or {}),
+            "token": credentials.get("token"),
+            "auth_mode": details.get("auth_mode"),
+            "account_identifier": details.get("account_identifier"),
+        }
+
+    def get_ga4_credentials(self, db: Session, project_id: str) -> Dict[str, Any]:
+        integration = self._require_integration(db, str(project_id), "ga4")
+        credentials = self.vault.decrypt(integration.encrypted_creds)
+        details = dict(integration.details or {})
+        return {
+            "property_id": credentials.get("property_id") or details.get("property_id"),
+            "credentials": dict(credentials.get("credentials") or {}),
+            "token": credentials.get("token"),
+            "auth_mode": details.get("auth_mode"),
+            "account_identifier": details.get("account_identifier"),
+        }
+
+    def get_yandex_credentials(self, db: Session, project_id: str) -> Dict[str, Any]:
+        integration = self._require_integration(db, str(project_id), "yandex")
+        credentials = self.vault.decrypt(integration.encrypted_creds)
+        details = dict(integration.details or {})
+        return {
+            "token": credentials["token"],
+            "user_id": credentials.get("user_id") or details.get("user_id"),
+            "host_id": credentials.get("host_id") or details.get("host_id"),
+        }
+
+    def get_credentials(self, db: Session, project_id: str, platform: str) -> Dict[str, Any]:
+        normalized_platform = self._normalize_platform(platform)
+        if normalized_platform == "tilda":
+            return self.get_tilda_credentials(db, project_id)
+        if normalized_platform == "wordpress":
+            return self.get_wordpress_credentials(db, project_id)
+        if normalized_platform == "gsc":
+            return self.get_gsc_credentials(db, project_id)
+        if normalized_platform == "ga4":
+            return self.get_ga4_credentials(db, project_id)
+        if normalized_platform == "yandex":
+            return self.get_yandex_credentials(db, project_id)
+        raise IntegrationValidationError(f"Unsupported platform: {platform}")
 
     def revoke_integration(self, db: Session, project_id: str, platform: str) -> None:
         integration = self._require_integration(db, str(project_id), platform)
@@ -262,6 +407,17 @@ class IntegrationsService:
         elif target_platform == "wordpress":
             payload["site_url"] = details.get("base_url")
             payload["plugin_health"] = details.get("plugin_health") or {}
+        elif target_platform == "gsc":
+            payload["site_url"] = details.get("property_url")
+            payload["project_identifier"] = details.get("account_identifier")
+            payload["auth_mode"] = details.get("auth_mode")
+        elif target_platform == "ga4":
+            payload["project_identifier"] = details.get("property_id")
+            payload["account_identifier"] = details.get("account_identifier")
+            payload["auth_mode"] = details.get("auth_mode")
+        elif target_platform == "yandex":
+            payload["project_identifier"] = details.get("host_id")
+            payload["account_identifier"] = details.get("user_id")
 
         return payload
 
@@ -356,3 +512,85 @@ class IntegrationsService:
         if "://" in text:
             return False
         return True
+
+    def _normalize_required_identifier(self, value: str, label: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise IntegrationValidationError(f"{label} is required")
+        return normalized
+
+    def _normalize_gsc_property_url(self, property_url: str) -> str:
+        normalized = self._normalize_required_identifier(property_url, "GSC property_url")
+        if normalized.startswith("sc-domain:"):
+            domain = normalized.removeprefix("sc-domain:").strip()
+            if not domain:
+                raise IntegrationValidationError("GSC property_url must contain a domain after sc-domain:")
+            return f"sc-domain:{domain}"
+
+        parsed = urlparse(normalized)
+        if not parsed.scheme or not parsed.netloc:
+            raise IntegrationValidationError(
+                "GSC property_url must be an absolute URL or an sc-domain: property identifier"
+            )
+        return normalized
+
+    def _parse_json_payload(self, raw_json: str, label: str) -> Dict[str, Any]:
+        text = str(raw_json or "").strip()
+        if not text:
+            raise IntegrationValidationError(f"{label} is required")
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise IntegrationValidationError(f"{label} must be valid JSON") from exc
+        if not isinstance(payload, dict):
+            raise IntegrationValidationError(f"{label} must be a JSON object")
+        return payload
+
+    def _parse_optional_json_payload(self, raw_json: str | None, label: str) -> Dict[str, Any] | None:
+        text = str(raw_json or "").strip()
+        if not text:
+            return None
+        return self._parse_json_payload(text, label)
+
+    def _detect_google_auth_mode(
+        self,
+        credentials: Dict[str, Any],
+        token: Dict[str, Any] | None,
+        *,
+        platform: str,
+    ) -> str:
+        credential_type = str(credentials.get("type") or "").strip().lower()
+        if credential_type == "service_account":
+            return "service_account"
+        if credential_type == "authorized_user":
+            return "authorized_user"
+        if "installed" in credentials or "web" in credentials:
+            if token is None:
+                raise IntegrationValidationError(
+                    f"{platform.upper()} token_json is required when credentials_json contains an OAuth client configuration"
+                )
+            return "oauth_client"
+        if token is not None and (credentials.get("client_id") or credentials.get("client_secret")):
+            return "oauth_client"
+        raise IntegrationValidationError(
+            f"{platform.upper()} credentials_json must be a Google service-account, authorized-user, or OAuth client payload"
+        )
+
+    def _extract_google_account_identifier(self, credentials: Dict[str, Any]) -> str | None:
+        for key in ("client_email", "client_id", "quota_project_id"):
+            value = credentials.get(key)
+            if value:
+                return str(value)
+        installed = credentials.get("installed")
+        if isinstance(installed, dict):
+            for key in ("client_id", "project_id"):
+                value = installed.get(key)
+                if value:
+                    return str(value)
+        web = credentials.get("web")
+        if isinstance(web, dict):
+            for key in ("client_id", "project_id"):
+                value = web.get(key)
+                if value:
+                    return str(value)
+        return None

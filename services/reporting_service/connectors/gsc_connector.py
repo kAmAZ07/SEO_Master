@@ -1,35 +1,45 @@
-import json
-from datetime import date, timedelta
+﻿from datetime import date, timedelta
 from typing import Any
 
-from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-from services.reporting_service.config import settings
+from services.project_integrations.google_auth import build_google_credentials
+from services.project_integrations.runtime import load_project_integration
 
 
-def _load_credentials() -> Credentials:
-    if not settings.gsc_credentials_json or not settings.gsc_token_json:
+def _load_integration(project_id: str) -> dict[str, Any]:
+    return load_project_integration(project_id, "gsc")
+
+
+def _resolve_property_url(project_id: str, fallback_property_url: str | None = None) -> tuple[dict[str, Any], str]:
+    integration = _load_integration(project_id)
+    property_url = str(integration.get("property_url") or fallback_property_url or "").strip()
+    if not property_url:
+        raise ValueError("gsc_property_url_missing")
+    return integration, property_url
+
+
+def _load_credentials(project_id: str):
+    integration = _load_integration(project_id)
+    credentials_payload = dict(integration.get("credentials") or {})
+    token_payload = integration.get("token") if isinstance(integration.get("token"), dict) else None
+    if not credentials_payload:
         raise ValueError("gsc_credentials_missing")
-    info = json.loads(settings.gsc_credentials_json)
-    token = json.loads(settings.gsc_token_json)
-    return Credentials(
-        token=token.get("token"),
-        refresh_token=token.get("refresh_token"),
-        token_uri=token.get("token_uri"),
-        client_id=info.get("installed", {}).get("client_id") or info.get("web", {}).get("client_id"),
-        client_secret=info.get("installed", {}).get("client_secret") or info.get("web", {}).get("client_secret"),
+    return build_google_credentials(
+        credentials_payload,
+        token_payload,
         scopes=["https://www.googleapis.com/auth/webmasters.readonly"],
     )
 
 
-def fetch_gsc_summary(property_url: str, days: int = 28, offset_days: int = 0) -> dict:
-    creds = _load_credentials()
+def fetch_gsc_summary(project_id: str, property_url: str | None = None, days: int = 28, offset_days: int = 0) -> dict:
+    _, resolved_property_url = _resolve_property_url(project_id, property_url)
+    creds = _load_credentials(project_id)
     service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
     end = date.today() - timedelta(days=max(0, offset_days))
     start = end - timedelta(days=max(0, days - 1))
     body = {"startDate": start.isoformat(), "endDate": end.isoformat(), "dimensions": ["query"], "rowLimit": 50}
-    resp = service.searchanalytics().query(siteUrl=property_url, body=body).execute()
+    resp = service.searchanalytics().query(siteUrl=resolved_property_url, body=body).execute()
     rows = resp.get("rows", []) or []
     clicks = sum(float(r.get("clicks", 0.0) or 0.0) for r in rows)
     impressions = sum(float(r.get("impressions", 0.0) or 0.0) for r in rows)
@@ -37,7 +47,7 @@ def fetch_gsc_summary(property_url: str, days: int = 28, offset_days: int = 0) -
     positions = [float(r.get("position", 0.0) or 0.0) for r in rows if r.get("position") is not None]
     avg_position = None if not positions else round(sum(positions) / len(positions), 4)
     return {
-        "property_url": property_url,
+        "property_url": resolved_property_url,
         "range_days": days,
         "offset_days": offset_days,
         "clicks": round(clicks, 2),
@@ -100,7 +110,8 @@ def fetch_gsc_rows(
     row_limit: int = 500,
 ) -> dict[str, Any]:
     try:
-        creds = _load_credentials()
+        _, resolved_property_url = _resolve_property_url(project_id, property_url)
+        creds = _load_credentials(project_id)
         service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
         body = {
             "startDate": start_date.isoformat(),
@@ -108,7 +119,7 @@ def fetch_gsc_rows(
             "dimensions": ["date", "query", "page"],
             "rowLimit": row_limit,
         }
-        resp = service.searchanalytics().query(siteUrl=property_url, body=body).execute()
+        resp = service.searchanalytics().query(siteUrl=resolved_property_url, body=body).execute()
     except Exception as exc:
         return _degraded_result(str(exc), start_date, end_date)
 

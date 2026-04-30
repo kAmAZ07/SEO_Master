@@ -1,0 +1,25 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd /opt/seo-master
+            git pull origin main
+            cd frontend && npm install --silent && npm run build && cd ..
+            docker compose build
+            docker compose up -d
+            systemctl reload nginx
+            echo "Deployed at $(date)"
+EOF

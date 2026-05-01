@@ -1,14 +1,18 @@
 import { Link, useLocation } from 'react-router-dom';
+import {
+  LayoutDashboard, FolderOpen, Search, CheckSquare,
+  Key, FileText, Link2, Settings as SettingsIcon
+} from 'lucide-react';
 
 const navigation = [
-  { name: 'Панель управления', href: '/', icon: '📊' },
-  { name: 'Проекты', href: '/projects', icon: '📁' },
-  { name: 'Аудит сайта', href: '/audit', icon: '🔍' },
-  { name: 'HITL-согласования', href: '/hitl', icon: '✅' },
-  { name: 'Ключевые слова', href: '/keywords', icon: '🔑' },
-  { name: 'Контент', href: '/content', icon: '📝' },
-  { name: 'Обратные ссылки', href: '/backlinks', icon: '🔗' },
-  { name: 'Настройки', href: '/settings', icon: '⚙️' },
+  { name: 'Панель управления', href: '/dashboard',           icon: LayoutDashboard },
+  { name: 'Проекты',           href: '/dashboard/projects',  icon: FolderOpen },
+  { name: 'Аудит сайта',       href: '/audit',               icon: Search },
+  { name: 'HITL-согласования', href: '/dashboard/hitl',      icon: CheckSquare },
+  { name: 'Ключевые слова',    href: '/dashboard/keywords',  icon: Key },
+  { name: 'Контент',           href: '/dashboard/content',   icon: FileText },
+  { name: 'Обратные ссылки',   href: '/dashboard/backlinks', icon: Link2 },
+  { name: 'Настройки',         href: '/dashboard/settings',  icon: SettingsIcon },
 ];
 
 const Sidebar = () => {

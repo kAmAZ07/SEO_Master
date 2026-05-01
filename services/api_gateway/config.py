@@ -54,21 +54,24 @@ class Settings(BaseSettings):
     ENABLE_METRICS: bool = Field(default=True, env="ENABLE_METRICS")
     METRICS_PORT: int = Field(default=9100, env="METRICS_PORT")
     
-    @validator("JWT_SECRET_KEY")
-    def validate_jwt_secret(cls, v, values):
-        if values.get("ENVIRONMENT") == "production" and len(v) < 32:
+    @field_validator("JWT_SECRET_KEY")
+    @classmethod
+    def validate_jwt_secret(cls, v):
+        if len(v) < 32:
             raise ValueError("JWT_SECRET_KEY must be at least 32 characters in production")
         return v
-    
-    @validator("LOG_LEVEL")
+
+    @field_validator("LOG_LEVEL")
+    @classmethod
     def validate_log_level(cls, v):
         allowed_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
         v_upper = v.upper()
         if v_upper not in allowed_levels:
             raise ValueError(f"LOG_LEVEL must be one of {allowed_levels}")
         return v_upper
-    
-    @validator("LOG_FORMAT")
+
+    @field_validator("LOG_FORMAT")
+    @classmethod
     def validate_log_format(cls, v):
         allowed_formats = ["json", "text"]
         v_lower = v.lower()
@@ -76,10 +79,7 @@ class Settings(BaseSettings):
             raise ValueError(f"LOG_FORMAT must be one of {allowed_formats}")
         return v_lower
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "case_sensitive": True}
 
 
 settings = Settings()

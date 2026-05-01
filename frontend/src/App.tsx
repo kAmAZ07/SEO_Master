@@ -33,49 +33,47 @@ const router = createBrowserRouter([
     path: '/audit/results/:uid',
     element: <Audit />,
   },
-  {
+  { 
     path: '/',
-    element: <PrivateRoute><Layout /></PrivateRoute>,
+    element: <Audit /> 
+  },
+  { 
+    path: '/dashboard',
+    element: <PrivateRoute />, 
     children: [
       {
         index: true,
-        element: <Dashboard />,
+        element: <Dashboard /> 
       },
-      {
-        path: 'projects',
-        element: <Projects />,
+      { 
+        path: 'projects', 
+        element: <Projects /> 
       },
-      {
-        path: 'projects/:id',
-        element: <ProjectDetail />,
+      { 
+        path: 'projects/:id', 
+        element: <ProjectDetail /> 
       },
-      {
-        path: 'keywords',
-        element: <KeywordResearch />,
+      { 
+        path: 'keywords', 
+        element: <KeywordResearch /> 
       },
-      {
-        path: 'content',
-        element: <ContentOptimization />,
+      { 
+        path: 'content', 
+        element: <ContentOptimization /> 
       },
-      {
-        path: 'backlinks',
-        element: <Backlinks />,
+      { 
+        path: 'backlinks', 
+        element: <Backlinks /> 
       },
-      {
-        path: 'hitl',
-        element: <HITL />,
+      { 
+        path: 'hitl', 
+        element: <HITL /> 
       },
-      {
-        path: 'settings',
-        element: <Settings />,
+      { 
+        path: 'settings', 
+        element: <Settings /> 
       },
-    ],
-  },
-  {
-    path: '*',
-    element: <NotFound />,
-  },
-]);
+  ]},
 
 function App() {
   return (

@@ -64,7 +64,7 @@ const ProjectDetail = () => {
   if (!currentProject) {
     return (
       <div className="space-y-4">
-        <Link to="/projects" className="text-sm font-medium text-blue-600 hover:text-blue-700">
+        <Link to="/dashboard/projects" className="text-sm font-medium text-blue-600 hover:text-blue-700">
           Back to projects
         </Link>
         <Card className="p-6">
@@ -84,17 +84,17 @@ const ProjectDetail = () => {
     {
       name: 'Keyword research',
       description: 'Generate ideas and maintain a tracked list for this project.',
-      link: `/keywords?project=${currentProject.id}`,
+      link: `/dashboard/keywords?project=${currentProject.id}`,
     },
     {
       name: 'Content optimization',
       description: 'Analyze page copy and get practical recommendations.',
-      link: `/content?project=${currentProject.id}`,
+      link: `/dashboard/content?project=${currentProject.id}`,
     },
     {
       name: 'Backlink review',
       description: 'Inspect discovered referring pages and basic backlink quality signals.',
-      link: `/backlinks?project=${currentProject.id}`,
+      link: `/dashboard/backlinks?project=${currentProject.id}`,
     },
   ]
 
@@ -102,7 +102,7 @@ const ProjectDetail = () => {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
-          <Link to="/projects" className="text-sm font-medium text-blue-600 hover:text-blue-700">
+          <Link to="/dashboard/projects" className="text-sm font-medium text-blue-600 hover:text-blue-700">
             Back to projects
           </Link>
           <h1 className="mt-2 text-3xl font-bold text-gray-900">{currentProject.name}</h1>

@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { logout } from '../store/slices/authSlice';
+import { Bell } from 'lucide-react';
 
 const Header = () => {
   const dispatch = useAppDispatch();
@@ -19,7 +20,9 @@ const Header = () => {
         
         <div className="flex items-center gap-4">
           <button className="p-2 text-gray-400 hover:text-gray-600 relative">
-            <span className="text-xl">🔔</span>
+            <span className="text-xl">
+              <Bell className="h-5 w-5" />
+            </span>
             <span className="absolute top-1 right-1 h-2 w-2 bg-red-500 rounded-full"></span>
           </button>
           

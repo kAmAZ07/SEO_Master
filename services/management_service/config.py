@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     REPORTING_SERVICE_URL: str = 'http://localhost:8003'
     CLIENT_GATEWAY_URL: str = 'http://localhost:8005'
 
-    CORS_ORIGINS: Annotated[List[str], NoDecode] = Field(
+    CORS_ORIGINS: List[str] = Field(
         default=['http://localhost:3000', 'http://localhost:5173'],
     )
 

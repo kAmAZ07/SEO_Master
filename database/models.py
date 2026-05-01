@@ -588,7 +588,7 @@ class EEATScoreResponse(BaseModel):
 
 class LLMGenerationRequest(BaseModel):
     page_id: str
-    generation_type: str = Field(..., regex="^(title|description|h1|schema|content_analysis|eeat_analysis)$")
+    generation_type: str = Field(..., pattern="^(title|description|h1|schema|content_analysis|eeat_analysis)$")
     prompt: str
 
 

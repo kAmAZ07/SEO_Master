@@ -111,7 +111,7 @@ const Projects = () => {
               </div>
 
               <div className="mt-6 flex gap-3">
-                <Link to={`/projects/${project.id}`} className="flex-1">
+                <Link to={`/dashboard/projects/${project.id}`} className="flex-1">
                   <Button className="w-full">Open project</Button>
                 </Link>
                 <Link to={`/audit?project=${project.id}`} className="flex-1">

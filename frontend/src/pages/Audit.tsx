@@ -112,7 +112,6 @@ const Audit = () => {
         navigate(`/audit/results/${audit.uid}`)
       }
     } catch {
-      // The slice stores a user-facing error; keeping the handler quiet avoids duplicate noise.
     }
   }
 
@@ -144,10 +143,10 @@ const Audit = () => {
               Публичный SEO-аудит без регистрации
             </div>
             <h1 className="max-w-3xl text-4xl font-black tracking-tight text-gray-950 md:text-6xl">
-              Быстрая проверка сайта и понятный top-5 проблем за один запуск
+              Быстрая проверка сайта и понятный топ проблем за один запуск
             </h1>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-gray-700">
-              Введите URL, получите публичный результат по прямой ссылке, а для истории аудитов, HITL-согласований и внедрения правок переходите в приватный кабинет.
+              Введите URL, получите seo вердикт по прямой ссылке, а для истории аудитов, HITL-согласований и внедрения правок переходите в личный кабинет.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <a href="#quick-audit">
@@ -166,7 +165,7 @@ const Audit = () => {
           <Card id="quick-audit" className="border-blue-100 bg-white/85 p-6 shadow-xl shadow-blue-100/40 backdrop-blur">
             <h2 className="text-2xl font-bold text-gray-950">Проверить сайт</h2>
             <p className="mt-2 text-sm leading-6 text-gray-600">
-              Public flow использует только открытый quick-audit контур и не запрашивает приватную историю проекта.
+              Публичный аудит использует только открытый контур и не запрашивает приватную историю проекта.
             </p>
             <form onSubmit={handleStartAudit} className="mt-6 space-y-4">
               <Input
@@ -178,7 +177,7 @@ const Audit = () => {
                 required
               />
               <Button type="submit" disabled={loading} className="w-full">
-                {loading ? 'Запускаем аудит...' : 'Получить публичный результат'}
+                {loading ? 'Запускаем аудит...' : 'Получить результат'}
               </Button>
             </form>
             {hasResultRoute && currentAudit?.uid && (
@@ -253,11 +252,11 @@ const Audit = () => {
             <Card className="p-6">
               <div className="mb-5 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
                 <div>
-                  <h3 className="text-xl font-bold text-gray-950">Top-5 проблем</h3>
+                  <h3 className="text-xl font-bold text-gray-950">Топ 5 проблем</h3>
                   <p className="mt-1 text-sm text-gray-600">Публичная выдача показывает краткий приоритетный срез, без приватной истории проекта.</p>
                 </div>
                 <Link to="/register">
-                  <Button type="button" variant="outline">Разобрать все правки в кабинете</Button>
+                  <Button type="button" variant="outline">Разобрать все правки вличном кабинете</Button>
                 </Link>
               </div>
 
@@ -288,7 +287,7 @@ const Audit = () => {
                 <div>
                   <h3 className="text-lg font-bold text-blue-950">Нужны история, приватные задачи и HITL-одобрение?</h3>
                   <p className="mt-1 text-sm text-blue-800">
-                    Зарегистрируйтесь, чтобы привязать аудит к проекту, видеть историю и согласовывать изменения через DiffViewer.
+                    Зарегистрируйтесь, чтобы привязать аудит к сайту, видеть историю и согласовывать изменения через DiffViewer.
                   </p>
                 </div>
                 <Link to="/register">

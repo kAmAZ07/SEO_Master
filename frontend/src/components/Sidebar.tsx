@@ -33,7 +33,7 @@ const Sidebar = () => {
                   : 'text-gray-700 hover:bg-gray-50'
               }`}
             >
-              <span className="mr-3 text-lg">{item.icon}</span>
+              <item.icon className="h-5 w-5 shrink-0" />
               {item.name}
             </Link>
           );

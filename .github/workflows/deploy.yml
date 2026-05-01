@@ -18,7 +18,7 @@ jobs:
           script: |
             cd /opt/seo-master
             git pull origin main
-            cd frontend && npm install --silent && npm run build && cd ..
+            cd frontend && npm install --silent && npm run build 2>&1 | tail -20 && cd ..
             docker compose build
             docker compose up -d
             systemctl reload nginx

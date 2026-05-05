@@ -17,9 +17,11 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             cd /opt/seo-master
-            git pull origin main
+            git fetch origin
+            git reset --hard origin/main
+            cp config/nginx.conf /etc/nginx/sites-enabled/seo-master
             cd frontend && rm -rf dist node_modules/.cache && npm install --silent && npm run build && cd ..
             docker compose build
             docker compose up -d
-            systemctl reload nginx
+            nginx -t && systemctl reload nginx
             echo "Deployed at $(date)"

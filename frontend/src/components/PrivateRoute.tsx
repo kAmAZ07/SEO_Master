@@ -1,9 +1,9 @@
-import { Navigate } from 'react-router-dom';
+import { Navigate, Outlet } from 'react-router-dom';
 import { useAppSelector } from '../store/hooks';
 import Loader from './ui/Loader';
 
 interface PrivateRouteProps {
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }
 
 const PrivateRoute = ({ children }: PrivateRouteProps) => {
@@ -13,7 +13,7 @@ const PrivateRoute = ({ children }: PrivateRouteProps) => {
     return <Loader />;
   }
 
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
+  return isAuthenticated ? (children ?? <Outlet/>) : <Navigate to="/login" replace />;
 };
 
 export default PrivateRoute;

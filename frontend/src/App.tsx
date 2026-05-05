@@ -74,6 +74,7 @@ const router = createBrowserRouter([
         element: <Settings /> 
       },
   ]},
+]);
 
 function App() {
   return (

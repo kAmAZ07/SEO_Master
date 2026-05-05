@@ -139,27 +139,12 @@ const Audit = () => {
       <main className="mx-auto max-w-7xl px-6 pb-16">
         <section className="grid items-center gap-8 py-10 lg:grid-cols-[1.05fr_0.95fr] lg:py-16">
           <div>
-            <div className="mb-5 inline-flex rounded-full border border-blue-100 bg-white/70 px-4 py-2 text-sm font-medium text-blue-700 shadow-sm backdrop-blur">
-              Публичный SEO-аудит без регистрации
-            </div>
             <h1 className="max-w-3xl text-4xl font-black tracking-tight text-gray-950 md:text-6xl">
               Быстрая проверка сайта и понятный топ проблем за один запуск
             </h1>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-gray-700">
               Введите URL, получите seo вердикт по прямой ссылке, а для истории аудитов, HITL-согласований и внедрения правок переходите в личный кабинет.
             </p>
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <a href="#quick-audit">
-                <Button size="lg" className="w-full sm:w-auto">
-                  Запустить quick audit
-                </Button>
-              </a>
-              <Link to="/register">
-                <Button type="button" variant="outline" size="lg" className="w-full bg-white/70 sm:w-auto">
-                  Сохранить результаты в проект
-                </Button>
-              </Link>
-            </div>
           </div>
 
           <Card id="quick-audit" className="border-blue-100 bg-white/85 p-6 shadow-xl shadow-blue-100/40 backdrop-blur">
@@ -256,7 +241,7 @@ const Audit = () => {
                   <p className="mt-1 text-sm text-gray-600">Публичная выдача показывает краткий приоритетный срез, без приватной истории проекта.</p>
                 </div>
                 <Link to="/register">
-                  <Button type="button" variant="outline">Разобрать все правки вличном кабинете</Button>
+                  <Button type="button" variant="outline">Разобрать все правки в личном кабинете</Button>
                 </Link>
               </div>
 

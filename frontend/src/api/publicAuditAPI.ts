@@ -142,7 +142,7 @@ const normalizeAudit = (payload: unknown): AuditStatus => {
 }
 
 export const submitAuditRequest = async (request: AuditRequest): Promise<AuditStatus> => {
-  const response = await api.post('/audit/public', { url: request.url })
+  const response = await api.post('/audit/public', { root_url: request.url })
   const data = asObject(response.data)
 
   return {

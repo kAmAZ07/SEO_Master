@@ -228,6 +228,9 @@ async def get_audit_status(uid: str):
         response.raise_for_status()
         result = response.json()
 
+        if result.get("mode") != "public":
+            raise HTTPException(status_code=404, detail="Audit not found or expired")
+
         status_value = result.get("status", "unknown")
         created_at = result.get("created_at") or datetime.utcnow().isoformat()
         completed_at = result.get("updated_at") if status_value in {"completed", "failed"} else None

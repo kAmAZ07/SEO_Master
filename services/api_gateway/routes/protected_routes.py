@@ -95,6 +95,14 @@ class CreateProjectRequest(BaseModel):
     description: Optional[str] = None
 
 
+class StartProjectAuditRequest(BaseModel):
+    projectId: str
+    url: Optional[str] = None
+    maxPages: Optional[int] = Field(default=None, ge=1, le=1000)
+    maxDepth: Optional[int] = Field(default=None, ge=0, le=4)
+    jsRender: Optional[bool] = None
+
+
 class AnalyzeBacklinkRequest(BaseModel):
     url: str
     projectId: Optional[str] = None
@@ -169,6 +177,47 @@ def _serialize_audit_row(row: PublicAuditResult) -> Dict[str, Any]:
         "url": getattr(row, "root_url", None) or getattr(row, "url", ""),
         "score": _extract_score(results),
         "status": (getattr(row, "status", None) or "completed").lower(),
+    }
+
+
+def _audit_progress(status_value: str) -> int:
+    if status_value == "completed":
+        return 100
+    if status_value == "running":
+        return 60
+    if status_value == "queued":
+        return 10
+    if status_value == "failed":
+        return 100
+    return 0
+
+
+def _audit_status_response(result: Dict[str, Any]) -> Dict[str, Any]:
+    status_value = str(result.get("status") or "unknown")
+    all_findings = result.get("findings", [])
+    top_findings = result.get("top_findings")
+    if not isinstance(top_findings, list):
+        top_findings = all_findings[:5] if isinstance(all_findings, list) else []
+
+    return {
+        "uid": result.get("audit_id"),
+        "audit_id": result.get("audit_id"),
+        "project_id": result.get("project_id"),
+        "root_url": result.get("root_url"),
+        "url": result.get("root_url"),
+        "mode": result.get("mode"),
+        "status": status_value,
+        "progress": _audit_progress(status_value),
+        "results": {
+            "summary": result.get("summary", {}),
+            "findings": top_findings,
+            "top_findings": top_findings,
+            "findings_count": len(all_findings) if isinstance(all_findings, list) else 0,
+            "pages": result.get("pages", []),
+            "root_url": result.get("root_url"),
+        },
+        "created_at": result.get("created_at"),
+        "completed_at": result.get("updated_at") if status_value in {"completed", "failed"} else None,
     }
 
 
@@ -965,6 +1014,73 @@ async def delete_project(project_id: str, current_user: User = Depends(get_curre
     db.delete(project)
     db.commit()
     return {"success": True}
+
+
+@router.post("/audit/full")
+async def start_project_audit(
+    request: StartProjectAuditRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = _get_owned_project(request.projectId, current_user, db)
+    root_url = request.url or project.url
+    payload = {
+        "project_id": str(project.id),
+        "root_url": root_url,
+        "site_type_hint": "unknown",
+        "platform": "generic",
+        "options": {
+            "max_pages": request.maxPages or 1000,
+            "max_depth": request.maxDepth if request.maxDepth is not None else 4,
+            "js_render": True if request.jsRender is None else request.jsRender,
+            "timeout": 30.0,
+        },
+    }
+
+    response = await _proxy_service(
+        settings.AUDIT_SERVICE_URL,
+        "POST",
+        "/audit/full",
+        payload=payload,
+        timeout=30.0,
+    )
+    result = response.json()
+    audit_id = result.get("audit_id")
+    if not audit_id:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="audit_service_invalid_response")
+
+    return {
+        "success": True,
+        "uid": audit_id,
+        "audit_id": audit_id,
+        "project_id": str(project.id),
+        "url": root_url,
+        "status": result.get("status", "queued"),
+        "mode": result.get("mode", "full"),
+        "message": "Project audit started",
+        "estimated_time_seconds": 120,
+    }
+
+
+@router.get("/audit/status/{uid}")
+async def get_project_audit_status(
+    uid: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    response = await _proxy_service(
+        settings.AUDIT_SERVICE_URL,
+        "GET",
+        f"/audit/{uid}",
+        timeout=10.0,
+    )
+    result = response.json()
+    project_id = str(result.get("project_id") or "")
+    if not project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="audit_not_found")
+
+    _get_owned_project(project_id, current_user, db, not_found_detail="audit_not_found")
+    return _audit_status_response(result)
 
 
 @router.get("/audit/history")

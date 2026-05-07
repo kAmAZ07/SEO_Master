@@ -1,4 +1,5 @@
 import api from './axiosConfig'
+import axios from 'axios'
 import type { AuditRequest, AuditStatus, AuditFinding, AuditIssueSummary, AuditSummary, AuditPage, AuditCriterion } from '@/types/audit'
 
 const asObject = (value: unknown): Record<string, unknown> =>
@@ -168,6 +169,30 @@ const normalizeAudit = (payload: unknown): AuditStatus => {
 }
 
 export const submitAuditRequest = async (request: AuditRequest): Promise<AuditStatus> => {
+  const token = localStorage.getItem('token')
+  if (request.projectId && token) {
+    const response = await api.post('/audit/full', {
+      projectId: request.projectId,
+      url: request.url,
+    })
+    const data = asObject(response.data)
+
+    return {
+      uid: asString(data.uid || data.audit_id),
+      id: asString(data.audit_id || data.uid || data.id),
+      url: asString(data.url, request.url),
+      status: normalizeStatus(asString(data.status, 'queued')),
+      progress: 10,
+      createdAt: new Date().toISOString(),
+      score: 0,
+      issues: { passed: 0, warnings: 0, errors: 0 },
+      details: [],
+      summary: undefined,
+      pages: [],
+      error: '',
+    }
+  }
+
   const response = await api.post('/public/quick-audit', { url: request.url })
   const data = asObject(response.data)
 
@@ -188,6 +213,18 @@ export const submitAuditRequest = async (request: AuditRequest): Promise<AuditSt
 }
 
 export const getAuditStatus = async (uid: string): Promise<AuditStatus> => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    try {
+      const response = await api.get(`/audit/status/${uid}`)
+      return normalizeAudit(response.data)
+    } catch (error) {
+      if (!axios.isAxiosError(error) || ![403, 404].includes(error.response?.status ?? 0)) {
+        throw error
+      }
+    }
+  }
+
   const response = await api.get(`/public/audit-status/${uid}`)
   return normalizeAudit(response.data)
 }

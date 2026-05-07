@@ -209,15 +209,160 @@ FINDING_CATALOG = {
 
 
 SEVERITY_WEIGHTS = {
-    "critical": 28.0,
-    "high": 18.0,
-    "medium": 4.0,
-    "low": 1.5,
+    "critical": 35.0,
+    "high": 22.0,
+    "medium": 10.0,
+    "low": 4.0,
     "info": 0.0,
 }
 SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}
 NON_PROBLEM_CODES = {"audit_score_explanation"}
+
+AUDIT_CRITERIA = [
+    {
+        "key": "technical_access",
+        "title": "Technical access and crawlability",
+        "description": "Checks whether the site can be safely reached, crawled, and indexed without obvious blockers.",
+        "categories": {"precheck", "availability", "crawlability", "rendering"},
+        "weight": 0.24,
+        "checked": [
+            "Public URL and host safety",
+            "robots.txt access",
+            "sitemap availability",
+            "server response and crawler access",
+            "client-side rendering risks",
+        ],
+    },
+    {
+        "key": "metadata",
+        "title": "Search metadata",
+        "description": "Checks titles and meta descriptions that form the first search-result impression.",
+        "categories": {"metadata"},
+        "weight": 0.18,
+        "checked": [
+            "Title presence",
+            "Title length",
+            "Meta description presence",
+            "Meta description length",
+        ],
+    },
+    {
+        "key": "content_structure",
+        "title": "Content structure",
+        "description": "Checks whether pages have a clear primary heading and basic topical structure.",
+        "categories": {"content_structure"},
+        "weight": 0.14,
+        "checked": [
+            "H1 presence",
+            "H1 clarity",
+            "Basic page structure",
+        ],
+    },
+    {
+        "key": "structured_data",
+        "title": "Structured data",
+        "description": "Checks JSON-LD schema markup and the fields search engines need to interpret it.",
+        "categories": {"structured_data"},
+        "weight": 0.14,
+        "checked": [
+            "JSON-LD presence",
+            "Valid JSON syntax",
+            "schema.org @context",
+            "Schema @type",
+        ],
+    },
+    {
+        "key": "internal_links",
+        "title": "Internal links",
+        "description": "Checks internal URLs for broken destinations and verification problems.",
+        "categories": {"links"},
+        "weight": 0.12,
+        "checked": [
+            "Internal link availability",
+            "404 detection",
+            "Link verification access",
+        ],
+    },
+    {
+        "key": "performance",
+        "title": "Core Web Vitals",
+        "description": "Checks available loading and interaction quality signals from PageSpeed data.",
+        "categories": {"performance"},
+        "weight": 0.18,
+        "checked": [
+            "Largest Contentful Paint",
+            "First Input Delay",
+            "Cumulative Layout Shift",
+            "PageSpeed availability",
+        ],
+    },
+]
+
+
+def _criterion_status(score: int, problem_count: int, info_count: int) -> str:
+    if problem_count == 0 and info_count == 0:
+        return "passed"
+    if problem_count == 0:
+        return "info"
+    if score < 50:
+        return "failed"
+    if score < 80:
+        return "warning"
+    return "passed_with_notes"
+
+
+def _build_criteria_results(findings: list[dict]) -> list[dict]:
+    category_to_criterion = {}
+    for criterion in AUDIT_CRITERIA:
+        for category in criterion["categories"]:
+            category_to_criterion[category] = criterion["key"]
+
+    grouped: dict[str, list[dict]] = {criterion["key"]: [] for criterion in AUDIT_CRITERIA}
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        code = str(finding.get("code") or "")
+        if code in NON_PROBLEM_CODES:
+            continue
+        category = str(finding.get("category") or "technical")
+        criterion_key = category_to_criterion.get(category, "technical_access")
+        grouped.setdefault(criterion_key, []).append(finding)
+
+    results = []
+    for criterion in AUDIT_CRITERIA:
+        criterion_findings = grouped.get(criterion["key"], [])
+        problem_findings = [
+            finding
+            for finding in criterion_findings
+            if str(finding.get("severity") or "info").lower() != "info"
+        ]
+        info_findings = [
+            finding
+            for finding in criterion_findings
+            if str(finding.get("severity") or "info").lower() == "info"
+        ]
+        penalty = sum(
+            SEVERITY_WEIGHTS.get(str(finding.get("severity") or "info").lower(), 0.0)
+            for finding in problem_findings
+        )
+        score = int(round(max(0.0, min(100.0, 100.0 - penalty))))
+        results.append(
+            {
+                "key": criterion["key"],
+                "title": criterion["title"],
+                "description": criterion["description"],
+                "score": score,
+                "status": _criterion_status(score, len(problem_findings), len(info_findings)),
+                "weight": criterion["weight"],
+                "checked": criterion["checked"],
+                "issue_count": len(problem_findings),
+                "info_count": len(info_findings),
+                "findings": criterion_findings,
+            }
+        )
+
+    return results
 
 
 def _is_private_ip(host: str) -> bool:
@@ -323,26 +468,35 @@ def _compute_score(summary: dict, findings: list[dict]) -> dict:
     processed_pages = int(coverage.get("processed") or 0)
     attempted_pages = int(coverage.get("attempted") or 0)
     max_pages = max(1, int(coverage.get("max_pages") or 1))
-    crawl_completion = min(1.0, processed_pages / max_pages)
+    crawl_completion = min(1.0, processed_pages / max(1, attempted_pages or processed_pages or max_pages))
+    criteria = _build_criteria_results(findings)
+    weighted_score = sum(item["score"] * float(item["weight"]) for item in criteria)
+    total_weight = sum(float(item["weight"]) for item in criteria) or 1.0
+    coverage_penalty = 0.0
+    if attempted_pages > 0 and processed_pages < attempted_pages:
+        coverage_penalty = min(15.0, (1.0 - crawl_completion) * 15.0)
+    elif processed_pages == 0 and not summary.get("precheck_failed"):
+        coverage_penalty = 20.0
 
-    penalty = sum(counts[level] * weight for level, weight in SEVERITY_WEIGHTS.items())
-    coverage_bonus = min(8.0, processed_pages * 1.5)
-    crawl_bonus = min(4.0, attempted_pages * 0.5)
-    score = round(max(0.0, min(100.0, 100.0 - penalty + coverage_bonus + crawl_bonus)))
+    score = round(max(0.0, min(100.0, (weighted_score / total_weight) - coverage_penalty)))
+    penalty = 100.0 - score
 
     return {
         "score": int(score),
+        "criteria": criteria,
         "issue_counts": counts,
         "score_breakdown": {
             "base_score": 100,
             "penalty_points": round(penalty, 2),
-            "coverage_bonus": round(coverage_bonus, 2),
-            "crawl_bonus": round(crawl_bonus, 2),
+            "coverage_bonus": 0,
+            "crawl_bonus": 0,
+            "coverage_penalty": round(coverage_penalty, 2),
             "crawl_completion_ratio": round(crawl_completion, 2),
         },
         "score_explanation": (
-            f"Processed pages: {processed_pages} | Critical: {counts['critical']} | "
-            f"High: {counts['high']} | Medium: {counts['medium']} | Low: {counts['low']}"
+            f"Score is a weighted average of standard audit criteria. Processed pages: {processed_pages}; "
+            f"critical issues: {counts['critical']}; high: {counts['high']}; "
+            f"medium: {counts['medium']}; low: {counts['low']}."
         ),
     }
 
@@ -395,12 +549,12 @@ def _build_score_explanation_finding(summary: dict) -> dict:
         "category": "scoring",
         "title": "How the audit score was calculated",
         "description": (
-            "Base score starts at 100. Penalties depend on issue severity (critical/high/medium/low), "
-            "then limited bonuses are added for crawl coverage. "
+            "The final score is a weighted average of standard criteria: crawlability, metadata, content structure, "
+            "structured data, internal links, and Core Web Vitals. "
             f"Processed pages: {coverage.get('processed', 0)} of {coverage.get('max_pages', 0)}. "
             f"Issue counts - critical: {counts.get('critical', 0)}, high: {counts.get('high', 0)}, "
             f"medium: {counts.get('medium', 0)}, low: {counts.get('low', 0)}. "
-            f"Penalty points: {breakdown.get('penalty_points', 0)}. CWV snapshot: {cwv_text}."
+            f"Total penalty impact: {breakdown.get('penalty_points', 0)}. CWV snapshot: {cwv_text}."
         ),
         "recommendation": "Fix high-severity issues first, then metadata and structured-data warnings, and rerun the audit after changes.",
     }

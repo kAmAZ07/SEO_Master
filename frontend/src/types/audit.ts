@@ -37,7 +37,21 @@ export interface AuditFinding {
   category?: string
   severity?: string
   confidence?: string
+  details?: Record<string, unknown>
   status: AuditFindingStatus
+}
+
+export interface AuditCriterion {
+  key: string
+  title: string
+  description: string
+  score: number
+  status: string
+  weight?: number
+  checked?: string[]
+  issue_count: number
+  info_count?: number
+  findings: AuditFinding[]
 }
 
 export interface AuditScoreBreakdown {
@@ -45,6 +59,7 @@ export interface AuditScoreBreakdown {
   penalty_points: number
   coverage_bonus: number
   crawl_bonus: number
+  coverage_penalty?: number
   crawl_completion_ratio: number
 }
 
@@ -52,6 +67,7 @@ export interface AuditSummary {
   score?: number
   score_explanation?: string
   score_breakdown?: AuditScoreBreakdown
+  criteria?: AuditCriterion[]
   issue_counts?: Record<string, number>
   coverage?: AuditCoverage
   cwv?: Record<string, string | number | null>

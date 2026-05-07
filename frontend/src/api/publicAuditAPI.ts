@@ -1,5 +1,5 @@
 import api from './axiosConfig'
-import type { AuditRequest, AuditStatus, AuditFinding, AuditIssueSummary, AuditSummary, AuditPage } from '@/types/audit'
+import type { AuditRequest, AuditStatus, AuditFinding, AuditIssueSummary, AuditSummary, AuditPage, AuditCriterion } from '@/types/audit'
 
 const asObject = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
@@ -64,7 +64,30 @@ const mapFindings = (findings: unknown): AuditFinding[] => {
       category: asString(finding.category) || undefined,
       severity,
       confidence: asString(finding.confidence) || undefined,
+      details: asObject(finding.details),
       status: normalizeFindingStatus(severity),
+    }
+  })
+}
+
+const mapCriteria = (criteria: unknown): AuditCriterion[] => {
+  if (!Array.isArray(criteria)) {
+    return []
+  }
+
+  return criteria.map((item) => {
+    const criterion = asObject(item)
+    return {
+      key: asString(criterion.key, 'criterion'),
+      title: asString(criterion.title, 'Audit criterion'),
+      description: asString(criterion.description),
+      score: Math.max(0, Math.min(100, Math.round(asNumber(criterion.score, 0)))),
+      status: asString(criterion.status, 'info'),
+      weight: asNumber(criterion.weight, 0),
+      checked: Array.isArray(criterion.checked) ? criterion.checked.map((value) => asString(value)).filter(Boolean) : [],
+      issue_count: asNumber(criterion.issue_count, 0),
+      info_count: asNumber(criterion.info_count, 0),
+      findings: mapFindings(criterion.findings),
     }
   })
 }
@@ -118,12 +141,15 @@ const mapPages = (pages: unknown): AuditPage[] => {
 const normalizeAudit = (payload: unknown): AuditStatus => {
   const data = asObject(payload)
   const results = asObject(data.results)
-  const summary = asObject(results.summary) as AuditSummary
-  const details = mapFindings(results.top_findings || results.findings)
-  const issues = summarizeIssues(details)
-  const pages = mapPages(results.pages)
+  const rawSummary = Object.keys(results).length > 0 ? results.summary : data.summary
+  const summary = asObject(rawSummary) as AuditSummary
+  summary.criteria = mapCriteria(summary.criteria)
+  const details = mapFindings(results.top_findings || results.findings || data.top_findings || data.findings)
+  const criterionFindings = summary.criteria.flatMap((criterion) => criterion.findings)
+  const issues = summarizeIssues(criterionFindings.length > 0 ? criterionFindings : details)
+  const pages = mapPages(results.pages || data.pages)
   const uid = asString(data.uid || data.audit_id || data.id)
-  const url = asString(data.url || data.root_url || data.target_url)
+  const url = asString(data.url || data.root_url || data.target_url || results.root_url)
 
   return {
     uid,
@@ -142,7 +168,7 @@ const normalizeAudit = (payload: unknown): AuditStatus => {
 }
 
 export const submitAuditRequest = async (request: AuditRequest): Promise<AuditStatus> => {
-  const response = await api.post('/audit/public', { root_url: request.url })
+  const response = await api.post('/public/quick-audit', { url: request.url })
   const data = asObject(response.data)
 
   return {
@@ -162,6 +188,6 @@ export const submitAuditRequest = async (request: AuditRequest): Promise<AuditSt
 }
 
 export const getAuditStatus = async (uid: string): Promise<AuditStatus> => {
-  const response = await api.get(`/audit/${uid}`)
+  const response = await api.get(`/public/audit-status/${uid}`)
   return normalizeAudit(response.data)
 }

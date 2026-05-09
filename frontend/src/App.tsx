@@ -1,6 +1,7 @@
-import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom';
 import { Provider } from 'react-redux';
 import { store } from './store/store';
+import { useAppSelector } from './store/hooks';
 import Dashboard from './pages/Dashboard';
 import Login from './pages/auth/Login';
 import Register from './pages/auth/Register';
@@ -13,6 +14,12 @@ import Backlinks from './pages/Backlinks';
 import HITL from './pages/HITL';
 import Settings from './pages/Settings';
 import PrivateRoute from './components/PrivateRoute';
+
+const HomeRoute = () => {
+  const { isAuthenticated, token } = useAppSelector((state) => state.auth);
+
+  return isAuthenticated || token ? <Navigate to="/dashboard" replace /> : <Audit />;
+};
 
 const router = createBrowserRouter([
   {
@@ -31,9 +38,9 @@ const router = createBrowserRouter([
     path: '/audit/results/:uid',
     element: <Audit />,
   },
-  { 
+  {
     path: '/',
-    element: <Audit /> 
+    element: <HomeRoute />
   },
   { 
     path: '/dashboard',

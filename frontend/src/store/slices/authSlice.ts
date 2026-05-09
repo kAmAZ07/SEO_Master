@@ -27,7 +27,7 @@ interface RejectedActionLike {
 const initialState: AuthState = {
   user: null,
   token: localStorage.getItem('token'),
-  isAuthenticated: false,
+  isAuthenticated: Boolean(localStorage.getItem('token')),
   loading: false,
   error: null,
 }

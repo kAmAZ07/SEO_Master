@@ -28,6 +28,14 @@ return {current, ttl}
 def _build_redis_client() -> Optional[redis.Redis]:
     try:
         cfg = get_redis_config()
+        if cfg["url"]:
+            return redis.Redis.from_url(
+                cfg["url"],
+                decode_responses=True,
+                socket_connect_timeout=1,
+                socket_timeout=1,
+            )
+
         return redis.Redis(
             host=cfg["host"],
             port=cfg["port"],

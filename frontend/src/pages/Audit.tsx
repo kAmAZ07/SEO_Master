@@ -147,9 +147,11 @@ const Audit = () => {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const { currentAudit, loading, polling, error } = useAppSelector((state) => state.audit)
+  const { token, isAuthenticated } = useAppSelector((state) => state.auth)
   const [url, setUrl] = useState('')
   const [expandedCriterion, setExpandedCriterion] = useState<string | null>(null)
   const projectId = searchParams.get('project') ?? undefined
+  const isProjectAudit = Boolean(projectId && token)
 
   useEffect(() => {
     if (!uid) {
@@ -197,7 +199,7 @@ const Audit = () => {
       setUrl('')
 
       if (audit.uid) {
-        navigate(`/audit/results/${audit.uid}`)
+        navigate(projectId ? `/audit/results/${audit.uid}?project=${projectId}` : `/audit/results/${audit.uid}`)
       }
     } catch {
     }
@@ -216,43 +218,57 @@ const Audit = () => {
           SEO Master
         </Link>
         <div className="flex items-center gap-3">
-          <Link to="/login" className="text-sm font-medium text-gray-700 transition-colors hover:text-blue-700">
-            Войти
-          </Link>
-          <Link to="/register">
-            <Button size="sm">Создать аккаунт</Button>
-          </Link>
+          {isAuthenticated || token ? (
+            <Link to="/dashboard">
+              <Button size="sm">Личный кабинет</Button>
+            </Link>
+          ) : (
+            <>
+              <Link to="/login" className="text-sm font-medium text-gray-700 transition-colors hover:text-blue-700">
+                Войти
+              </Link>
+              <Link to="/register">
+                <Button size="sm">Создать аккаунт</Button>
+              </Link>
+            </>
+          )}
         </div>
       </header>
 
       <main className="mx-auto max-w-7xl px-6 pb-16">
         <section className="grid items-start gap-8 py-8 lg:grid-cols-[1fr_420px] lg:py-12">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">Публичный SEO-аудит</p>
+            <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">
+              {isProjectAudit ? 'Расширенный SEO-аудит проекта' : 'Публичный SEO-аудит'}
+            </p>
             <h1 className="mt-3 max-w-3xl text-4xl font-black tracking-tight text-gray-950 md:text-5xl">
-              Проверка сайта по понятным критериям без регистрации
+              {isProjectAudit ? 'Глубокая проверка сайта в личном кабинете' : 'Проверка сайта по понятным критериям без регистрации'}
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-7 text-gray-700">
-              Аудит проверяет техническую доступность, метаданные, структуру контента, schema.org, внутренние ссылки и базовые performance-сигналы. Для каждого блока показывается отдельная оценка и список найденных замечаний.
+              {isProjectAudit
+                ? 'Расширенный аудит проходит по сохраненному проекту: увеличивает глубину обхода, включает JS-rendering и дополнительные проектные данные, когда они доступны.'
+                : 'Аудит проверяет техническую доступность, метаданные, структуру контента, schema.org, внутренние ссылки и базовые performance-сигналы. Для каждого блока показывается отдельная оценка и список найденных замечаний.'}
             </p>
           </div>
 
           <Card id="quick-audit" className="rounded-lg p-6">
-            <h2 className="text-xl font-bold text-gray-950">Проверить сайт</h2>
+            <h2 className="text-xl font-bold text-gray-950">{isProjectAudit ? 'Запустить аудит проекта' : 'Проверить сайт'}</h2>
             <p className="mt-2 text-sm leading-6 text-gray-600">
-              Введите публичный URL. Локальные и приватные адреса не принимаются.
+              {isProjectAudit
+                ? 'Введите URL для проверки или оставьте поле пустым, чтобы использовать адрес из карточки проекта.'
+                : 'Введите публичный URL. Локальные и приватные адреса не принимаются.'}
             </p>
             <form onSubmit={handleStartAudit} className="mt-6 space-y-4">
               <Input
                 type="url"
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
-                placeholder="https://example.com"
+                placeholder={isProjectAudit ? 'Оставьте пустым для URL проекта' : 'https://example.com'}
                 label="URL сайта"
-                required
+                required={!isProjectAudit}
               />
               <Button type="submit" disabled={loading} className="w-full">
-                {loading ? 'Запускаем аудит...' : 'Получить результат'}
+                {loading ? 'Запускаем аудит...' : isProjectAudit ? 'Запустить расширенный аудит' : 'Получить результат'}
               </Button>
             </form>
             {currentAudit?.uid && (

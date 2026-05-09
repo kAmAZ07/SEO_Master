@@ -56,10 +56,10 @@ const Dashboard = () => {
   }
 
   const statCards = [
-    { title: 'Projects', value: stats?.totalProjects ?? 0, link: '/projects' },
+    { title: 'Projects', value: stats?.totalProjects ?? 0, link: '/dashboard/projects' },
     { title: 'Active audits', value: stats?.activeAudits ?? 0, link: '/audit' },
-    { title: 'Tracked keywords', value: stats?.totalKeywords ?? 0, link: '/keywords' },
-    { title: 'Backlinks discovered', value: stats?.totalBacklinks ?? 0, link: '/backlinks' },
+    { title: 'Tracked keywords', value: stats?.totalKeywords ?? 0, link: '/dashboard/keywords' },
+    { title: 'Backlinks discovered', value: stats?.totalBacklinks ?? 0, link: '/dashboard/backlinks' },
   ]
 
   return (
@@ -175,7 +175,7 @@ const Dashboard = () => {
         <Card className="p-6">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-xl font-semibold text-gray-900">Recent projects</h2>
-            <Link to="/projects" className="text-sm font-medium text-blue-600 hover:text-blue-700">
+            <Link to="/dashboard/projects" className="text-sm font-medium text-blue-600 hover:text-blue-700">
               View all
             </Link>
           </div>
@@ -185,7 +185,7 @@ const Dashboard = () => {
               {stats.recentProjects.map((project) => (
                 <Link
                   key={project.id}
-                  to={`/projects/${project.id}`}
+                  to={`/dashboard/projects/${project.id}`}
                   className="block rounded-lg border border-gray-200 px-4 py-3 transition-colors hover:border-blue-200 hover:bg-blue-50/40"
                 >
                   <p className="font-medium text-gray-900">{project.name}</p>

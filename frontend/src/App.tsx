@@ -13,6 +13,7 @@ import ContentOptimization from './pages/ContentOptimization';
 import Backlinks from './pages/Backlinks';
 import HITL from './pages/HITL';
 import Settings from './pages/Settings';
+import Layout from './components/Layout';
 import PrivateRoute from './components/PrivateRoute';
 
 const HomeRoute = () => {
@@ -42,41 +43,41 @@ const router = createBrowserRouter([
     path: '/',
     element: <HomeRoute />
   },
-  { 
+  {
     path: '/dashboard',
-    element: <PrivateRoute />, 
+    element: <PrivateRoute><Layout /></PrivateRoute>,
     children: [
       {
         index: true,
-        element: <Dashboard /> 
+        element: <Dashboard />
       },
-      { 
-        path: 'projects', 
-        element: <Projects /> 
+      {
+        path: 'projects',
+        element: <Projects />
       },
-      { 
-        path: 'projects/:id', 
-        element: <ProjectDetail /> 
+      {
+        path: 'projects/:id',
+        element: <ProjectDetail />
       },
-      { 
-        path: 'keywords', 
-        element: <KeywordResearch /> 
+      {
+        path: 'keywords',
+        element: <KeywordResearch />
       },
-      { 
-        path: 'content', 
-        element: <ContentOptimization /> 
+      {
+        path: 'content',
+        element: <ContentOptimization />
       },
-      { 
-        path: 'backlinks', 
-        element: <Backlinks /> 
+      {
+        path: 'backlinks',
+        element: <Backlinks />
       },
-      { 
-        path: 'hitl', 
-        element: <HITL /> 
+      {
+        path: 'hitl',
+        element: <HITL />
       },
-      { 
-        path: 'settings', 
-        element: <Settings /> 
+      {
+        path: 'settings',
+        element: <Settings />
       },
   ]},
 ]);

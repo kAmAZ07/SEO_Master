@@ -12,7 +12,6 @@ interface BacklinkRecord {
   sourceUrl: string
   targetUrl: string
   type: 'dofollow' | 'nofollow' | string
-  domainAuthority?: number
   anchorText?: string
   discoveredAt: string
 }
@@ -66,21 +65,19 @@ const Backlinks = () => {
     return backlinks.filter((item) => item.type === filterType)
   }, [backlinks, filterType])
 
-  const averageAuthority = backlinks.length
-    ? Math.round(backlinks.reduce((sum, item) => sum + (item.domainAuthority || 0), 0) / backlinks.length)
-    : 0
-
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Backlinks</h1>
-        <p className="mt-1 text-gray-600">Analyze external referring pages and review basic link quality indicators.</p>
+        <p className="mt-1 text-gray-600">
+          Discover outbound external links on any page. For true inbound backlink data, connect Google Search Console in your project settings.
+        </p>
       </div>
 
       {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
       <Card className="p-6">
-        <h2 className="text-xl font-semibold text-gray-900">Analyze a target URL</h2>
+        <h2 className="text-xl font-semibold text-gray-900">Scan a page for outbound links</h2>
         <form onSubmit={handleAnalyze} className="mt-4 flex flex-col gap-3 md:flex-row">
           <Input
             type="url"
@@ -91,7 +88,7 @@ const Backlinks = () => {
             required
           />
           <Button type="submit" disabled={loading || !url.trim()}>
-            {loading ? 'Analyzing...' : 'Analyze backlinks'}
+            {loading ? 'Analyzing...' : 'Scan outbound links'}
           </Button>
         </form>
       </Card>
@@ -101,7 +98,7 @@ const Backlinks = () => {
       <Card className="p-6">
         <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">Backlink snapshot</h2>
+            <h2 className="text-xl font-semibold text-gray-900">Outbound link snapshot</h2>
             <p className="mt-1 text-sm text-gray-600">Filters help you separate dofollow and nofollow links quickly.</p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -139,8 +136,8 @@ const Backlinks = () => {
                       <p className="mt-2 font-semibold text-gray-900">{item.type}</p>
                     </div>
                     <div className="rounded-lg bg-gray-50 px-4 py-3 text-center">
-                      <p className="text-xs uppercase tracking-wide text-gray-400">Domain authority</p>
-                      <p className="mt-2 font-semibold text-gray-900">{item.domainAuthority ?? '-'}</p>
+                      <p className="text-xs uppercase tracking-wide text-gray-400">DA score</p>
+                      <p className="mt-2 font-semibold text-gray-500 text-sm">n/a</p>
                     </div>
                   </div>
                 </div>
@@ -166,8 +163,8 @@ const Backlinks = () => {
           <p className="mt-2 text-3xl font-bold text-gray-900">{backlinks.filter((item) => item.type === 'nofollow').length}</p>
         </Card>
         <Card className="p-4 text-center">
-          <p className="text-xs uppercase tracking-wide text-gray-400">Average authority</p>
-          <p className="mt-2 text-3xl font-bold text-gray-900">{averageAuthority}</p>
+          <p className="text-xs uppercase tracking-wide text-gray-400">Avg DA score</p>
+          <p className="mt-2 text-3xl font-bold text-gray-500 text-lg">n/a</p>
         </Card>
       </div>
     </div>

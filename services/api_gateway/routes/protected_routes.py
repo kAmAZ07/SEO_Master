@@ -745,27 +745,36 @@ def _normalize_domain(url: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
-def _extract_links_from_html(html: str) -> List[str]:
-    links = re.findall(r"""href=["']([^"'#]+)["']""", html, flags=re.IGNORECASE)
-    result: List[str] = []
-    for link in links:
-        link = link.strip()
-        if link.startswith(("http://", "https://")):
-            result.append(link)
+def _extract_links_from_html(html: str) -> List[Dict[str, str]]:
+    """Parse <a> tags and return structured link data with href, rel-type, and anchor text."""
+    tag_re = re.compile(r'<a\b([^>]*)>(.*?)</a>', re.IGNORECASE | re.DOTALL)
+    href_re = re.compile(r'''href=["']([^"'#]+)["']''', re.IGNORECASE)
+    rel_re = re.compile(r'''rel=["']([^"']*)["']''', re.IGNORECASE)
+    result: List[Dict[str, str]] = []
+    for m in tag_re.finditer(html):
+        attrs, inner = m.group(1), m.group(2)
+        href_m = href_re.search(attrs)
+        if not href_m:
+            continue
+        href = href_m.group(1).strip()
+        if not href.startswith(("http://", "https://")):
+            continue
+        rel_m = rel_re.search(attrs)
+        rel_val = rel_m.group(1).lower() if rel_m else ""
+        link_type = "nofollow" if "nofollow" in rel_val else "dofollow"
+        anchor = re.sub(r'<[^>]+>', '', inner).strip() or href
+        result.append({"href": href, "type": link_type, "anchor": anchor[:200]})
     return result
 
 
-def _estimate_domain_authority(source_url: str, target_host: str) -> int:
-    source_host = _normalize_domain(source_url)
-    if not source_host:
-        return 0
-    common = len(set(source_host.split(".")) & set(target_host.split(".")))
-    base = 20 + min(35, len(source_host))
-    bonus = 10 if source_host.endswith(target_host) else 0
-    return max(1, min(100, base + bonus + common * 6))
-
-
 async def _analyze_backlinks_live(url: str) -> List[Dict[str, Any]]:
+    """Scan outbound external links on the target page.
+
+    Note: this function discovers links going OUT from the target page, not
+    inbound backlinks pointing to it. True backlink data requires a third-party
+    index (e.g. Ahrefs, Moz) or Google Search Console.
+    Domain authority is not computable without such an API and is omitted.
+    """
     target_host = _normalize_domain(url)
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
         response = await client.get(url)
@@ -775,20 +784,21 @@ async def _analyze_backlinks_live(url: str) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     seen: set[str] = set()
     for link in links:
-        source_host = _normalize_domain(link)
+        href = link["href"]
+        source_host = _normalize_domain(href)
         if not source_host or source_host == target_host:
             continue
-        if link in seen:
+        if href in seen:
             continue
-        seen.add(link)
+        seen.add(href)
         rows.append(
             {
                 "id": str(uuid.uuid4()),
-                "sourceUrl": link,
+                "sourceUrl": href,
                 "targetUrl": url,
-                "type": "dofollow",
-                "domainAuthority": _estimate_domain_authority(link, target_host),
-                "anchorText": source_host,
+                "type": link["type"],
+                "domainAuthority": None,
+                "anchorText": link["anchor"],
                 "discoveredAt": datetime.utcnow().isoformat(),
             }
         )

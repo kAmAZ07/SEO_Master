@@ -18,11 +18,16 @@ async def fetch_pagespeed_insights(url: str, strategy: str = "mobile") -> dict |
 
     audits = (((j.get("lighthouseResult") or {}).get("audits")) or {})
     lcp = (audits.get("largest-contentful-paint") or {}).get("numericValue")
-    fid = (audits.get("max-potential-fid") or {}).get("numericValue")
+    # INP replaced FID as a Core Web Vital in March 2024
+    inp = (audits.get("interaction-to-next-paint") or {}).get("numericValue")
     cls = (audits.get("cumulative-layout-shift") or {}).get("numericValue")
 
     return {
-        "metrics": {"LCP": int(lcp) if isinstance(lcp, (int, float)) else None, "FID": int(fid) if isinstance(fid, (int, float)) else None, "CLS": float(cls) if isinstance(cls, (int, float)) else None},
+        "metrics": {
+            "LCP": int(lcp) if isinstance(lcp, (int, float)) else None,
+            "INP": int(inp) if isinstance(inp, (int, float)) else None,
+            "CLS": float(cls) if isinstance(cls, (int, float)) else None,
+        },
         "raw": j,
         "used_api_key": bool(settings.psi_api_key),
     }

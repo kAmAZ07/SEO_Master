@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import ipaddress
 import socket
 from typing import Type
@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 from sqlalchemy import select
 
 from services.audit_service.crawler.public_crawler import crawl_public
-from services.audit_service.analyzers.meta_checker import check_meta
+from services.audit_service.analyzers.meta_checker import check_meta, check_canonical
 from services.audit_service.analyzers.link_checker import check_links_404
 from services.audit_service.analyzers.schema_validator import validate_jsonld
 from services.audit_service.analyzers.robots_checker import check_robots
@@ -77,6 +77,24 @@ FINDING_CATALOG = {
         "title": "Meta description is too long",
         "description": "The description may be truncated in search snippets, weakening the message shown to users.",
         "recommendation": "Reduce the description to roughly 50-160 characters and keep the value proposition upfront.",
+        "category": "metadata",
+    },
+    "canonical_missing": {
+        "title": "Missing canonical link tag",
+        "description": "The page has no <link rel=\"canonical\"> tag, leaving search engines to determine the preferred URL on their own.",
+        "recommendation": "Add a self-referencing canonical tag to every page so the preferred URL is unambiguous.",
+        "category": "metadata",
+    },
+    "canonical_multiple": {
+        "title": "Multiple canonical link tags",
+        "description": "More than one <link rel=\"canonical\"> tag was found on the page. Search engines use only the first; the rest are ignored and cause confusion.",
+        "recommendation": "Keep exactly one canonical tag per page pointing to the preferred URL.",
+        "category": "metadata",
+    },
+    "canonical_mismatch": {
+        "title": "Canonical URL does not match page URL",
+        "description": "The canonical tag points to a URL that differs from the page being crawled. This signals to search engines that the current page should not be indexed.",
+        "recommendation": "Verify that the canonical URL is intentional. If the page should be indexed under its own URL, update the canonical to be self-referencing.",
         "category": "metadata",
     },
     "h1_missing": {
@@ -151,10 +169,10 @@ FINDING_CATALOG = {
         "recommendation": "Optimize server response time, render-blocking assets, and large above-the-fold resources.",
         "category": "performance",
     },
-    "cwv_fid_poor": {
-        "title": "First Input Delay is poor",
-        "description": "The page is slow to react to user input, often due to heavy JavaScript execution.",
-        "recommendation": "Reduce long main-thread tasks and defer non-critical JavaScript.",
+    "cwv_inp_poor": {
+        "title": "Interaction to Next Paint is poor",
+        "description": "The page responds slowly to user interactions (clicks, taps, key presses). INP replaced FID as a Core Web Vital in March 2024.",
+        "recommendation": "Reduce long tasks on the main thread, break up heavy JavaScript, and defer non-critical scripts to improve responsiveness.",
         "category": "performance",
     },
     "cwv_cls_poor": {
@@ -245,6 +263,7 @@ AUDIT_CRITERIA = [
             "Title length",
             "Meta description presence",
             "Meta description length",
+            "Canonical link tag",
         ],
     },
     {
@@ -292,7 +311,7 @@ AUDIT_CRITERIA = [
         "weight": 0.18,
         "checked": [
             "Largest Contentful Paint",
-            "First Input Delay",
+            "Interaction to Next Paint",
             "Cumulative Layout Shift",
             "PageSpeed availability",
         ],
@@ -538,7 +557,7 @@ def _build_score_explanation_finding(summary: dict) -> dict:
     if cwv:
         cwv_text = (
             f"LCP: {cwv.get('LCP_grade', 'unknown')}, "
-            f"FID: {cwv.get('FID_grade', 'unknown')}, "
+            f"INP: {cwv.get('INP_grade', 'unknown')}, "
             f"CLS: {cwv.get('CLS_grade', 'unknown')}"
         )
 
@@ -632,6 +651,7 @@ async def _run_audit_pipeline(
 
         html = page.get("html")
         if html:
+            findings.extend(check_canonical(page.get("url"), html))
             findings.extend(validate_jsonld(page.get("url"), html))
 
     link_findings, links_checked = await check_links_404(root_url=root_url, pages=pages)

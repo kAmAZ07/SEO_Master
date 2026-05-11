@@ -329,11 +329,6 @@ const Audit = () => {
                 {loading ? 'Запускаем аудит...' : isProjectAudit ? 'Запустить расширенный аудит' : 'Получить результат'}
               </Button>
             </form>
-            {currentAudit?.uid && (
-              <p className="mt-4 rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700">
-                Прямая ссылка на результат: /audit/results/{currentAudit.uid}
-              </p>
-            )}
           </Card>
         </section>
 

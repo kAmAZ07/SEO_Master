@@ -110,14 +110,9 @@ const Projects = () => {
                 </div>
               </div>
 
-              <div className="mt-6 flex gap-3">
-                <Link to={`/dashboard/projects/${project.id}`} className="flex-1">
+              <div className="mt-6">
+                <Link to={`/dashboard/projects/${project.id}`}>
                   <Button className="w-full">Open project</Button>
-                </Link>
-                <Link to={`/dashboard/projects/${project.id}?tab=audit`} className="flex-1">
-                  <Button variant="outline" className="w-full">
-                    Audit
-                  </Button>
                 </Link>
               </div>
             </Card>

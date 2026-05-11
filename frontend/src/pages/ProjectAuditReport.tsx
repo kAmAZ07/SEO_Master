@@ -5,7 +5,6 @@ import { useAppDispatch, useAppSelector } from '../store/hooks'
 import { pollAuditStatus, setPolling } from '../store/slices/auditSlice'
 import type { AuditCriterion, AuditFinding } from '../types/audit'
 import Card from '../components/ui/Card'
-import Button from '../components/ui/Button'
 import Loader from '../components/ui/Loader'
 
 const severityRank: Record<string, number> = {
@@ -177,7 +176,10 @@ const ProjectAuditReport = () => {
 
   const audit = currentAudit?.uid === uid ? currentAudit : null
   const criteria = useMemo(() => audit?.summary?.criteria ?? [], [audit?.summary?.criteria])
-  const allFindings = criteria.length > 0 ? flattenCriterionFindings(criteria) : audit?.details ?? []
+  const allFindings = useMemo(
+    () => criteria.length > 0 ? flattenCriterionFindings(criteria) : audit?.details ?? [],
+    [criteria, audit?.details],
+  )
   const topFindings = useMemo(() => getTopFindings(allFindings), [allFindings])
   const verdict = audit ? scoreTone(audit.score) : scoreTone(0)
   const projectPath = projectId ? `/dashboard/projects/${projectId}?tab=audit` : '/dashboard/projects'
@@ -190,19 +192,14 @@ const ProjectAuditReport = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <Link to={projectPath} className="text-sm font-medium text-blue-700 hover:text-blue-800">
-            Назад к проекту
-          </Link>
-          <h1 className="mt-3 text-3xl font-bold text-gray-900">Отчет расширенного аудита</h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-600">
-            Результат проверки сохраненного проекта. Отчет открыт внутри личного кабинета, чтобы сохранить контекст проекта.
-          </p>
-        </div>
-        <Link to={projectPath}>
-          <Button type="button" variant="outline">К аудиту проекта</Button>
+      <div>
+        <Link to={projectPath} className="text-sm font-medium text-blue-700 hover:text-blue-800">
+          Назад к проекту
         </Link>
+        <h1 className="mt-3 text-3xl font-bold text-gray-900">Отчет расширенного аудита</h1>
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-600">
+          Результат проверки сохраненного проекта. Отчет открыт внутри личного кабинета, чтобы сохранить контекст проекта.
+        </p>
       </div>
 
       {error && (

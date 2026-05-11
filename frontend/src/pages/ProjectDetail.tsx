@@ -5,7 +5,6 @@ import { loadProjectDetails } from '../store/slices/dashboardSlice'
 import ProjectAuditTab from '../components/projects/ProjectAuditTab'
 import ProjectIntegrationsTab from '../components/projects/ProjectIntegrationsTab'
 import Card from '../components/ui/Card'
-import Button from '../components/ui/Button'
 import Loader from '../components/ui/Loader'
 import { cn } from '../utils/classNames'
 
@@ -107,29 +106,19 @@ const ProjectDetail = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-        <div>
-          <Link to="/dashboard/projects" className="text-sm font-medium text-blue-600 hover:text-blue-700">
-            Back to projects
-          </Link>
-          <h1 className="mt-2 text-3xl font-bold text-gray-900">{currentProject.name}</h1>
-          <a
-            href={currentProject.url}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-2 inline-block text-blue-600 hover:text-blue-700"
-          >
-            {currentProject.url}
-          </a>
-        </div>
-        <div className="flex flex-col gap-3 sm:flex-row">
-          <Button type="button" variant="outline" onClick={() => handleSelectTab('integrations')}>
-            Интеграции
-          </Button>
-          <Button type="button" className="w-full sm:w-auto" onClick={() => handleSelectTab('audit')}>
-            Расширенный аудит
-          </Button>
-        </div>
+      <div>
+        <Link to="/dashboard/projects" className="text-sm font-medium text-blue-600 hover:text-blue-700">
+          Back to projects
+        </Link>
+        <h1 className="mt-2 text-3xl font-bold text-gray-900">{currentProject.name}</h1>
+        <a
+          href={currentProject.url}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-2 inline-block text-blue-600 hover:text-blue-700"
+        >
+          {currentProject.url}
+        </a>
       </div>
 
       <Card className="overflow-hidden p-0">

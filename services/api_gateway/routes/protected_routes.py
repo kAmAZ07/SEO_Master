@@ -256,7 +256,7 @@ def _resolve_project_for_private_flow(
 
     project = db.query(Project).filter(Project.owner_id == current_user.id).order_by(Project.created_at.desc()).first()
     if not project:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project_required")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сначала создайте проект, чтобы использовать этот инструмент.")
     return project
 
 
@@ -455,15 +455,15 @@ def _semantic_analysis_to_content_result(payload: Dict[str, Any], content: str, 
     if missing_keywords:
         recommendations.append(
             {
-                "title": "Improve keyword coverage",
-                "description": "Add missing target terms naturally: " + ", ".join(str(item) for item in missing_keywords[:5]),
+                "title": "Улучшите покрытие ключевых слов",
+                "description": "Добавьте в текст отсутствующие целевые термины: " + ", ".join(str(item) for item in missing_keywords[:5]),
             }
         )
     if "serp_top10_texts" in (inputs.get("unavailable") or []):
         recommendations.append(
             {
-                "title": "SERP context unavailable",
-                "description": "Connect SERP inputs to compare this draft against top-ranking pages.",
+                "title": "Нет данных о топ-10 выдачи",
+                "description": "Подключите данные SERP, чтобы сравнить текст с лидерами по запросу.",
             }
         )
 
@@ -472,8 +472,8 @@ def _semantic_analysis_to_content_result(payload: Dict[str, Any], content: str, 
     if gap_missing:
         issues.append(
             {
-                "title": "Content gap detected",
-                "description": "The semantic analysis found missing topical coverage.",
+                "title": "Обнаружены пробелы в семантике",
+                "description": "Семантический анализ выявил отсутствие важных тематических блоков.",
             }
         )
 
@@ -1311,7 +1311,7 @@ async def analyze_backlink(
         rows = await _analyze_backlinks_live(request.url)
     except Exception as exc:
         logger.warning("Backlink live analysis failed", extra={"url": request.url, "project_id": str(project.id), "error": str(exc)})
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="backlink_analysis_unavailable") from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Не удалось загрузить страницу для анализа ссылок. Проверьте URL и попробуйте снова.") from exc
 
     return rows
 
@@ -1446,7 +1446,7 @@ async def remove_tracked_keyword(keyword_id: str, current_user: User = Depends(g
     tracked = _load_tracked_keywords(db, project_ids)
     record = next((item for item in tracked if str(item.get("id")) == str(keyword_id)), None)
     if record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="keyword_not_found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ключевое слово не найдено.")
 
     db.add(
         SemanticEvent(

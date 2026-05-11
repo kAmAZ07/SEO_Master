@@ -83,11 +83,6 @@ const ProjectDetail = () => {
 
   const tools = [
     {
-      name: 'Расширенный аудит',
-      description: 'Запустить глубокую проверку проекта и посмотреть результат в личном кабинете.',
-      link: `/dashboard/projects/${currentProject.id}?tab=audit`,
-    },
-    {
       name: 'Ключевые слова',
       description: 'Исследуйте ключевые фразы и ведите список отслеживаемых запросов для проекта.',
       link: `/dashboard/keywords?project=${currentProject.id}`,
@@ -164,7 +159,7 @@ const ProjectDetail = () => {
 
           <div>
             <h2 className="mb-4 text-xl font-semibold text-gray-900">SEO-инструменты</h2>
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               {tools.map((tool) => (
                 <Link key={tool.name} to={tool.link}>
                   <Card className="h-full p-6 transition-shadow hover:shadow-lg">

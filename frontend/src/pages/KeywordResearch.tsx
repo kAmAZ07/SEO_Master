@@ -27,6 +27,8 @@ const KeywordResearch = () => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [searched, setSearched] = useState(false)
+  const [lastSearchedKeyword, setLastSearchedKeyword] = useState('')
 
   const hasTrackedKeywords = useMemo(() => trackedKeywords.length > 0, [trackedKeywords])
 
@@ -56,6 +58,8 @@ const KeywordResearch = () => {
     try {
       const response = await api.post('/keywords/search', { keyword, projectId })
       setSearchResults(response.data || [])
+      setSearched(true)
+      setLastSearchedKeyword(keyword)
     } catch (requestError) {
       setError(getApiErrorMessage(requestError, 'Не удалось выполнить поиск.'))
     } finally {
@@ -130,6 +134,12 @@ const KeywordResearch = () => {
       </Card>
 
       {loading && <Loader />}
+
+      {searched && !loading && searchResults.length === 0 && !error && (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+          По запросу «{lastSearchedKeyword}» ничего не найдено. Убедитесь, что для проекта подключён Google Search Console с данными о трафике.
+        </div>
+      )}
 
       {searchResults.length > 0 && (
         <Card className="p-6">

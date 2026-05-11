@@ -57,9 +57,9 @@ const Dashboard = () => {
 
   const statCards = [
     { title: 'Проекты', value: stats?.totalProjects ?? 0, link: '/dashboard/projects' },
-    { title: 'Активные аудиты', value: stats?.activeAudits ?? 0, link: '/dashboard/projects' },
-    { title: 'Ключевые слова', value: stats?.totalKeywords ?? 0, link: '/dashboard/projects' },
-    { title: 'Обратных ссылок', value: stats?.totalBacklinks ?? 0, link: '/dashboard/projects' },
+    { title: 'Активные аудиты', value: stats?.activeAudits ?? 0, link: '/audit' },
+    { title: 'Ключевые слова', value: stats?.totalKeywords ?? 0, link: '/dashboard/keywords' },
+    { title: 'Обратных ссылок', value: stats?.totalBacklinks ?? 0, link: '/dashboard/backlinks' },
   ]
 
   return (

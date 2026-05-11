@@ -191,16 +191,17 @@ const Settings = () => {
         <Card className="p-6">
           <h2 className="text-xl font-semibold text-gray-900">Уведомления</h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-600">
-            Сейчас в личном кабинете включены внутренние уведомления о HITL-согласованиях: счетчик в шапке показывает
-            количество ожидающих задач и ведет на экран ручной проверки. Email-уведомления и дайджесты не подключены.
+            Сейчас в личном кабинете включены внутренние уведомления по рабочему процессу SEO: готовность аудита,
+            новые задачи, обновления FF-Score и HITL-согласования. Email-уведомления и дайджесты не подключены.
           </p>
           <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 p-4">
-            <h3 className="font-medium text-blue-950">HITL-согласования</h3>
+            <h3 className="font-medium text-blue-950">Центр уведомлений</h3>
             <p className="mt-1 text-sm leading-6 text-blue-800">
-              Новые задачи на проверку появляются в разделе HITL и требуют ручного решения перед публикацией изменений.
+              Колокольчик в шапке показывает непрочитанные события и открывает список действий: согласовать изменение,
+              посмотреть отчет аудита или перейти к задаче проекта.
             </p>
-            <Link to="/dashboard/hitl" className="mt-4 inline-flex">
-              <Button type="button">Открыть HITL</Button>
+            <Link to="/dashboard" className="mt-4 inline-flex">
+              <Button type="button">Открыть дашборд</Button>
             </Link>
           </div>
         </Card>

@@ -3,6 +3,7 @@ import auditReducer from './slices/auditSlice'
 import hitlReducer from './slices/hitlSlice'
 import dashboardReducer from './slices/dashboardSlice'
 import authReducer from './slices/authSlice'
+import notificationsReducer from './slices/notificationsSlice'
 
 export const store = configureStore({
   reducer: {
@@ -10,6 +11,7 @@ export const store = configureStore({
     hitl: hitlReducer,
     dashboard: dashboardReducer,
     auth: authReducer,
+    notifications: notificationsReducer,
   },
 })
 

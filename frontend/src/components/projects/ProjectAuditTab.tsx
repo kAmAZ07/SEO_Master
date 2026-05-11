@@ -1,5 +1,6 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import api from '../../api/axiosConfig'
 import { useAppDispatch, useAppSelector } from '../../store/hooks'
 import { pollAuditStatus, setPolling, startAudit } from '../../store/slices/auditSlice'
 import Card from '../ui/Card'
@@ -12,15 +13,42 @@ interface ProjectAuditTabProps {
   projectUrl: string
 }
 
+interface AuditHistoryItem {
+  id: string
+  uid: string
+  url: string
+  status: string
+  score: number | null
+  createdAt: string | null
+  mode: string | null
+}
+
 const ProjectAuditTab = ({ projectId, projectUrl }: ProjectAuditTabProps) => {
   const dispatch = useAppDispatch()
   const { currentAudit, loading, polling, error } = useAppSelector((state) => state.audit)
   const [url, setUrl] = useState(projectUrl)
   const [auditUid, setAuditUid] = useState<string | null>(null)
+  const [history, setHistory] = useState<AuditHistoryItem[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true)
+    try {
+      const response = await api.get<AuditHistoryItem[]>('/audit/history', { params: { projectId } })
+      setHistory(response.data ?? [])
+    } catch {
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [projectId])
 
   useEffect(() => {
     setUrl(projectUrl)
   }, [projectUrl])
+
+  useEffect(() => {
+    void loadHistory()
+  }, [loadHistory])
 
   useEffect(() => {
     const activeUid = auditUid || currentAudit?.uid
@@ -39,6 +67,12 @@ const ProjectAuditTab = ({ projectId, projectUrl }: ProjectAuditTabProps) => {
       window.clearInterval(timer)
     }
   }, [auditUid, currentAudit?.status, currentAudit?.uid, dispatch, polling])
+
+  useEffect(() => {
+    if (currentAudit?.status === 'completed' || currentAudit?.status === 'failed') {
+      void loadHistory()
+    }
+  }, [currentAudit?.status, loadHistory])
 
   const activeAudit = useMemo(() => {
     if (!currentAudit || (auditUid && currentAudit.uid !== auditUid)) {
@@ -132,6 +166,59 @@ const ProjectAuditTab = ({ projectId, projectUrl }: ProjectAuditTabProps) => {
           </div>
         </Card>
       )}
+
+      <Card className="p-6">
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <h2 className="text-xl font-semibold text-gray-900">История аудитов</h2>
+          <Button type="button" variant="outline" onClick={() => void loadHistory()} disabled={historyLoading}>
+            Обновить
+          </Button>
+        </div>
+
+        {historyLoading && !history.length ? (
+          <Loader />
+        ) : history.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px]">
+              <thead>
+                <tr className="border-b border-gray-200 text-left text-sm text-gray-500">
+                  <th className="px-4 py-3 font-medium">URL</th>
+                  <th className="px-4 py-3 font-medium">Статус</th>
+                  <th className="px-4 py-3 font-medium">Оценка</th>
+                  <th className="px-4 py-3 font-medium">Дата</th>
+                  <th className="px-4 py-3 font-medium">Отчёт</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((item) => (
+                  <tr key={item.id} className="border-b border-gray-100 text-sm text-gray-700">
+                    <td className="max-w-[260px] truncate px-4 py-3 font-medium text-gray-900">{item.url}</td>
+                    <td className="px-4 py-3">{item.status}</td>
+                    <td className="px-4 py-3">{item.score != null ? `${item.score}/100` : '—'}</td>
+                    <td className="px-4 py-3">
+                      {item.createdAt ? new Date(item.createdAt).toLocaleString('ru-RU') : '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      {item.status === 'completed' ? (
+                        <Link
+                          to={`/dashboard/projects/${projectId}/audits/${item.uid}`}
+                          className="font-medium text-blue-600 hover:text-blue-700"
+                        >
+                          Открыть
+                        </Link>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500">Аудиты ещё не запускались для этого проекта.</p>
+        )}
+      </Card>
     </div>
   )
 }

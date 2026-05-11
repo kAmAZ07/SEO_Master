@@ -40,12 +40,12 @@ const Settings = () => {
     setLocalPasswordError('')
 
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      setLocalPasswordError('Passwords do not match.')
+      setLocalPasswordError('Пароли не совпадают.')
       return
     }
 
     if (!passwordValidation.valid) {
-      setLocalPasswordError(passwordValidation.message ?? 'Password is invalid.')
+      setLocalPasswordError(passwordValidation.message ?? 'Пароль не соответствует требованиям.')
       return
     }
 
@@ -69,16 +69,16 @@ const Settings = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Settings</h1>
-        <p className="mt-1 text-gray-600">Manage your profile and password.</p>
+        <h1 className="text-3xl font-bold text-gray-900">Настройки</h1>
+        <p className="mt-1 text-gray-600">Управляйте профилем и паролем.</p>
       </div>
 
       <div className="flex gap-4 border-b border-gray-200">
         <button type="button" onClick={() => setActiveTab('profile')} className={tabButtonClass('profile')}>
-          Profile
+          Профиль
         </button>
         <button type="button" onClick={() => setActiveTab('password')} className={tabButtonClass('password')}>
-          Security
+          Безопасность
         </button>
       </div>
 
@@ -90,16 +90,16 @@ const Settings = () => {
 
       {activeTab === 'profile' && (
         <Card className="p-6">
-          <h2 className="mb-4 text-xl font-semibold text-gray-900">Profile information</h2>
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Информация о профиле</h2>
           <form onSubmit={handleUpdateProfile} className="space-y-4">
             <Input
-              label="Name"
+              label="Имя"
               value={profileData.name}
               onChange={(event) => {
                 dispatch(clearError())
                 setProfileData({ ...profileData, name: event.target.value })
               }}
-              placeholder="Your name"
+              placeholder="Ваше имя"
             />
             <Input
               label="Email"
@@ -113,13 +113,13 @@ const Settings = () => {
               required
             />
             <Input
-              label="Company"
+              label="Компания"
               value={profileData.company}
               onChange={(event) => setProfileData({ ...profileData, company: event.target.value })}
-              placeholder="Company name"
+              placeholder="Название компании"
             />
             <Button type="submit" disabled={loading}>
-              {loading ? 'Saving...' : 'Save changes'}
+              {loading ? 'Сохраняем...' : 'Сохранить'}
             </Button>
           </form>
         </Card>
@@ -127,7 +127,7 @@ const Settings = () => {
 
       {activeTab === 'password' && (
         <Card className="p-6">
-          <h2 className="mb-4 text-xl font-semibold text-gray-900">Change password</h2>
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Изменение пароля</h2>
           <form onSubmit={handleChangePassword} className="space-y-4">
             {localPasswordError && (
               <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -136,7 +136,7 @@ const Settings = () => {
             )}
 
             <Input
-              label="Current password"
+              label="Текущий пароль"
               type="password"
               value={passwordData.currentPassword}
               onChange={(event) => {
@@ -147,7 +147,7 @@ const Settings = () => {
               required
             />
             <Input
-              label="New password"
+              label="Новый пароль"
               type="password"
               value={passwordData.newPassword}
               onChange={(event) => {
@@ -155,13 +155,13 @@ const Settings = () => {
                 setLocalPasswordError('')
                 setPasswordData({ ...passwordData, newPassword: event.target.value })
               }}
-              placeholder="At least 8 characters"
+              placeholder="Не менее 8 символов"
               error={passwordData.newPassword && !passwordValidation.valid ? passwordValidation.message : undefined}
-              hint={passwordData.newPassword ? passwordValidation.message : 'Use at least 8 characters.'}
+              hint={passwordData.newPassword ? passwordValidation.message : 'Используйте не менее 8 символов.'}
               required
             />
             <Input
-              label="Confirm new password"
+              label="Подтвердите новый пароль"
               type="password"
               value={passwordData.confirmPassword}
               onChange={(event) => {
@@ -171,18 +171,17 @@ const Settings = () => {
               }}
               error={
                 passwordData.confirmPassword && passwordData.newPassword !== passwordData.confirmPassword
-                  ? 'Passwords do not match.'
+                  ? 'Пароли не совпадают.'
                   : undefined
               }
               required
             />
             <Button type="submit" disabled={loading}>
-              {loading ? 'Updating...' : 'Update password'}
+              {loading ? 'Обновляем...' : 'Изменить пароль'}
             </Button>
           </form>
         </Card>
       )}
-
     </div>
   )
 }

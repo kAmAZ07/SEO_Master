@@ -56,17 +56,17 @@ const Dashboard = () => {
   }
 
   const statCards = [
-    { title: 'Projects', value: stats?.totalProjects ?? 0, link: '/dashboard/projects' },
-    { title: 'Active audits', value: stats?.activeAudits ?? 0, link: '/dashboard/projects' },
-    { title: 'Tracked keywords', value: stats?.totalKeywords ?? 0, link: '/dashboard/projects' },
-    { title: 'Backlinks discovered', value: stats?.totalBacklinks ?? 0, link: '/dashboard/projects' },
+    { title: 'Проекты', value: stats?.totalProjects ?? 0, link: '/dashboard/projects' },
+    { title: 'Активные аудиты', value: stats?.activeAudits ?? 0, link: '/dashboard/projects' },
+    { title: 'Ключевые слова', value: stats?.totalKeywords ?? 0, link: '/dashboard/projects' },
+    { title: 'Обратных ссылок', value: stats?.totalBacklinks ?? 0, link: '/dashboard/projects' },
   ]
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
-        <p className="mt-1 text-gray-600">A quick overview of your current SEO workspace.</p>
+        <h1 className="text-3xl font-bold text-gray-900">Панель управления</h1>
+        <p className="mt-1 text-gray-600">Обзор вашего SEO-рабочего пространства.</p>
       </div>
 
       {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
@@ -86,11 +86,11 @@ const Dashboard = () => {
       <Card className="p-6">
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">HITL approvals</h2>
-            <p className="mt-1 text-sm text-gray-600">Review proposed changes, inspect the diff, and approve or reject them from the private workspace.</p>
+            <h2 className="text-xl font-semibold text-gray-900">HITL-согласования</h2>
+            <p className="mt-1 text-sm text-gray-600">Просматривайте предлагаемые изменения и принимайте решение об одобрении или отклонении.</p>
           </div>
           <span className="rounded-full bg-blue-100 px-3 py-1 text-sm font-semibold text-blue-700">
-            {pendingTasks.length} pending
+            {pendingTasks.length} ожидают
           </span>
         </div>
 
@@ -127,13 +127,13 @@ const Dashboard = () => {
 
                     <div className="flex flex-wrap gap-2">
                       <Button type="button" variant="outline" onClick={() => setExpandedTaskId(isExpanded ? null : task.id)}>
-                        {isExpanded ? 'Hide diff' : 'Show diff'}
+                        {isExpanded ? 'Скрыть diff' : 'Показать diff'}
                       </Button>
                       <Button type="button" disabled={isSubmitting} onClick={() => void handleApprove(task.taskId)}>
-                        {isSubmitting ? 'Saving...' : 'Approve'}
+                        {isSubmitting ? 'Сохраняем...' : 'Одобрить'}
                       </Button>
                       <Button type="button" variant="destructive" disabled={isSubmitting} onClick={() => void handleReject(task.taskId)}>
-                        Reject
+                        Отклонить
                       </Button>
                     </div>
                   </div>
@@ -142,14 +142,14 @@ const Dashboard = () => {
                     <Input
                       value={comments[task.taskId] ?? ''}
                       onChange={(event) => setComments((current) => ({ ...current, [task.taskId]: event.target.value }))}
-                      placeholder="Optional reviewer note"
+                      placeholder="Комментарий рецензента (необязательно)"
                     />
                   </div>
 
                   {isExpanded && (
                     <div className="mt-4 overflow-hidden rounded-xl border border-gray-200 bg-white">
                       <div className="border-b border-gray-200 px-4 py-3 text-sm text-gray-600">
-                        Diff viewer compares the previous snapshot with the proposed change.
+                        Сравнение текущего состояния и предлагаемого изменения.
                       </div>
                       <div className="overflow-x-auto">
                         <ReactDiffViewer
@@ -167,16 +167,16 @@ const Dashboard = () => {
             })}
           </div>
         ) : (
-          <p className="text-sm text-gray-500">No pending approvals right now.</p>
+          <p className="text-sm text-gray-500">Нет ожидающих согласований.</p>
         )}
       </Card>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <Card className="p-6">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-xl font-semibold text-gray-900">Recent projects</h2>
+            <h2 className="text-xl font-semibold text-gray-900">Последние проекты</h2>
             <Link to="/dashboard/projects" className="text-sm font-medium text-blue-600 hover:text-blue-700">
-              View all
+              Все проекты
             </Link>
           </div>
 
@@ -194,15 +194,15 @@ const Dashboard = () => {
               ))}
             </div>
           ) : (
-            <p className="text-sm text-gray-500">No projects yet. Create one to start tracking audits and changes.</p>
+            <p className="text-sm text-gray-500">Проектов пока нет. Создайте первый, чтобы отслеживать аудиты и изменения.</p>
           )}
         </Card>
 
         <Card className="p-6">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-xl font-semibold text-gray-900">Recent audits</h2>
+            <h2 className="text-xl font-semibold text-gray-900">Последние аудиты</h2>
             <Link to="/audit" className="text-sm font-medium text-blue-600 hover:text-blue-700">
-              Open audit tool
+              Публичный аудит
             </Link>
           </div>
 
@@ -213,10 +213,10 @@ const Dashboard = () => {
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <p className="font-medium text-gray-900">{audit.url}</p>
-                      <p className="mt-1 text-sm text-gray-600">Status: {audit.status}</p>
+                      <p className="mt-1 text-sm text-gray-600">Статус: {audit.status}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-xs uppercase tracking-wide text-gray-400">Score</p>
+                      <p className="text-xs uppercase tracking-wide text-gray-400">Оценка</p>
                       <p className="text-2xl font-bold text-gray-900">{audit.score}/100</p>
                     </div>
                   </div>
@@ -224,7 +224,7 @@ const Dashboard = () => {
               ))}
             </div>
           ) : (
-            <p className="text-sm text-gray-500">No audits have been saved yet.</p>
+            <p className="text-sm text-gray-500">Аудиты ещё не сохранены.</p>
           )}
         </Card>
       </div>

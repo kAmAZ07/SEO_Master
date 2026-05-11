@@ -32,12 +32,12 @@ const Register = () => {
     setValidationError('')
 
     if (formData.password !== formData.confirmPassword) {
-      setValidationError('Passwords do not match.')
+      setValidationError('Пароли не совпадают.')
       return
     }
 
     if (!passwordValidation.valid) {
-      setValidationError(passwordValidation.message ?? 'Password is invalid.')
+      setValidationError(passwordValidation.message ?? 'Пароль не соответствует требованиям.')
       return
     }
 
@@ -70,7 +70,7 @@ const Register = () => {
       <div className="mx-auto w-full max-w-md rounded-2xl bg-white p-8 shadow-xl">
         <div className="mb-8 text-center">
           <h1 className="mb-2 text-3xl font-bold text-blue-600">SEO Master</h1>
-          <p className="text-gray-600">Create a new account</p>
+          <p className="text-gray-600">Создайте аккаунт</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
@@ -81,12 +81,12 @@ const Register = () => {
           )}
 
           <Input
-            label="Name"
+            label="Имя"
             type="text"
             name="name"
             value={formData.name}
             onChange={handleChange}
-            placeholder="John Test"
+            placeholder="Иван Иванов"
           />
 
           <Input
@@ -100,42 +100,42 @@ const Register = () => {
           />
 
           <Input
-            label="Password"
+            label="Пароль"
             type="password"
             name="password"
             value={formData.password}
             onChange={handleChange}
-            placeholder="At least 8 characters"
-            hint={formData.password ? passwordValidation.message : 'Use at least 8 characters.'}
+            placeholder="Не менее 8 символов"
+            hint={formData.password ? passwordValidation.message : 'Используйте не менее 8 символов.'}
             error={formData.password && !passwordValidation.valid ? passwordValidation.message : undefined}
             required
           />
 
           <Input
-            label="Confirm password"
+            label="Подтвердите пароль"
             type="password"
             name="confirmPassword"
             value={formData.confirmPassword}
             onChange={handleChange}
-            placeholder="Repeat your password"
+            placeholder="Повторите пароль"
             error={
               formData.confirmPassword && formData.password !== formData.confirmPassword
-                ? 'Passwords do not match.'
+                ? 'Пароли не совпадают.'
                 : undefined
             }
             required
           />
 
           <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? 'Creating account...' : 'Create account'}
+            {loading ? 'Создаём...' : 'Создать аккаунт'}
           </Button>
         </form>
 
         <div className="mt-6 text-center text-sm text-gray-600">
           <p>
-            Already have an account?{' '}
+            Уже есть аккаунт?{' '}
             <Link to="/login" className="font-medium text-blue-600 hover:text-blue-700">
-              Sign in
+              Войти
             </Link>
           </p>
         </div>

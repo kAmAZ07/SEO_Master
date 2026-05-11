@@ -27,7 +27,7 @@ const Projects = () => {
     try {
       new URL(form.url)
     } catch {
-      setLocalError('Enter a valid project URL, including http:// or https://.')
+      setLocalError('Введите корректный URL проекта, включая http:// или https://.')
       return
     }
 
@@ -46,7 +46,7 @@ const Projects = () => {
   }
 
   const handleDeleteProject = async (id: string) => {
-    if (!window.confirm('Delete this project? This action cannot be undone.')) {
+    if (!window.confirm('Удалить проект? Это действие нельзя отменить.')) {
       return
     }
     await dispatch(removeProject(id))
@@ -60,10 +60,10 @@ const Projects = () => {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Projects</h1>
-          <p className="mt-1 text-gray-600">Manage the websites you want to audit, optimize, and monitor.</p>
+          <h1 className="text-3xl font-bold text-gray-900">Проекты</h1>
+          <p className="mt-1 text-gray-600">Управляйте сайтами, которые нужно аудировать и оптимизировать.</p>
         </div>
-        <Button onClick={() => setShowModal(true)}>Create project</Button>
+        <Button onClick={() => setShowModal(true)}>Создать проект</Button>
       </div>
 
       {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
@@ -90,7 +90,7 @@ const Projects = () => {
                     onClick={() => void handleDeleteProject(project.id)}
                     className="text-sm font-medium text-red-600 hover:text-red-700"
                   >
-                    Delete
+                    Удалить
                   </button>
                 </div>
 
@@ -98,13 +98,13 @@ const Projects = () => {
 
                 <div className="grid grid-cols-2 gap-3 rounded-lg bg-gray-50 p-4 text-sm text-gray-600">
                   <div>
-                    <p className="text-xs uppercase tracking-wide text-gray-400">Status</p>
+                    <p className="text-xs uppercase tracking-wide text-gray-400">Статус</p>
                     <p className="mt-1 font-medium text-gray-900">{project.status}</p>
                   </div>
                   <div>
-                    <p className="text-xs uppercase tracking-wide text-gray-400">Created</p>
+                    <p className="text-xs uppercase tracking-wide text-gray-400">Создан</p>
                     <p className="mt-1 font-medium text-gray-900">
-                      {project.createdAt ? new Date(project.createdAt).toLocaleDateString() : 'Recently'}
+                      {project.createdAt ? new Date(project.createdAt).toLocaleDateString('ru-RU') : 'Недавно'}
                     </p>
                   </div>
                 </div>
@@ -112,7 +112,7 @@ const Projects = () => {
 
               <div className="mt-6">
                 <Link to={`/dashboard/projects/${project.id}`}>
-                  <Button className="w-full">Open project</Button>
+                  <Button className="w-full">Открыть проект</Button>
                 </Link>
               </div>
             </Card>
@@ -120,10 +120,10 @@ const Projects = () => {
         </div>
       ) : (
         <Card className="p-10 text-center">
-          <h2 className="text-xl font-semibold text-gray-900">No projects yet</h2>
-          <p className="mt-2 text-gray-600">Create your first project to start using the SEO tools.</p>
+          <h2 className="text-xl font-semibold text-gray-900">Проектов пока нет</h2>
+          <p className="mt-2 text-gray-600">Создайте первый проект, чтобы начать работу.</p>
           <Button className="mt-6" onClick={() => setShowModal(true)}>
-            Create project
+            Создать проект
           </Button>
         </Card>
       )}
@@ -133,11 +133,11 @@ const Projects = () => {
           <Card className="w-full max-w-lg p-6">
             <div className="mb-6 flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-2xl font-semibold text-gray-900">New project</h2>
-                <p className="mt-1 text-sm text-gray-600">Add a website you want to manage inside SEO Master.</p>
+                <h2 className="text-2xl font-semibold text-gray-900">Новый проект</h2>
+                <p className="mt-1 text-sm text-gray-600">Добавьте сайт, которым хотите управлять в SEO Master.</p>
               </div>
               <button type="button" onClick={() => setShowModal(false)} className="text-sm text-gray-500 hover:text-gray-700">
-                Close
+                Закрыть
               </button>
             </div>
 
@@ -149,14 +149,14 @@ const Projects = () => {
 
             <form onSubmit={handleCreateProject} className="space-y-4">
               <Input
-                label="Project name"
+                label="Название проекта"
                 value={form.name}
                 onChange={(event) => setForm({ ...form, name: event.target.value })}
-                placeholder="Main company website"
+                placeholder="Сайт компании"
                 required
               />
               <Input
-                label="Website URL"
+                label="URL сайта"
                 type="url"
                 value={form.url}
                 onChange={(event) => setForm({ ...form, url: event.target.value })}
@@ -165,22 +165,22 @@ const Projects = () => {
               />
               <div className="space-y-1.5">
                 <label className="block text-sm font-medium text-gray-700" htmlFor="project-description">
-                  Description
+                  Описание
                 </label>
                 <textarea
                   id="project-description"
                   value={form.description}
                   onChange={(event) => setForm({ ...form, description: event.target.value })}
                   className="min-h-[110px] w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                  placeholder="Optional notes about the site, niche, or SEO goals."
+                  placeholder="Заметки о сайте, нише или целях SEO (необязательно)."
                 />
               </div>
               <div className="flex gap-3 pt-2">
                 <Button type="button" variant="outline" className="flex-1" onClick={() => setShowModal(false)}>
-                  Cancel
+                  Отмена
                 </Button>
                 <Button type="submit" className="flex-1" disabled={isSubmitDisabled}>
-                  {loading ? 'Creating...' : 'Create project'}
+                  {loading ? 'Создаём...' : 'Создать проект'}
                 </Button>
               </div>
             </form>

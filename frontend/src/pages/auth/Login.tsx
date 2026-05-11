@@ -50,7 +50,7 @@ const Login = () => {
       <div className="mx-auto w-full max-w-md rounded-2xl bg-white p-8 shadow-xl">
         <div className="mb-8 text-center">
           <h1 className="mb-2 text-3xl font-bold text-blue-600">SEO Master</h1>
-          <p className="text-gray-600">Sign in to your account</p>
+          <p className="text-gray-600">Войдите в аккаунт</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
@@ -71,25 +71,25 @@ const Login = () => {
           />
 
           <Input
-            label="Password"
+            label="Пароль"
             type="password"
             name="password"
             value={formData.password}
             onChange={handleChange}
-            placeholder="Enter your password"
+            placeholder="Введите пароль"
             required
           />
 
           <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? 'Signing in...' : 'Sign in'}
+            {loading ? 'Входим...' : 'Войти'}
           </Button>
         </form>
 
         <div className="mt-6 text-center text-sm text-gray-600">
           <p>
-            No account yet?{' '}
+            Нет аккаунта?{' '}
             <Link to="/register" className="font-medium text-blue-600 hover:text-blue-700">
-              Create one
+              Зарегистрироваться
             </Link>
           </p>
         </div>

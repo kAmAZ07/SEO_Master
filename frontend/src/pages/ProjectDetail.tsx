@@ -24,17 +24,17 @@ const projectTabs: Array<{ id: ProjectDetailTab; label: string; description: str
   {
     id: 'integrations',
     label: 'Интеграции',
-    description: 'Per-project connections for Tilda, WordPress, GSC, GA4, and Yandex without shared global credentials.',
+    description: 'Подключение CMS, аналитики и инструментов вебмастера на уровне проекта.',
   },
 ]
 
 const formatProjectDate = (value?: string | null) => {
   if (!value) {
-    return 'Unavailable'
+    return 'Не доступно'
   }
 
   const parsedDate = new Date(value)
-  return Number.isNaN(parsedDate.getTime()) ? value : parsedDate.toLocaleString()
+  return Number.isNaN(parsedDate.getTime()) ? value : parsedDate.toLocaleString('ru-RU')
 }
 
 const ProjectDetail = () => {
@@ -71,11 +71,11 @@ const ProjectDetail = () => {
     return (
       <div className="space-y-4">
         <Link to="/dashboard/projects" className="text-sm font-medium text-blue-600 hover:text-blue-700">
-          Back to projects
+          Назад к проектам
         </Link>
         <Card className="p-6">
-          <h1 className="text-2xl font-semibold text-gray-900">Project not found</h1>
-          <p className="mt-2 text-gray-600">{error || 'This project is unavailable or you no longer have access to it.'}</p>
+          <h1 className="text-2xl font-semibold text-gray-900">Проект не найден</h1>
+          <p className="mt-2 text-gray-600">{error || 'Проект недоступен или у вас нет к нему доступа.'}</p>
         </Card>
       </div>
     )
@@ -88,18 +88,18 @@ const ProjectDetail = () => {
       link: `/dashboard/projects/${currentProject.id}?tab=audit`,
     },
     {
-      name: 'Keyword research',
-      description: 'Generate ideas and maintain a tracked list for this project.',
+      name: 'Ключевые слова',
+      description: 'Исследуйте ключевые фразы и ведите список отслеживаемых запросов для проекта.',
       link: `/dashboard/keywords?project=${currentProject.id}`,
     },
     {
-      name: 'Content optimization',
-      description: 'Analyze page copy and get practical recommendations.',
+      name: 'Оптимизация контента',
+      description: 'Оцените текст страницы и получите практические рекомендации по улучшению.',
       link: `/dashboard/content?project=${currentProject.id}`,
     },
     {
-      name: 'Backlink review',
-      description: 'Inspect discovered referring pages and basic backlink quality signals.',
+      name: 'Ссылки',
+      description: 'Просмотрите исходящие ссылки страниц проекта и оцените их качество.',
       link: `/dashboard/backlinks?project=${currentProject.id}`,
     },
   ]
@@ -108,7 +108,7 @@ const ProjectDetail = () => {
     <div className="space-y-6">
       <div>
         <Link to="/dashboard/projects" className="text-sm font-medium text-blue-600 hover:text-blue-700">
-          Back to projects
+          Назад к проектам
         </Link>
         <h1 className="mt-2 text-3xl font-bold text-gray-900">{currentProject.name}</h1>
         <a
@@ -145,25 +145,25 @@ const ProjectDetail = () => {
           {currentProject.description && <Card className="p-6 text-gray-700">{currentProject.description}</Card>}
 
           <Card className="p-6">
-            <h2 className="text-xl font-semibold text-gray-900">Project details</h2>
+            <h2 className="text-xl font-semibold text-gray-900">Детали проекта</h2>
             <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
               <div className="rounded-lg bg-gray-50 p-4">
-                <p className="text-xs uppercase tracking-wide text-gray-400">Status</p>
+                <p className="text-xs uppercase tracking-wide text-gray-400">Статус</p>
                 <p className="mt-2 text-lg font-semibold text-gray-900">{currentProject.status}</p>
               </div>
               <div className="rounded-lg bg-gray-50 p-4">
-                <p className="text-xs uppercase tracking-wide text-gray-400">Created</p>
+                <p className="text-xs uppercase tracking-wide text-gray-400">Создан</p>
                 <p className="mt-2 text-lg font-semibold text-gray-900">{formatProjectDate(currentProject.createdAt)}</p>
               </div>
               <div className="rounded-lg bg-gray-50 p-4">
-                <p className="text-xs uppercase tracking-wide text-gray-400">Updated</p>
+                <p className="text-xs uppercase tracking-wide text-gray-400">Обновлён</p>
                 <p className="mt-2 text-lg font-semibold text-gray-900">{formatProjectDate(currentProject.updatedAt)}</p>
               </div>
             </div>
           </Card>
 
           <div>
-            <h2 className="mb-4 text-xl font-semibold text-gray-900">SEO tools</h2>
+            <h2 className="mb-4 text-xl font-semibold text-gray-900">SEO-инструменты</h2>
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               {tools.map((tool) => (
                 <Link key={tool.name} to={tool.link}>

@@ -72,7 +72,7 @@ const HITL = () => {
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
           <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">Human in the loop</p>
-          <h1 className="mt-1 text-3xl font-bold text-gray-900">HITL approvals</h1>
+          <h1 className="mt-1 text-3xl font-bold text-gray-900">HITL-согласования</h1>
           <p className="mt-2 max-w-3xl text-gray-600">
             Приватные карточки согласования показывают предлагаемое изменение, impact и diff до публикации через API Gateway.
           </p>
@@ -110,10 +110,10 @@ const HITL = () => {
                   <aside className="border-b border-gray-200 bg-gray-50 p-6 xl:border-b-0 xl:border-r">
                     <div className="mb-4 flex items-center justify-between gap-3">
                       <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-700">
-                        {task.task?.taskType || 'approval'}
+                        {task.task?.taskType || 'согласование'}
                       </span>
                       <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-                        Impact {formatImpact(task.impactScore)}
+                        Влияние {formatImpact(task.impactScore)}
                       </span>
                     </div>
 
@@ -122,7 +122,7 @@ const HITL = () => {
 
                     <div className="mt-5 space-y-3 rounded-xl border border-gray-200 bg-white p-4 text-sm">
                       <div>
-                        <p className="text-xs uppercase tracking-wide text-gray-400">Project</p>
+                        <p className="text-xs uppercase tracking-wide text-gray-400">Проект</p>
                         <p className="mt-1 break-all font-medium text-gray-900">{task.projectId}</p>
                       </div>
                       <div>
@@ -130,7 +130,7 @@ const HITL = () => {
                         <p className="mt-1 break-all font-medium text-gray-900">{getReadableMeta(taskUrl)}</p>
                       </div>
                       <div>
-                        <p className="text-xs uppercase tracking-wide text-gray-400">Correlation</p>
+                        <p className="text-xs uppercase tracking-wide text-gray-400">Идентификатор корреляции</p>
                         <p className="mt-1 break-all font-medium text-gray-900">
                           {getReadableMeta(task.metadata.correlation_id || task.metadata.correlationId)}
                         </p>
@@ -166,7 +166,7 @@ const HITL = () => {
                   <section className="min-w-0 p-6">
                     <div className="mb-4 flex items-center justify-between gap-4">
                       <div>
-                        <h3 className="text-lg font-semibold text-gray-900">DiffViewer</h3>
+                        <h3 className="text-lg font-semibold text-gray-900">Просмотр изменений</h3>
                         <p className="mt-1 text-sm text-gray-600">Сравнение текущего состояния и предлагаемого изменения.</p>
                       </div>
                       <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium uppercase tracking-wide text-gray-600">

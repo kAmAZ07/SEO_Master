@@ -43,31 +43,31 @@ const SUPPORTED_PLATFORMS: SupportedIntegrationPlatform[] = ['tilda', 'wordpress
 const platformMeta: Record<SupportedIntegrationPlatform, { label: string; description: string; accent: string; icon: typeof Layers3 }> = {
   tilda: {
     label: 'Tilda',
-    description: 'Store Tilda API credentials per project for deploy flows.',
+    description: 'Сохраните API-ключи Tilda для публикации страниц через SEO Master.',
     accent: 'emerald',
     icon: Layers3,
   },
   wordpress: {
     label: 'WordPress',
-    description: 'Store the WordPress site endpoint and HMAC secret per project.',
+    description: 'Сохраните адрес сайта и HMAC-секрет для интеграции с плагином SEO Master.',
     accent: 'blue',
     icon: Globe2,
   },
   gsc: {
     label: 'Google Search Console',
-    description: 'Store the project property and Google credentials for reporting and audit enrichment.',
+    description: 'Подключите ресурс GSC для обогащения аудита данными о поисковом трафике.',
     accent: 'amber',
     icon: Search,
   },
   ga4: {
     label: 'Google Analytics 4',
-    description: 'Store the GA4 property and credentials per project for reporting.',
+    description: 'Сохраните идентификатор ресурса GA4 и учётные данные для отчётности.',
     accent: 'violet',
     icon: BarChart3,
   },
   yandex: {
     label: 'Yandex Webmaster',
-    description: 'Store Yandex Webmaster access data per project for reporting.',
+    description: 'Подключите Яндекс.Вебмастер для мониторинга индексации и ошибок.',
     accent: 'rose',
     icon: Globe2,
   },
@@ -78,11 +78,11 @@ const textareaClassName =
 
 const formatDate = (value?: string | null) => {
   if (!value) {
-    return 'Unavailable'
+    return 'Не доступно'
   }
 
   const parsedDate = new Date(value)
-  return Number.isNaN(parsedDate.getTime()) ? value : parsedDate.toLocaleString()
+  return Number.isNaN(parsedDate.getTime()) ? value : parsedDate.toLocaleString('ru-RU')
 }
 
 const IntegrationTextarea = ({
@@ -153,7 +153,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
         if (!cancelled) {
           setNotice({
             type: 'error',
-            text: getApiErrorMessage(integrationError, 'Failed to load project integrations.'),
+            text: getApiErrorMessage(integrationError, 'Не удалось загрузить интеграции проекта.'),
           })
         }
       } finally {
@@ -204,7 +204,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
         const secretKey = tildaForm.secretKey.trim()
         const externalProjectId = tildaForm.projectId.trim()
         if (!publicKey || !secretKey || !externalProjectId) {
-          throw new Error('Public Key, Secret Key, and Project ID are required for Tilda.')
+          throw new Error('Для Tilda обязательны Public Key, Secret Key и Project ID.')
         }
         saved = await saveTildaIntegration(projectId, { publicKey, secretKey, projectId: externalProjectId })
         setTildaForm({ publicKey: '', secretKey: '', projectId: '' })
@@ -212,7 +212,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
         const baseUrl = wordpressForm.baseUrl.trim()
         const hmacSecret = wordpressForm.hmacSecret.trim()
         if (!baseUrl || !hmacSecret) {
-          throw new Error('WordPress site URL and HMAC secret are required.')
+          throw new Error('Необходимо указать URL сайта WordPress и HMAC-секрет.')
         }
         saved = await saveWordpressIntegration(projectId, { baseUrl, hmacSecret })
         setWordpressForm((current) => ({ ...current, baseUrl: saved.siteUrl ?? baseUrl, hmacSecret: '' }))
@@ -221,7 +221,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
         const credentialsJson = gscForm.credentialsJson.trim()
         const tokenJson = gscForm.tokenJson.trim()
         if (!propertyUrl || !credentialsJson) {
-          throw new Error('GSC property URL and credentials JSON are required.')
+          throw new Error('Необходимо указать URL ресурса GSC и Credentials JSON.')
         }
         saved = await saveGSCIntegration(projectId, {
           propertyUrl,
@@ -234,7 +234,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
         const credentialsJson = ga4Form.credentialsJson.trim()
         const tokenJson = ga4Form.tokenJson.trim()
         if (!propertyId || !credentialsJson) {
-          throw new Error('GA4 property ID and credentials JSON are required.')
+          throw new Error('Необходимо указать GA4 Property ID и Credentials JSON.')
         }
         saved = await saveGA4Integration(projectId, {
           propertyId,
@@ -247,7 +247,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
         const userId = yandexForm.userId.trim()
         const hostId = yandexForm.hostId.trim()
         if (!token || !userId || !hostId) {
-          throw new Error('Yandex token, user ID, and host ID are required.')
+          throw new Error('Необходимо указать токен, User ID и Host ID для Яндекс.')
         }
         saved = await saveYandexIntegration(projectId, { token, userId, hostId })
         setYandexForm({ token: '', userId: '', hostId: '' })
@@ -256,12 +256,12 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
       setIntegrations((current) => ({ ...current, [activePlatform]: saved }))
       setNotice({
         type: 'success',
-        text: `${platformMeta[activePlatform as SupportedIntegrationPlatform].label} is now stored in the encrypted project vault.`,
+        text: `${platformMeta[activePlatform as SupportedIntegrationPlatform].label} подключён и сохранён в зашифрованном хранилище проекта.`,
       })
     } catch (integrationError) {
       setNotice({
         type: 'error',
-        text: getApiErrorMessage(integrationError, 'Failed to save integration credentials.'),
+        text: getApiErrorMessage(integrationError, 'Не удалось сохранить учётные данные интеграции.'),
       })
     } finally {
       setSavingPlatform(null)
@@ -270,7 +270,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
 
   const handleDisconnect = async (platform: SupportedIntegrationPlatform) => {
     const label = platformMeta[platform].label
-    if (!window.confirm(`Disconnect ${label} from this project?`)) {
+    if (!window.confirm(`Отключить ${label} от этого проекта?`)) {
       return
     }
 
@@ -287,11 +287,11 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
           status: 'not_configured',
         },
       }))
-      setNotice({ type: 'success', text: `${label} was disconnected from this project.` })
+      setNotice({ type: 'success', text: `${label} отключён от проекта.` })
     } catch (integrationError) {
       setNotice({
         type: 'error',
-        text: getApiErrorMessage(integrationError, 'Failed to revoke integration.'),
+        text: getApiErrorMessage(integrationError, 'Не удалось отключить интеграцию.'),
       })
     } finally {
       setDisconnectingPlatform(null)
@@ -304,15 +304,15 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
     }
 
     const rows: Array<{ label: string; value: string }> = []
-    if (activeIntegration.siteUrl) rows.push({ label: 'Site / Property', value: activeIntegration.siteUrl })
-    if (activeIntegration.projectIdentifier) rows.push({ label: 'Identifier', value: activeIntegration.projectIdentifier })
-    if (activeIntegration.accountIdentifier) rows.push({ label: 'Account', value: activeIntegration.accountIdentifier })
-    if (activeIntegration.authMode) rows.push({ label: 'Auth mode', value: activeIntegration.authMode })
-    if (activeIntegration.hint) rows.push({ label: 'Vault hint', value: activeIntegration.hint })
+    if (activeIntegration.siteUrl) rows.push({ label: 'Сайт / ресурс', value: activeIntegration.siteUrl })
+    if (activeIntegration.projectIdentifier) rows.push({ label: 'Идентификатор', value: activeIntegration.projectIdentifier })
+    if (activeIntegration.accountIdentifier) rows.push({ label: 'Аккаунт', value: activeIntegration.accountIdentifier })
+    if (activeIntegration.authMode) rows.push({ label: 'Режим авторизации', value: activeIntegration.authMode })
+    if (activeIntegration.hint) rows.push({ label: 'Подсказка', value: activeIntegration.hint })
     if (typeof activeIntegration.pageMappingsCount === 'number') {
-      rows.push({ label: 'Page mappings', value: String(activeIntegration.pageMappingsCount) })
+      rows.push({ label: 'Сопоставлено страниц', value: String(activeIntegration.pageMappingsCount) })
     }
-    rows.push({ label: 'Connected at', value: formatDate(activeIntegration.connectedAt) })
+    rows.push({ label: 'Подключено', value: formatDate(activeIntegration.connectedAt) })
 
     return (
       <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-5">
@@ -321,8 +321,8 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
             <div className="flex items-center gap-3">
               <CheckCircle2 className="h-6 w-6 text-emerald-600" />
               <div>
-                <h4 className="text-xl font-semibold text-emerald-950">{platformMeta[activePlatform as SupportedIntegrationPlatform].label} connected</h4>
-                <p className="text-sm text-emerald-800">Secrets are stored encrypted and are not returned to the UI.</p>
+                <h4 className="text-xl font-semibold text-emerald-950">{platformMeta[activePlatform as SupportedIntegrationPlatform].label} подключён</h4>
+                <p className="text-sm text-emerald-800">Секреты хранятся в зашифрованном виде и не передаются в интерфейс.</p>
               </div>
             </div>
             <div className="grid grid-cols-1 gap-3 text-sm text-emerald-900 md:grid-cols-2">
@@ -339,7 +339,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
                 rel="noreferrer"
                 className="inline-flex items-center gap-2 text-sm font-medium text-emerald-700 hover:text-emerald-900"
               >
-                Plugin health endpoint
+                Состояние плагина
                 <ExternalLink className="h-4 w-4" />
               </a>
             )}
@@ -352,7 +352,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
             disabled={disconnectingPlatform === activePlatform}
           >
             <Unplug className="mr-2 h-4 w-4" />
-            {disconnectingPlatform === activePlatform ? 'Disconnecting...' : 'Disconnect'}
+            {disconnectingPlatform === activePlatform ? 'Отключаем...' : 'Отключить'}
           </Button>
         </div>
       </div>
@@ -374,7 +374,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
           <Input label="Project ID" value={tildaForm.projectId} onChange={(event) => setTildaForm((current) => ({ ...current, projectId: event.target.value }))} placeholder="123456" autoComplete="off" required />
           <Button type="submit" disabled={savingPlatform === 'tilda'} className="w-full md:w-auto">
             <KeyRound className="mr-2 h-4 w-4" />
-            {savingPlatform === 'tilda' ? 'Saving...' : 'Connect Tilda'}
+            {savingPlatform === 'tilda' ? 'Сохраняем...' : 'Подключить Tilda'}
           </Button>
         </form>
       )
@@ -385,8 +385,8 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
         <div className="space-y-6">
           <ol className="space-y-4">
             <li className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-              <p className="text-sm font-semibold text-gray-900">1. Download the SEO Master plugin</p>
-              <p className="mt-1 text-sm text-gray-600">Download the connector ZIP and save it to your computer.</p>
+              <p className="text-sm font-semibold text-gray-900">1. Скачайте плагин SEO Master</p>
+              <p className="mt-1 text-sm text-gray-600">Скачайте ZIP-архив коннектора и сохраните на компьютер.</p>
               <a
                 href="/api/wordpress-plugin"
                 download
@@ -398,36 +398,36 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
             </li>
 
             <li className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-              <p className="text-sm font-semibold text-gray-900">2. Install &amp; activate the plugin</p>
+              <p className="text-sm font-semibold text-gray-900">2. Установите и активируйте плагин</p>
               <p className="mt-1 text-sm text-gray-600">
-                In your WordPress admin go to <strong>Plugins → Add New → Upload Plugin</strong>, select the downloaded ZIP, click
-                &ldquo;Install Now&rdquo;, then &ldquo;Activate Plugin&rdquo;.
+                В панели WordPress перейдите в <strong>Плагины → Добавить новый → Загрузить плагин</strong>, выберите скачанный ZIP,
+                нажмите «Установить» и затем «Активировать».
               </p>
             </li>
 
             <li className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-              <p className="text-sm font-semibold text-gray-900">3. Configure the HMAC secret in wp-config.php</p>
+              <p className="text-sm font-semibold text-gray-900">3. Укажите HMAC-секрет в wp-config.php</p>
               <p className="mt-1 text-sm text-gray-600">
-                Open <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">wp-config.php</code> and add the line below before{' '}
-                <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">/* That&apos;s all */</code>. Use the same value you will enter in step 4.
+                Откройте <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">wp-config.php</code> и добавьте строку ниже перед{' '}
+                <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">/* That&apos;s all */</code>. Используйте то же значение, что введёте на шаге 4.
               </p>
               <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-900 px-4 py-3 text-xs text-emerald-300">
                 {`define('SEO_MASTER_HMAC_SECRET', 'your-secret-here');`}
               </pre>
               <p className="mt-2 text-xs text-gray-500">
-                Then go to <strong>Settings → SEO Master Connector</strong> in your WordPress admin and set the <strong>Project ID</strong> to match the project ID shown above.
+                Затем перейдите в <strong>Настройки → SEO Master Connector</strong> в панели WordPress и укажите <strong>Project ID</strong> текущего проекта.
               </p>
             </li>
 
             <li className="rounded-xl border border-blue-100 bg-blue-50 p-4">
-              <p className="text-sm font-semibold text-gray-900">4. Connect to SEO Master</p>
-              <p className="mt-1 mb-4 text-sm text-gray-600">Enter your WordPress site URL and the same HMAC secret you set in wp-config.php.</p>
+              <p className="text-sm font-semibold text-gray-900">4. Подключите к SEO Master</p>
+              <p className="mt-1 mb-4 text-sm text-gray-600">Введите URL сайта WordPress и тот же HMAC-секрет, что прописали в wp-config.php.</p>
               <form onSubmit={handleSave} className="space-y-4">
-                <Input label="WordPress site URL" value={wordpressForm.baseUrl} onChange={(event) => setWordpressForm((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://example.com" autoComplete="url" required />
+                <Input label="URL сайта WordPress" value={wordpressForm.baseUrl} onChange={(event) => setWordpressForm((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://example.com" autoComplete="url" required />
                 <Input label="HMAC Secret" type="password" value={wordpressForm.hmacSecret} onChange={(event) => setWordpressForm((current) => ({ ...current, hmacSecret: event.target.value }))} placeholder="your-secret-here" autoComplete="new-password" required />
                 <Button type="submit" disabled={savingPlatform === 'wordpress'} className="w-full md:w-auto">
                   <KeyRound className="mr-2 h-4 w-4" />
-                  {savingPlatform === 'wordpress' ? 'Saving...' : 'Connect WordPress'}
+                  {savingPlatform === 'wordpress' ? 'Сохраняем...' : 'Подключить WordPress'}
                 </Button>
               </form>
             </li>
@@ -439,12 +439,12 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
     if (activePlatform === 'gsc') {
       return (
         <form onSubmit={handleSave} className="space-y-5">
-          <Input label="Property URL" value={gscForm.propertyUrl} onChange={(event) => setGscForm((current) => ({ ...current, propertyUrl: event.target.value }))} placeholder="https://example.com/ or sc-domain:example.com" autoComplete="off" required />
+          <Input label="URL ресурса" value={gscForm.propertyUrl} onChange={(event) => setGscForm((current) => ({ ...current, propertyUrl: event.target.value }))} placeholder="https://example.com/ или sc-domain:example.com" autoComplete="off" required />
           <IntegrationTextarea label="Credentials JSON" value={gscForm.credentialsJson} onChange={(event) => setGscForm((current) => ({ ...current, credentialsJson: event.target.value }))} placeholder='{"type":"service_account", ...}' required />
-          <IntegrationTextarea label="Token JSON (optional)" value={gscForm.tokenJson} onChange={(event) => setGscForm((current) => ({ ...current, tokenJson: event.target.value }))} placeholder='{"token":"...","refresh_token":"..."}' rows={4} />
+          <IntegrationTextarea label="Token JSON (необязательно)" value={gscForm.tokenJson} onChange={(event) => setGscForm((current) => ({ ...current, tokenJson: event.target.value }))} placeholder='{"token":"...","refresh_token":"..."}' rows={4} />
           <Button type="submit" disabled={savingPlatform === 'gsc'} className="w-full md:w-auto">
             <KeyRound className="mr-2 h-4 w-4" />
-            {savingPlatform === 'gsc' ? 'Saving...' : 'Connect Search Console'}
+            {savingPlatform === 'gsc' ? 'Сохраняем...' : 'Подключить Search Console'}
           </Button>
         </form>
       )
@@ -455,10 +455,10 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
         <form onSubmit={handleSave} className="space-y-5">
           <Input label="GA4 Property ID" value={ga4Form.propertyId} onChange={(event) => setGa4Form((current) => ({ ...current, propertyId: event.target.value }))} placeholder="123456789 or properties/123456789" autoComplete="off" required />
           <IntegrationTextarea label="Credentials JSON" value={ga4Form.credentialsJson} onChange={(event) => setGa4Form((current) => ({ ...current, credentialsJson: event.target.value }))} placeholder='{"type":"service_account", ...}' required />
-          <IntegrationTextarea label="Token JSON (optional)" value={ga4Form.tokenJson} onChange={(event) => setGa4Form((current) => ({ ...current, tokenJson: event.target.value }))} placeholder='{"token":"...","refresh_token":"..."}' rows={4} />
+          <IntegrationTextarea label="Token JSON (необязательно)" value={ga4Form.tokenJson} onChange={(event) => setGa4Form((current) => ({ ...current, tokenJson: event.target.value }))} placeholder='{"token":"...","refresh_token":"..."}' rows={4} />
           <Button type="submit" disabled={savingPlatform === 'ga4'} className="w-full md:w-auto">
             <KeyRound className="mr-2 h-4 w-4" />
-            {savingPlatform === 'ga4' ? 'Saving...' : 'Connect GA4'}
+            {savingPlatform === 'ga4' ? 'Сохраняем...' : 'Подключить GA4'}
           </Button>
         </form>
       )
@@ -473,7 +473,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
         </div>
         <Button type="submit" disabled={savingPlatform === 'yandex'} className="w-full md:w-auto">
           <KeyRound className="mr-2 h-4 w-4" />
-          {savingPlatform === 'yandex' ? 'Saving...' : 'Connect Yandex Webmaster'}
+          {savingPlatform === 'yandex' ? 'Сохраняем...' : 'Подключить Yandex Webmaster'}
         </Button>
       </form>
     )
@@ -488,21 +488,21 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
             <div className="max-w-3xl">
               <p className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-sm text-slate-100">
                 <ShieldCheck className="h-4 w-4" />
-                Per-project credentials vault
+                Хранилище учётных данных
               </p>
-              <h2 className="mt-5 text-3xl font-bold tracking-tight">Project integrations</h2>
+              <h2 className="mt-5 text-3xl font-bold tracking-tight">Интеграции проекта</h2>
               <p className="mt-3 text-sm leading-6 text-slate-200">
-                Connect CMS, analytics, and webmaster providers at the project level. Sensitive values are sent to the backend,
-                encrypted with <code>MASTER_ENCRYPTION_KEY</code>, and only a masked hint is shown back in the UI.
+                Подключайте CMS, аналитику и инструменты вебмастера на уровне проекта. Чувствительные данные шифруются на сервере
+                с помощью <code>MASTER_ENCRYPTION_KEY</code> и в интерфейс не возвращаются.
               </p>
             </div>
             <div className="grid min-w-[220px] grid-cols-2 gap-3 rounded-2xl border border-white/15 bg-white/10 p-4 backdrop-blur">
               <div>
-                <p className="text-xs uppercase tracking-[0.22em] text-slate-300">Connected</p>
+                <p className="text-xs uppercase tracking-[0.22em] text-slate-300">Подключено</p>
                 <p className="mt-2 text-3xl font-bold">{connectedCount}/{SUPPORTED_PLATFORMS.length}</p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-[0.22em] text-slate-300">Project</p>
+                <p className="text-xs uppercase tracking-[0.22em] text-slate-300">Проект</p>
                 <p className="mt-2 truncate text-sm font-semibold text-white">{projectId}</p>
               </div>
             </div>
@@ -534,7 +534,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="text-lg font-semibold text-gray-900">{meta.label}</h3>
                     <span className={cn('rounded-full px-3 py-1 text-xs font-semibold', integration?.connected ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600')}>
-                      {integration?.connected ? 'Connected' : 'Not configured'}
+                      {integration?.connected ? 'Подключено' : 'Не настроено'}
                     </span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-gray-600">{meta.description}</p>
@@ -549,17 +549,17 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
         <div className="border-b border-gray-200 bg-gray-50 px-5 py-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-gray-400">Encrypted provider setup</p>
+              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-gray-400">Настройка подключения</p>
               <h3 className="mt-1 text-2xl font-semibold text-gray-900">{platformMeta[activePlatform as SupportedIntegrationPlatform].label}</h3>
             </div>
             <Button type="button" variant="outline" onClick={handleRefresh} disabled={integrationsLoading || isBusy}>
               {integrationsLoading ? (
                 <span className="inline-flex items-center gap-2">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Refreshing
+                  Обновляем
                 </span>
               ) : (
-                'Refresh status'
+                'Обновить статус'
               )}
             </Button>
           </div>

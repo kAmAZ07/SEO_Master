@@ -51,7 +51,7 @@ const ContentOptimization = () => {
       const response = await api.get('/content/optimized', { params: projectId ? { projectId } : undefined })
       setHistory(response.data || [])
     } catch (requestError) {
-      setError(getApiErrorMessage(requestError, 'Failed to load content analysis history.'))
+      setError(getApiErrorMessage(requestError, 'Не удалось загрузить историю анализов.'))
     }
   }
 
@@ -74,7 +74,7 @@ const ContentOptimization = () => {
       setAnalysis(response.data)
       await loadHistory()
     } catch (requestError) {
-      setError(getApiErrorMessage(requestError, 'Failed to analyze the content.'))
+      setError(getApiErrorMessage(requestError, 'Не удалось выполнить анализ.'))
     } finally {
       setLoading(false)
     }
@@ -83,17 +83,17 @@ const ContentOptimization = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Content optimization</h1>
-        <p className="mt-1 text-gray-600">Review content quality, keyword usage, and structural hints before publishing changes.</p>
+        <h1 className="text-3xl font-bold text-gray-900">Оптимизация контента</h1>
+        <p className="mt-1 text-gray-600">Оцените качество контента, использование ключевых слов и структуру перед публикацией.</p>
       </div>
 
       {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
       <Card className="p-6">
-        <h2 className="text-xl font-semibold text-gray-900">Analyze a page draft</h2>
+        <h2 className="text-xl font-semibold text-gray-900">Анализ страницы</h2>
         <form onSubmit={handleAnalyze} className="mt-4 space-y-4">
           <Input
-            label="Page URL"
+            label="URL страницы"
             type="url"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
@@ -101,27 +101,27 @@ const ContentOptimization = () => {
             required
           />
           <Input
-            label="Target keyword"
+            label="Целевой запрос"
             value={targetKeyword}
             onChange={(event) => setTargetKeyword(event.target.value)}
-            placeholder="technical SEO audit"
+            placeholder="технический SEO-аудит"
             required
           />
           <div className="space-y-1.5">
             <label htmlFor="content-body" className="block text-sm font-medium text-gray-700">
-              Content draft
+              Текст страницы
             </label>
             <textarea
               id="content-body"
               value={content}
               onChange={(event) => setContent(event.target.value)}
               className="min-h-[220px] w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-              placeholder="Paste the article or landing-page copy you want to review."
+              placeholder="Вставьте текст статьи или лендинга для анализа."
               required
             />
           </div>
           <Button type="submit" disabled={loading || !content.trim()}>
-            {loading ? 'Analyzing...' : 'Analyze content'}
+            {loading ? 'Анализируем...' : 'Анализировать'}
           </Button>
         </form>
       </Card>
@@ -132,33 +132,33 @@ const ContentOptimization = () => {
         <Card className="p-6">
           <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
-              <h2 className="text-xl font-semibold text-gray-900">Analysis result</h2>
-              <p className="mt-1 text-sm text-gray-600">The score combines content depth, keyword coverage, structure, and uniqueness.</p>
+              <h2 className="text-xl font-semibold text-gray-900">Результат анализа</h2>
+              <p className="mt-1 text-sm text-gray-600">Оценка учитывает глубину контента, охват ключевых слов, структуру и уникальность.</p>
             </div>
             <div className="text-right">
-              <p className="text-xs uppercase tracking-wide text-gray-400">Score</p>
+              <p className="text-xs uppercase tracking-wide text-gray-400">Оценка</p>
               <p className="text-4xl font-bold text-gray-900">{analysis.score}/100</p>
             </div>
           </div>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <div className="rounded-lg bg-gray-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-gray-400">Word count</p>
+              <p className="text-xs uppercase tracking-wide text-gray-400">Количество слов</p>
               <p className="mt-2 text-2xl font-bold text-gray-900">{analysis.wordCount}</p>
             </div>
             <div className="rounded-lg bg-gray-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-gray-400">Keyword density</p>
+              <p className="text-xs uppercase tracking-wide text-gray-400">Плотность ключевых слов</p>
               <p className="mt-2 text-2xl font-bold text-gray-900">{analysis.keywordDensity}%</p>
             </div>
             <div className="rounded-lg bg-gray-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-gray-400">Estimated uniqueness</p>
+              <p className="text-xs uppercase tracking-wide text-gray-400">Уникальность</p>
               <p className="mt-2 text-2xl font-bold text-gray-900">{analysis.uniqueness}%</p>
             </div>
           </div>
 
           <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
             <div>
-              <h3 className="mb-3 text-lg font-semibold text-gray-900">Recommendations</h3>
+              <h3 className="mb-3 text-lg font-semibold text-gray-900">Рекомендации</h3>
               {analysis.recommendations.length ? (
                 <div className="space-y-3">
                   {analysis.recommendations.map((item, index) => (
@@ -169,11 +169,11 @@ const ContentOptimization = () => {
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-gray-500">No major recommendations were generated for this draft.</p>
+                <p className="text-sm text-gray-500">Рекомендаций не выявлено.</p>
               )}
             </div>
             <div>
-              <h3 className="mb-3 text-lg font-semibold text-gray-900">Detected issues</h3>
+              <h3 className="mb-3 text-lg font-semibold text-gray-900">Обнаруженные проблемы</h3>
               {analysis.issues.length ? (
                 <div className="space-y-3">
                   {analysis.issues.map((item, index) => (
@@ -184,7 +184,7 @@ const ContentOptimization = () => {
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-gray-500">No critical issues detected in the current draft.</p>
+                <p className="text-sm text-gray-500">Критических проблем не обнаружено.</p>
               )}
             </div>
           </div>
@@ -193,12 +193,9 @@ const ContentOptimization = () => {
 
       <Card className="p-6">
         <div className="mb-4 flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-semibold text-gray-900">Recent analyses</h2>
-            <p className="mt-1 text-sm text-gray-600">Loaded from persisted semantic analysis events for the selected project.</p>
-          </div>
+          <h2 className="text-xl font-semibold text-gray-900">История анализов</h2>
           <Button type="button" variant="outline" onClick={() => void loadHistory()} disabled={loading}>
-            Refresh
+            Обновить
           </Button>
         </div>
 
@@ -207,19 +204,19 @@ const ContentOptimization = () => {
             {history.map((item) => (
               <div key={item.id} className="flex flex-col gap-2 rounded-lg border border-gray-200 px-4 py-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <p className="font-medium text-gray-900">{item.url || 'Untitled draft'}</p>
-                  <p className="mt-1 text-sm text-gray-600">Keyword: {item.keyword || 'Not specified'}</p>
-                  <p className="mt-1 text-xs text-gray-400">{new Date(item.analyzedAt).toLocaleString()}</p>
+                  <p className="font-medium text-gray-900">{item.url || 'Без URL'}</p>
+                  <p className="mt-1 text-sm text-gray-600">Запрос: {item.keyword || 'Не указан'}</p>
+                  <p className="mt-1 text-xs text-gray-400">{new Date(item.analyzedAt).toLocaleString('ru-RU')}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs uppercase tracking-wide text-gray-400">Score</p>
+                  <p className="text-xs uppercase tracking-wide text-gray-400">Оценка</p>
                   <p className="text-2xl font-bold text-gray-900">{item.score}</p>
                 </div>
               </div>
             ))}
           </div>
         ) : (
-          <p className="text-sm text-gray-500">No analysis history yet.</p>
+          <p className="text-sm text-gray-500">История анализов пуста.</p>
         )}
       </Card>
     </div>

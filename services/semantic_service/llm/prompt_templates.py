@@ -22,4 +22,4 @@ SCHEMA_PROMPT = """You are an SEO assistant. Produce a minimal valid JSON-LD Sch
 Constraints:
 - Must be valid JSON
 - Use appropriate @type (WebPage, Article, Product, FAQPage if clearly applicable)
-Return only JSON (no markdown fences)."""
+Return only JSON (no markdown fences)."""  

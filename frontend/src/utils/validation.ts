@@ -14,7 +14,7 @@ export const validateUrl = (url: string): boolean => {
 
 export const validatePassword = (password: string): { valid: boolean; message?: string } => {
   if (password.length < 8) {
-    return { valid: false, message: 'Password must contain at least 8 characters.' }
+    return { valid: false, message: 'Пароль должен содержать не менее 8 символов.' }
   }
 
   return { valid: true }

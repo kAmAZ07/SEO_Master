@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import { updateProfile, changePassword, clearError } from '../store/slices/authSlice'
 import Card from '../components/ui/Card'
@@ -23,7 +22,7 @@ const Settings = () => {
     confirmPassword: '',
   })
 
-  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'notifications'>('profile')
+  const [activeTab, setActiveTab] = useState<'profile' | 'password'>('profile')
   const [localPasswordError, setLocalPasswordError] = useState('')
 
   const passwordValidation = useMemo(
@@ -62,7 +61,7 @@ const Settings = () => {
     }
   }
 
-  const tabButtonClass = (tab: 'profile' | 'password' | 'notifications') =>
+  const tabButtonClass = (tab: 'profile' | 'password') =>
     `px-4 py-2 font-medium transition-colors ${
       activeTab === tab ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600 hover:text-gray-900'
     }`
@@ -71,7 +70,7 @@ const Settings = () => {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Settings</h1>
-        <p className="mt-1 text-gray-600">Manage your profile, password, and notifications.</p>
+        <p className="mt-1 text-gray-600">Manage your profile and password.</p>
       </div>
 
       <div className="flex gap-4 border-b border-gray-200">
@@ -80,9 +79,6 @@ const Settings = () => {
         </button>
         <button type="button" onClick={() => setActiveTab('password')} className={tabButtonClass('password')}>
           Security
-        </button>
-        <button type="button" onClick={() => setActiveTab('notifications')} className={tabButtonClass('notifications')}>
-          Notifications
         </button>
       </div>
 
@@ -187,25 +183,6 @@ const Settings = () => {
         </Card>
       )}
 
-      {activeTab === 'notifications' && (
-        <Card className="p-6">
-          <h2 className="text-xl font-semibold text-gray-900">Уведомления</h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-600">
-            Сейчас в личном кабинете включены внутренние уведомления по рабочему процессу SEO: готовность аудита,
-            новые задачи, обновления FF-Score и HITL-согласования. Email-уведомления и дайджесты не подключены.
-          </p>
-          <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 p-4">
-            <h3 className="font-medium text-blue-950">Центр уведомлений</h3>
-            <p className="mt-1 text-sm leading-6 text-blue-800">
-              Колокольчик в шапке показывает непрочитанные события и открывает список действий: согласовать изменение,
-              посмотреть отчет аудита или перейти к задаче проекта.
-            </p>
-            <Link to="/dashboard" className="mt-4 inline-flex">
-              <Button type="button">Открыть дашборд</Button>
-            </Link>
-          </div>
-        </Card>
-      )}
     </div>
   )
 }

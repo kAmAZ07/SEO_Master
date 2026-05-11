@@ -382,14 +382,57 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
 
     if (activePlatform === 'wordpress') {
       return (
-        <form onSubmit={handleSave} className="space-y-5">
-          <Input label="WordPress site URL" value={wordpressForm.baseUrl} onChange={(event) => setWordpressForm((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://example.com" autoComplete="url" required />
-          <Input label="HMAC Secret" type="password" value={wordpressForm.hmacSecret} onChange={(event) => setWordpressForm((current) => ({ ...current, hmacSecret: event.target.value }))} placeholder="Shared secret from the plugin settings" autoComplete="new-password" required />
-          <Button type="submit" disabled={savingPlatform === 'wordpress'} className="w-full md:w-auto">
-            <KeyRound className="mr-2 h-4 w-4" />
-            {savingPlatform === 'wordpress' ? 'Saving...' : 'Connect WordPress'}
-          </Button>
-        </form>
+        <div className="space-y-6">
+          <ol className="space-y-4">
+            <li className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+              <p className="text-sm font-semibold text-gray-900">1. Download the SEO Master plugin</p>
+              <p className="mt-1 text-sm text-gray-600">Download the connector ZIP and save it to your computer.</p>
+              <a
+                href="/api/wordpress-plugin"
+                download
+                className="mt-3 inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-white px-4 py-2 text-sm font-medium text-blue-700 shadow-sm hover:bg-blue-50"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Download seo-master-connector.zip
+              </a>
+            </li>
+
+            <li className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+              <p className="text-sm font-semibold text-gray-900">2. Install &amp; activate the plugin</p>
+              <p className="mt-1 text-sm text-gray-600">
+                In your WordPress admin go to <strong>Plugins → Add New → Upload Plugin</strong>, select the downloaded ZIP, click
+                &ldquo;Install Now&rdquo;, then &ldquo;Activate Plugin&rdquo;.
+              </p>
+            </li>
+
+            <li className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+              <p className="text-sm font-semibold text-gray-900">3. Configure the HMAC secret in wp-config.php</p>
+              <p className="mt-1 text-sm text-gray-600">
+                Open <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">wp-config.php</code> and add the line below before{' '}
+                <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">/* That&apos;s all */</code>. Use the same value you will enter in step 4.
+              </p>
+              <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-900 px-4 py-3 text-xs text-emerald-300">
+                {`define('SEO_MASTER_HMAC_SECRET', 'your-secret-here');`}
+              </pre>
+              <p className="mt-2 text-xs text-gray-500">
+                Then go to <strong>Settings → SEO Master Connector</strong> in your WordPress admin and set the <strong>Project ID</strong> to match the project ID shown above.
+              </p>
+            </li>
+
+            <li className="rounded-xl border border-blue-100 bg-blue-50 p-4">
+              <p className="text-sm font-semibold text-gray-900">4. Connect to SEO Master</p>
+              <p className="mt-1 mb-4 text-sm text-gray-600">Enter your WordPress site URL and the same HMAC secret you set in wp-config.php.</p>
+              <form onSubmit={handleSave} className="space-y-4">
+                <Input label="WordPress site URL" value={wordpressForm.baseUrl} onChange={(event) => setWordpressForm((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://example.com" autoComplete="url" required />
+                <Input label="HMAC Secret" type="password" value={wordpressForm.hmacSecret} onChange={(event) => setWordpressForm((current) => ({ ...current, hmacSecret: event.target.value }))} placeholder="your-secret-here" autoComplete="new-password" required />
+                <Button type="submit" disabled={savingPlatform === 'wordpress'} className="w-full md:w-auto">
+                  <KeyRound className="mr-2 h-4 w-4" />
+                  {savingPlatform === 'wordpress' ? 'Saving...' : 'Connect WordPress'}
+                </Button>
+              </form>
+            </li>
+          </ol>
+        </div>
       )
     }
 

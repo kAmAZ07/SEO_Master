@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import { updateProfile, changePassword, clearError } from '../store/slices/authSlice'
 import Card from '../components/ui/Card'
@@ -20,13 +21,6 @@ const Settings = () => {
     currentPassword: '',
     newPassword: '',
     confirmPassword: '',
-  })
-
-  const [notifications, setNotifications] = useState({
-    emailReports: true,
-    weeklyDigest: true,
-    auditAlerts: true,
-    keywordChanges: false,
   })
 
   const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'notifications'>('profile')
@@ -195,55 +189,19 @@ const Settings = () => {
 
       {activeTab === 'notifications' && (
         <Card className="p-6">
-          <h2 className="mb-4 text-xl font-semibold text-gray-900">Notification settings</h2>
-          <div className="space-y-4">
-            {[
-              {
-                key: 'emailReports',
-                title: 'Email reports',
-                description: 'Receive project summaries by email.',
-              },
-              {
-                key: 'weeklyDigest',
-                title: 'Weekly digest',
-                description: 'Get a weekly summary of important changes.',
-              },
-              {
-                key: 'auditAlerts',
-                title: 'Audit alerts',
-                description: 'Receive a notice when an audit finishes.',
-              },
-              {
-                key: 'keywordChanges',
-                title: 'Keyword movement alerts',
-                description: 'Track significant position changes for monitored keywords.',
-              },
-            ].map((item) => (
-              <div key={item.key} className="flex items-center justify-between rounded-lg bg-gray-50 p-4">
-                <div>
-                  <h3 className="font-medium text-gray-900">{item.title}</h3>
-                  <p className="text-sm text-gray-600">{item.description}</p>
-                </div>
-                <label className="relative inline-flex cursor-pointer items-center">
-                  <input
-                    type="checkbox"
-                    checked={notifications[item.key as keyof typeof notifications]}
-                    onChange={(event) =>
-                      setNotifications({
-                        ...notifications,
-                        [item.key]: event.target.checked,
-                      })
-                    }
-                    className="peer sr-only"
-                  />
-                  <div className="h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-blue-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300" />
-                </label>
-              </div>
-            ))}
-
-            <Button type="button" onClick={() => console.log('Save notifications', notifications)}>
-              Save notification settings
-            </Button>
+          <h2 className="text-xl font-semibold text-gray-900">Уведомления</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-600">
+            Сейчас в личном кабинете включены внутренние уведомления о HITL-согласованиях: счетчик в шапке показывает
+            количество ожидающих задач и ведет на экран ручной проверки. Email-уведомления и дайджесты не подключены.
+          </p>
+          <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 p-4">
+            <h3 className="font-medium text-blue-950">HITL-согласования</h3>
+            <p className="mt-1 text-sm leading-6 text-blue-800">
+              Новые задачи на проверку появляются в разделе HITL и требуют ручного решения перед публикацией изменений.
+            </p>
+            <Link to="/dashboard/hitl" className="mt-4 inline-flex">
+              <Button type="button">Открыть HITL</Button>
+            </Link>
           </div>
         </Card>
       )}

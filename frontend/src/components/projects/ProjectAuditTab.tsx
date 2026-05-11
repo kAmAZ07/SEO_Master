@@ -69,7 +69,7 @@ const ProjectAuditTab = ({ projectId, projectUrl }: ProjectAuditTabProps) => {
             </p>
           </div>
           {activeAudit?.uid && (
-            <Link to={`/audit/results/${activeAudit.uid}?project=${projectId}`}>
+            <Link to={`/dashboard/projects/${projectId}/audits/${activeAudit.uid}`}>
               <Button type="button" variant="outline">Открыть полный отчет</Button>
             </Link>
           )}

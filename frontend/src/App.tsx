@@ -7,6 +7,7 @@ import Login from './pages/auth/Login';
 import Register from './pages/auth/Register';
 import Projects from './pages/Projects';
 import ProjectDetail from './pages/ProjectDetail';
+import ProjectAuditReport from './pages/ProjectAuditReport';
 import Audit from './pages/Audit';
 import KeywordResearch from './pages/KeywordResearch';
 import ContentOptimization from './pages/ContentOptimization';
@@ -58,6 +59,10 @@ const router = createBrowserRouter([
       {
         path: 'projects/:id',
         element: <ProjectDetail />
+      },
+      {
+        path: 'projects/:projectId/audits/:uid',
+        element: <ProjectAuditReport />
       },
       {
         path: 'keywords',

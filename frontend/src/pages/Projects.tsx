@@ -114,7 +114,7 @@ const Projects = () => {
                 <Link to={`/dashboard/projects/${project.id}`} className="flex-1">
                   <Button className="w-full">Open project</Button>
                 </Link>
-                <Link to={`/audit?project=${project.id}`} className="flex-1">
+                <Link to={`/dashboard/projects/${project.id}?tab=audit`} className="flex-1">
                   <Button variant="outline" className="w-full">
                     Audit
                   </Button>

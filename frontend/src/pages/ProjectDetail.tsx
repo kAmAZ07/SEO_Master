@@ -2,23 +2,29 @@
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import { loadProjectDetails } from '../store/slices/dashboardSlice'
+import ProjectAuditTab from '../components/projects/ProjectAuditTab'
 import ProjectIntegrationsTab from '../components/projects/ProjectIntegrationsTab'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Loader from '../components/ui/Loader'
 import { cn } from '../utils/classNames'
 
-type ProjectDetailTab = 'overview' | 'integrations'
+type ProjectDetailTab = 'overview' | 'audit' | 'integrations'
 
 const projectTabs: Array<{ id: ProjectDetailTab; label: string; description: string }> = [
   {
     id: 'overview',
-    label: 'РћР±Р·РѕСЂ',
-    description: 'Р”РµС‚Р°Р»Рё РїСЂРѕРµРєС‚Р°, Р±С‹СЃС‚СЂС‹Р№ РґРѕСЃС‚СѓРї Рє SEO-РёРЅСЃС‚СЂСѓРјРµРЅС‚Р°Рј Рё СЃС‚Р°С‚СѓСЃ СЃР°Р№С‚Р°.',
+    label: 'Обзор',
+    description: 'Детали проекта, быстрый доступ к SEO-инструментам и статус сайта.',
+  },
+  {
+    id: 'audit',
+    label: 'Расширенный аудит',
+    description: 'Глубокая проверка проекта с увеличенной глубиной обхода и JS-rendering.',
   },
   {
     id: 'integrations',
-    label: 'РРЅС‚РµРіСЂР°С†РёРё',
+    label: 'Интеграции',
     description: 'Per-project connections for Tilda, WordPress, GSC, GA4, and Yandex without shared global credentials.',
   },
 ]
@@ -37,7 +43,8 @@ const ProjectDetail = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const dispatch = useAppDispatch()
   const { currentProject, loading, error } = useAppSelector((state) => state.dashboard)
-  const activeTab: ProjectDetailTab = searchParams.get('tab') === 'integrations' ? 'integrations' : 'overview'
+  const rawTab = searchParams.get('tab')
+  const activeTab: ProjectDetailTab = rawTab === 'integrations' || rawTab === 'audit' ? rawTab : 'overview'
 
   useEffect(() => {
     if (id) {
@@ -77,9 +84,9 @@ const ProjectDetail = () => {
 
   const tools = [
     {
-      name: 'Technical audit',
-      description: 'Run a crawl and review detailed issues, CWV checks, and scoring.',
-      link: `/audit?project=${currentProject.id}`,
+      name: 'Расширенный аудит',
+      description: 'Запустить глубокую проверку проекта и посмотреть результат в личном кабинете.',
+      link: `/dashboard/projects/${currentProject.id}?tab=audit`,
     },
     {
       name: 'Keyword research',
@@ -117,16 +124,16 @@ const ProjectDetail = () => {
         </div>
         <div className="flex flex-col gap-3 sm:flex-row">
           <Button type="button" variant="outline" onClick={() => handleSelectTab('integrations')}>
-            РРЅС‚РµРіСЂР°С†РёРё
+            Интеграции
           </Button>
-          <Link to={`/audit?project=${currentProject.id}`}>
-            <Button className="w-full sm:w-auto">Run audit</Button>
-          </Link>
+          <Button type="button" className="w-full sm:w-auto" onClick={() => handleSelectTab('audit')}>
+            Расширенный аудит
+          </Button>
         </div>
       </div>
 
       <Card className="overflow-hidden p-0">
-        <div className="grid gap-2 p-2 md:grid-cols-2">
+        <div className="grid gap-2 p-2 md:grid-cols-3">
           {projectTabs.map((tab) => (
             <button
               key={tab.id}
@@ -185,9 +192,12 @@ const ProjectDetail = () => {
       {activeTab === 'integrations' && (
         <ProjectIntegrationsTab projectId={currentProject.id} projectUrl={currentProject.url} />
       )}
+
+      {activeTab === 'audit' && (
+        <ProjectAuditTab projectId={currentProject.id} projectUrl={currentProject.url} />
+      )}
     </div>
   )
 }
 
 export default ProjectDetail
-

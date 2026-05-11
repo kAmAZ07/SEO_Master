@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import api from '../api/axiosConfig'
 import { getApiErrorMessage } from '../api/authAPI'
@@ -24,6 +24,8 @@ interface ContentAnalysisResult {
   uniqueness: number
   recommendations: ContentRecommendation[]
   issues: ContentIssue[]
+  source?: string
+  fallbackReason?: string
 }
 
 interface OptimizedPageHistoryItem {
@@ -46,18 +48,18 @@ const ContentOptimization = () => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     try {
       const response = await api.get('/content/optimized', { params: projectId ? { projectId } : undefined })
       setHistory(response.data || [])
     } catch (requestError) {
       setError(getApiErrorMessage(requestError, 'Не удалось загрузить историю анализов.'))
     }
-  }
+  }, [projectId])
 
   useEffect(() => {
     void loadHistory()
-  }, [projectId])
+  }, [loadHistory])
 
   const handleAnalyze = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -140,6 +142,12 @@ const ContentOptimization = () => {
               <p className="text-4xl font-bold text-gray-900">{analysis.score}/100</p>
             </div>
           </div>
+
+          {analysis.source === 'local_fallback' && (
+            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Семантический сервис временно недоступен, поэтому показана базовая локальная проверка текста.
+            </div>
+          )}
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <div className="rounded-lg bg-gray-50 p-4">

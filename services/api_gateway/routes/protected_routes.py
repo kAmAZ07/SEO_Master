@@ -489,6 +489,62 @@ def _semantic_analysis_to_content_result(payload: Dict[str, Any], content: str, 
     }
 
 
+def _local_content_analysis_result(content: str, keyword: str, *, reason: str) -> Dict[str, Any]:
+    words = [word for word in re.findall(r"\b[\w-]+\b", content, flags=re.UNICODE) if word.strip()]
+    normalized_keyword = keyword.strip().lower()
+    keyword_hits = content.lower().count(normalized_keyword) if normalized_keyword else 0
+    keyword_density = (keyword_hits / max(len(words), 1)) * 100.0 if words else 0.0
+
+    length_score = min(45.0, (len(words) / 800.0) * 45.0)
+    keyword_score = 0.0
+    if normalized_keyword:
+        if 0.5 <= keyword_density <= 3.0:
+            keyword_score = 35.0
+        elif keyword_density > 0:
+            keyword_score = 20.0
+    structure_score = 20.0 if "\n" in content.strip() else 10.0
+    score = int(round(max(0.0, min(100.0, length_score + keyword_score + structure_score))))
+
+    recommendations = [
+        {
+            "title": "Семантический сервис временно недоступен",
+            "description": "Показана базовая локальная проверка текста. Повторите анализ позже, чтобы получить полный FF-Score и семантические рекомендации.",
+        }
+    ]
+    if normalized_keyword and keyword_hits == 0:
+        recommendations.append(
+            {
+                "title": "Добавьте целевой запрос",
+                "description": "Используйте целевой запрос естественно в заголовке, вступлении и релевантных блоках текста.",
+            }
+        )
+    if len(words) < 300:
+        recommendations.append(
+            {
+                "title": "Расширьте содержание",
+                "description": "Добавьте больше полезных деталей, примеров и ответов на возможные вопросы пользователя.",
+            }
+        )
+
+    issues = []
+    if not words:
+        issues.append({"title": "Текст пустой", "description": "Добавьте черновик страницы перед анализом."})
+    if normalized_keyword and keyword_density > 5:
+        issues.append({"title": "Риск переспама", "description": "Сократите повторения ключевого запроса и сохраните читаемость текста."})
+
+    return {
+        "score": score,
+        "wordCount": len(words),
+        "keywordDensity": round(keyword_density, 2),
+        "uniqueness": 0,
+        "recommendations": recommendations,
+        "issues": issues,
+        "analysisId": f"local-{uuid.uuid4()}",
+        "source": "local_fallback",
+        "fallbackReason": reason,
+    }
+
+
 def _latest_ff_score(db: Session, project_id: str) -> Optional[FFScore]:
     return (
         db.query(FFScore)
@@ -1348,21 +1404,31 @@ async def analyze_content(
     project = _resolve_project_for_private_flow(request.projectId, current_user, db)
     root_url = request.url or project.url
     keyword = request.keyword or ""
-    response = await _proxy_service(
-        settings.SEMANTIC_SERVICE_URL,
-        "POST",
-        "/semantic/analyze",
-        payload={
-            "project_id": str(project.id),
-            "root_url": root_url,
-            "mode": "private_content_review",
-            "content_text": request.content,
-            "keywords": [keyword] if keyword else [],
-        },
-        timeout=30.0,
-    )
-    analysis_payload = response.json()
-    result = _semantic_analysis_to_content_result(analysis_payload, request.content, keyword)
+    try:
+        response = await _proxy_service(
+            settings.SEMANTIC_SERVICE_URL,
+            "POST",
+            "/semantic/analyze",
+            payload={
+                "project_id": str(project.id),
+                "root_url": root_url,
+                "mode": "private_content_review",
+                "content_text": request.content,
+                "keywords": [keyword] if keyword else [],
+            },
+            timeout=30.0,
+        )
+        analysis_payload = response.json()
+        result = _semantic_analysis_to_content_result(analysis_payload, request.content, keyword)
+    except HTTPException as exc:
+        if exc.status_code < 500:
+            raise
+        logger.warning(
+            "Semantic content analysis unavailable; using local fallback",
+            extra={"project_id": str(project.id), "status_code": exc.status_code, "detail": exc.detail},
+        )
+        result = _local_content_analysis_result(request.content, keyword, reason=str(exc.detail))
+        analysis_payload = {"analysis_id": result["analysisId"]}
 
     db.add(
         SemanticEvent(
@@ -1374,7 +1440,8 @@ async def analyze_content(
                 "url": root_url,
                 "keyword": keyword,
                 "score": result["score"],
-                "source": "semantic_service",
+                "source": result.get("source", "semantic_service"),
+                "fallback_reason": result.get("fallbackReason"),
             },
         )
     )

@@ -1,13 +1,12 @@
 import { Link, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, FolderOpen, Search, CheckSquare,
+  LayoutDashboard, FolderOpen, CheckSquare,
   Key, FileText, Link2, Settings as SettingsIcon
 } from 'lucide-react';
 
 const navigation = [
   { name: 'Панель управления', href: '/dashboard',           icon: LayoutDashboard },
   { name: 'Проекты',           href: '/dashboard/projects',  icon: FolderOpen },
-  { name: 'Аудит сайта',       href: '/audit',               icon: Search },
   { name: 'HITL-согласования', href: '/dashboard/hitl',      icon: CheckSquare },
   { name: 'Ключевые слова',    href: '/dashboard/keywords',  icon: Key },
   { name: 'Контент',           href: '/dashboard/content',   icon: FileText },

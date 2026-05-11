@@ -22,10 +22,30 @@ export interface ChangePasswordPayload {
 
 export const getApiErrorMessage = (error: unknown, fallback: string): string => {
   if (axios.isAxiosError(error)) {
-    const detail = error.response?.data?.detail
+    const data = error.response?.data
+    const detail = data?.detail
+    const wrappedError = data?.error
 
     if (typeof detail === 'string' && detail.trim()) {
       return detail
+    }
+
+    if (wrappedError && typeof wrappedError === 'object') {
+      if (typeof wrappedError.message === 'string' && wrappedError.message.trim()) {
+        return wrappedError.message
+      }
+      if (typeof wrappedError.error === 'string' && wrappedError.error.trim()) {
+        return wrappedError.error
+      }
+      if (Array.isArray(wrappedError.details) && wrappedError.details.length > 0) {
+        const firstItem = wrappedError.details[0]
+        if (typeof firstItem?.message === 'string' && firstItem.message.trim()) {
+          return firstItem.message
+        }
+        if (typeof firstItem?.msg === 'string' && firstItem.msg.trim()) {
+          return firstItem.msg
+        }
+      }
     }
 
     if (detail && typeof detail === 'object') {

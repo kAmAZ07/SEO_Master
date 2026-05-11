@@ -23,7 +23,12 @@ const Login = () => {
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
-    const result = await dispatch(login(formData))
+    const result = await dispatch(
+      login({
+        email: formData.email.trim(),
+        password: formData.password,
+      }),
+    )
     if (login.fulfilled.match(result)) {
       navigate('/')
     }

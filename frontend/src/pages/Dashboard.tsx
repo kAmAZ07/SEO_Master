@@ -57,9 +57,9 @@ const Dashboard = () => {
 
   const statCards = [
     { title: 'Projects', value: stats?.totalProjects ?? 0, link: '/dashboard/projects' },
-    { title: 'Active audits', value: stats?.activeAudits ?? 0, link: '/audit' },
-    { title: 'Tracked keywords', value: stats?.totalKeywords ?? 0, link: '/dashboard/keywords' },
-    { title: 'Backlinks discovered', value: stats?.totalBacklinks ?? 0, link: '/dashboard/backlinks' },
+    { title: 'Active audits', value: stats?.activeAudits ?? 0, link: '/dashboard/projects' },
+    { title: 'Tracked keywords', value: stats?.totalKeywords ?? 0, link: '/dashboard/projects' },
+    { title: 'Backlinks discovered', value: stats?.totalBacklinks ?? 0, link: '/dashboard/projects' },
   ]
 
   return (
@@ -115,7 +115,7 @@ const Dashboard = () => {
                         </span>
                       </div>
                       <p className="mt-2 text-sm text-gray-600">
-                        Project: {task.projectId} • Created: {task.createdAt ? new Date(task.createdAt).toLocaleString('ru-RU') : 'n/a'}
+                        Project: {task.projectId} ï¿½ Created: {task.createdAt ? new Date(task.createdAt).toLocaleString('ru-RU') : 'n/a'}
                       </p>
                       {task.recommendation && (
                         <p className="mt-3 text-sm text-gray-700">Recommendation: {task.recommendation}</p>

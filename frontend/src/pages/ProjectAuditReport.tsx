@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, Download } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import { pollAuditStatus, setPolling } from '../store/slices/auditSlice'
@@ -138,6 +138,63 @@ const FindingRow = ({ finding }: { finding: AuditFinding }) => {
   )
 }
 
+const escapeCsvCell = (value: unknown): string => {
+  const str = value === null || value === undefined ? '' : String(value)
+  return `"${str.replace(/"/g, '""')}"`
+}
+
+const exportAuditToCsv = (audit: import('../types/audit').AuditStatus) => {
+  const rows: string[][] = []
+  rows.push(['SEO Master — Отчёт расширенного аудита'])
+  rows.push(['URL', audit.url])
+  rows.push(['Оценка', String(audit.score)])
+  rows.push(['Дата', new Date(audit.createdAt).toLocaleString('ru-RU')])
+  rows.push([])
+  rows.push(['Критерий', 'Код проверки', 'Название замечания', 'Описание', 'Серьёзность', 'Статус', 'Рекомендация'])
+
+  const criteria = audit.summary?.criteria ?? []
+  if (criteria.length > 0) {
+    for (const criterion of criteria) {
+      if (criterion.findings.length === 0) {
+        rows.push([criterion.title, '', 'Без замечаний', criterion.description, '', 'success', ''])
+      } else {
+        for (const finding of criterion.findings) {
+          rows.push([
+            criterion.title,
+            finding.code,
+            finding.title,
+            finding.description,
+            severityLabel(finding.severity || finding.status),
+            finding.status,
+            finding.recommendation ?? '',
+          ])
+        }
+      }
+    }
+  } else {
+    for (const finding of audit.details) {
+      rows.push([
+        finding.category ?? '',
+        finding.code,
+        finding.title,
+        finding.description,
+        severityLabel(finding.severity || finding.status),
+        finding.status,
+        finding.recommendation ?? '',
+      ])
+    }
+  }
+
+  const csv = '﻿' + rows.map((row) => row.map(escapeCsvCell).join(',')).join('\r\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const objectUrl = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = `audit-${audit.uid}.csv`
+  anchor.click()
+  URL.revokeObjectURL(objectUrl)
+}
+
 const ProjectAuditReport = () => {
   const { projectId, uid } = useParams<{ projectId: string; uid: string }>()
   const dispatch = useAppDispatch()
@@ -233,6 +290,17 @@ const ProjectAuditReport = () => {
 
       {audit?.status === 'completed' && (
         <>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => exportAuditToCsv(audit)}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
+            >
+              <Download className="h-4 w-4" />
+              Скачать CSV
+            </button>
+          </div>
+
           <Card className="overflow-hidden p-0">
             <div className="grid gap-0 lg:grid-cols-[1fr_280px]">
               <div className="p-6">

@@ -5,6 +5,7 @@ export interface CreateProjectPayload {
   name: string
   url: string
   description?: string
+  sourceAuditId?: string
 }
 
 export const fetchProjects = async (): Promise<Project[]> => {

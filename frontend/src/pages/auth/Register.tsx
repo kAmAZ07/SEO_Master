@@ -1,13 +1,25 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../../store/hooks'
 import { clearError, register } from '../../store/slices/authSlice'
 import Input from '../../components/ui/Input'
 import Button from '../../components/ui/Button'
 import { validatePassword } from '../../utils/validation'
 
+const PENDING_PROJECT_SAVE_KEY = 'seoMaster.pendingProjectSave'
+
+const getPendingSaveRedirect = () => {
+  try {
+    const pendingSave = JSON.parse(localStorage.getItem(PENDING_PROJECT_SAVE_KEY) || 'null')
+    return pendingSave?.uid ? `/audit/results/${pendingSave.uid}?saveProject=1` : null
+  } catch {
+    return null
+  }
+}
+
 const Register = () => {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const dispatch = useAppDispatch()
   const { loading, error } = useAppSelector((state) => state.auth)
 
@@ -50,7 +62,8 @@ const Register = () => {
     )
 
     if (register.fulfilled.match(result)) {
-      navigate('/')
+      const redirect = searchParams.get('redirect') || getPendingSaveRedirect()
+      navigate(redirect?.startsWith('/') ? redirect : '/')
     }
   }
 
@@ -134,7 +147,10 @@ const Register = () => {
         <div className="mt-6 text-center text-sm text-gray-600">
           <p>
             Уже есть аккаунт?{' '}
-            <Link to="/login" className="font-medium text-blue-600 hover:text-blue-700">
+            <Link
+              to={searchParams.get('redirect') ? `/login?redirect=${encodeURIComponent(searchParams.get('redirect') || '')}` : '/login'}
+              className="font-medium text-blue-600 hover:text-blue-700"
+            >
               Войти
             </Link>
           </p>

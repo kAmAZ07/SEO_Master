@@ -4,6 +4,7 @@ import { ChevronDown, Download } from 'lucide-react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import { pollAuditStatus, setPolling, startAudit } from '../store/slices/auditSlice'
+import { createProject } from '../store/slices/dashboardSlice'
 import type { AuditCriterion, AuditFinding } from '../types/audit'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
@@ -108,6 +109,16 @@ const getTopFindings = (findings: AuditFinding[]) =>
 const flattenCriterionFindings = (criteria: AuditCriterion[]) =>
   criteria.flatMap((criterion) => criterion.findings)
 
+const PENDING_PROJECT_SAVE_KEY = 'seoMaster.pendingProjectSave'
+
+const getProjectNameFromUrl = (value: string) => {
+  try {
+    return new URL(value).hostname.replace(/^www\./, '') || value
+  } catch {
+    return value.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0] || 'SEO project'
+  }
+}
+
 const FindingRow = ({ finding }: { finding: AuditFinding }) => {
   const detailEntries = Object.entries(finding.details ?? {})
     .map(([key, value]) => [key, formatDetailValue(value)] as const)
@@ -206,9 +217,12 @@ const Audit = () => {
   const dispatch = useAppDispatch()
   const { currentAudit, loading, polling, error } = useAppSelector((state) => state.audit)
   const { token, isAuthenticated } = useAppSelector((state) => state.auth)
+  const { loading: dashboardLoading, error: dashboardError } = useAppSelector((state) => state.dashboard)
   const [url, setUrl] = useState('')
   const [expandedCriterion, setExpandedCriterion] = useState<string | null>(null)
+  const [savingProject, setSavingProject] = useState(false)
   const projectId = searchParams.get('project') ?? undefined
+  const shouldSaveProject = searchParams.get('saveProject') === '1'
   const isProjectAudit = Boolean(projectId && token)
 
   useEffect(() => {
@@ -262,6 +276,67 @@ const Audit = () => {
     } catch {
     }
   }
+
+  const handleSaveProject = async () => {
+    if (!currentAudit?.uid || !currentAudit.url) {
+      return
+    }
+
+    const pendingSave = {
+      uid: currentAudit.uid,
+      url: currentAudit.url,
+    }
+    localStorage.setItem(PENDING_PROJECT_SAVE_KEY, JSON.stringify(pendingSave))
+
+    if (!isAuthenticated && !token) {
+      navigate(`/register?redirect=${encodeURIComponent(`/audit/results/${currentAudit.uid}?saveProject=1`)}`)
+      return
+    }
+
+    setSavingProject(true)
+    try {
+      const project = await dispatch(createProject({
+        name: getProjectNameFromUrl(currentAudit.url),
+        url: currentAudit.url,
+        sourceAuditId: currentAudit.uid,
+      })).unwrap()
+      localStorage.removeItem(PENDING_PROJECT_SAVE_KEY)
+      navigate(`/dashboard/projects/${project.id}/audits/${currentAudit.uid}`)
+    } finally {
+      setSavingProject(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!shouldSaveProject || (!isAuthenticated && !token) || !currentAudit?.uid || !currentAudit.url || savingProject) {
+      return
+    }
+
+    let pendingSave: { uid?: string; url?: string } | null = null
+    try {
+      pendingSave = JSON.parse(localStorage.getItem(PENDING_PROJECT_SAVE_KEY) || 'null')
+    } catch {
+      pendingSave = null
+    }
+
+    if (pendingSave?.uid !== currentAudit.uid) {
+      return
+    }
+
+    setSavingProject(true)
+    void dispatch(createProject({
+      name: getProjectNameFromUrl(pendingSave?.url || currentAudit.url),
+      url: pendingSave?.url || currentAudit.url,
+      sourceAuditId: currentAudit.uid,
+    })).unwrap()
+      .then((project) => {
+        localStorage.removeItem(PENDING_PROJECT_SAVE_KEY)
+        navigate(`/dashboard/projects/${project.id}/audits/${currentAudit.uid}`)
+      })
+      .finally(() => {
+        setSavingProject(false)
+      })
+  }, [currentAudit?.uid, currentAudit?.url, dispatch, isAuthenticated, navigate, savingProject, shouldSaveProject, token])
 
   const allFindings = criteria.length > 0 ? flattenCriterionFindings(criteria) : currentAudit?.details ?? []
   const topFindings = useMemo(() => getTopFindings(allFindings), [allFindings])
@@ -335,6 +410,12 @@ const Audit = () => {
         {error && (
           <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
+          </div>
+        )}
+
+        {dashboardError && (
+          <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {dashboardError}
           </div>
         )}
 
@@ -488,9 +569,14 @@ const Audit = () => {
                     Краткий список наиболее важных проблем, отсортированный по серьезности.
                   </p>
                 </div>
-                <Link to="/register">
-                  <Button type="button" variant="outline">Сохранить проект в кабинете</Button>
-                </Link>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleSaveProject}
+                  disabled={savingProject || dashboardLoading}
+                >
+                  {savingProject || dashboardLoading ? 'Сохраняем проект...' : 'Сохранить проект в кабинете'}
+                </Button>
               </div>
 
               {topFindings.length > 0 ? (

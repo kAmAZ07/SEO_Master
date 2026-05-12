@@ -20,7 +20,19 @@ import PrivateRoute from './components/PrivateRoute';
 const HomeRoute = () => {
   const { isAuthenticated, token } = useAppSelector((state) => state.auth);
 
-  return isAuthenticated || token ? <Navigate to="/dashboard" replace /> : <Audit />;
+  if (isAuthenticated || token) {
+    try {
+      const pendingSave = JSON.parse(localStorage.getItem('seoMaster.pendingProjectSave') || 'null');
+      if (pendingSave?.uid) {
+        return <Navigate to={`/audit/results/${pendingSave.uid}?saveProject=1`} replace />;
+      }
+    } catch {
+    }
+
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return <Audit />;
 };
 
 const router = createBrowserRouter([

@@ -107,6 +107,9 @@ class QuickAuditRequest(BaseModel):
 
 class AuditStatusResponse(BaseModel):
     uid: str
+    audit_id: Optional[str] = None
+    root_url: Optional[str] = None
+    url: Optional[str] = None
     status: str
     progress: int = 0
     message: str = ""
@@ -249,6 +252,9 @@ async def get_audit_status(uid: str):
 
         return AuditStatusResponse(
             uid=uid,
+            audit_id=uid,
+            root_url=result.get("root_url"),
+            url=result.get("root_url"),
             status=status_value,
             progress=_status_to_progress(status_value),
             message=_status_to_message(status_value),

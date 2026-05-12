@@ -93,6 +93,7 @@ class CreateProjectRequest(BaseModel):
     name: str
     url: str
     description: Optional[str] = None
+    sourceAuditId: Optional[str] = None
 
 
 class StartProjectAuditRequest(BaseModel):
@@ -133,6 +134,14 @@ class TrackKeywordRequest(BaseModel):
     volume: Optional[int] = None
     difficulty: Optional[float] = None
     cpc: Optional[float] = None
+
+
+def _normalize_url_for_match(value: str) -> str:
+    parsed = urlparse(value.strip().lower())
+    scheme = parsed.scheme or "https"
+    netloc = parsed.netloc.replace("www.", "", 1)
+    path = parsed.path.rstrip("/")
+    return f"{scheme}://{netloc}{path}"
 
 
 def _serialize_user(user: User) -> Dict[str, Any]:
@@ -1048,8 +1057,25 @@ async def create_project_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    existing = db.query(Project).filter(Project.url == request.url).first()
+    existing = db.query(Project).filter(Project.url == request.url, Project.owner_id == current_user.id).first()
     if existing:
+        if request.sourceAuditId:
+            public_audit = db.query(PublicAuditResult).filter(
+                PublicAuditResult.audit_id == request.sourceAuditId,
+                PublicAuditResult.mode == "public",
+            ).first()
+            if (
+                public_audit
+                and not public_audit.project_id
+                and _normalize_url_for_match(public_audit.root_url) == _normalize_url_for_match(request.url)
+            ):
+                public_audit.project_id = str(existing.id)
+                db.commit()
+                db.refresh(existing)
+        return _serialize_project_private(existing, db)
+
+    url_taken = db.query(Project).filter(Project.url == request.url).first()
+    if url_taken:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Project with this URL already exists")
 
     project = Project(
@@ -1060,6 +1086,17 @@ async def create_project_endpoint(
         status="active",
     )
     db.add(project)
+    if request.sourceAuditId:
+        public_audit = db.query(PublicAuditResult).filter(
+            PublicAuditResult.audit_id == request.sourceAuditId,
+            PublicAuditResult.mode == "public",
+        ).first()
+        if (
+            public_audit
+            and not public_audit.project_id
+            and _normalize_url_for_match(public_audit.root_url) == _normalize_url_for_match(request.url)
+        ):
+            public_audit.project_id = project.id
     db.commit()
     db.refresh(project)
     return _serialize_project_private(project, db)

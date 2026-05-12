@@ -75,7 +75,11 @@ def _get_redis_client() -> redis.Redis:
 
 
 def _rate_limit_key(request: Request) -> str:
-    client_ip = request.client.host if request.client else "unknown"
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    real_ip = request.headers.get("x-real-ip", "")
+    client_ip = forwarded_for.split(",", 1)[0].strip() or real_ip.strip()
+    if not client_ip:
+        client_ip = request.client.host if request.client else "unknown"
     return f"rate_limit:public_audit:{client_ip}"
 
 

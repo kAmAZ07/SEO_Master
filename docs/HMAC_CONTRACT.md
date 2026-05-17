@@ -1,0 +1,129 @@
+# HMAC Contract
+
+## Purpose
+
+Client patch endpoints in `client-api-gateway` are protected with HMAC-SHA256.
+The contract is implemented by:
+
+- `services/client_api_gateway/auth/signature_validator.py`
+- `services/client_api_gateway/auth/hmac_auth.py`
+- `adapters/wordpress-plugin/includes/hmac-validator.php`
+
+## Signed Endpoints
+
+- `PATCH /api/client/meta`
+- `PATCH /api/client/schema`
+- `PATCH /api/client/interlinks`
+
+## Required Headers
+
+```http
+X-Project-ID: project-123
+X-Timestamp: 1710000000
+X-Signature: <hex-hmac-sha256>
+Content-Type: application/json
+```
+
+Optional header:
+
+```http
+X-Key-ID: active-key-id
+```
+
+`X-Signature` may be either raw hex or prefixed with `sha256=`.
+
+## Timestamp
+
+`X-Timestamp` may be:
+
+- Unix seconds, for example `1710000000`
+- ISO-8601 datetime, for example `2026-05-15T12:00:00Z`
+
+The default accepted drift is 300 seconds.
+
+## Signature Formula
+
+The signed message is:
+
+```text
+timestamp + METHOD_UPPER + path_with_query + sha256(raw_body)
+```
+
+The signature is:
+
+```text
+hex(hmac_sha256(secret, message))
+```
+
+Important details:
+
+- `METHOD_UPPER` is uppercase HTTP method, for example `PATCH`.
+- `path_with_query` includes the query string when present.
+- `raw_body` must be the exact byte payload sent over HTTP.
+- JSON should be serialized consistently by the caller before signing.
+
+## Example
+
+Body:
+
+```json
+{"project_id":"demo-project","entity_id":"123","entity_type":"wordpress_post","changes":[{"op":"replace","path":"/title","value":"New title"}],"metadata":{}}
+```
+
+Values:
+
+```text
+timestamp = 1710000000
+method = PATCH
+path = /api/client/meta
+secret = demo-secret
+body_sha256 = 89d43eeca2831cb9296d69bd963000c21ad325c4ffe81917674bbc05eb0e30d9
+message = 1710000000PATCH/api/client/meta89d43eeca2831cb9296d69bd963000c21ad325c4ffe81917674bbc05eb0e30d9
+signature = 238c301c7c725473cc58ad0d389f40a5260c41c9e51edb4614e87903f09e117e
+```
+
+Request headers:
+
+```http
+X-Project-ID: demo-project
+X-Timestamp: 1710000000
+X-Signature: 238c301c7c725473cc58ad0d389f40a5260c41c9e51edb4614e87903f09e117e
+Content-Type: application/json
+```
+
+## Python Signing Example
+
+```python
+import hashlib
+import hmac
+import json
+import time
+
+payload = {
+    "project_id": "demo-project",
+    "entity_id": "123",
+    "entity_type": "wordpress_post",
+    "changes": [{"op": "replace", "path": "/title", "value": "New title"}],
+    "metadata": {},
+}
+
+body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+timestamp = str(int(time.time()))
+method = "PATCH"
+path = "/api/client/meta"
+secret = "demo-secret"
+
+body_hash = hashlib.sha256(body).hexdigest()
+message = f"{timestamp}{method}{path}{body_hash}".encode("utf-8")
+signature = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+```
+
+## Negative Cases Covered By Code
+
+- Missing project id, timestamp, or signature
+- Invalid timestamp format
+- Timestamp drift too large
+- No valid HMAC key candidate
+- Invalid signature
+- Project id mismatch between header and payload
+

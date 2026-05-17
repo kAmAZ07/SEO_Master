@@ -7,6 +7,26 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 
+_STUB_MODULE_NAMES = [
+    "sqlalchemy",
+    "sqlalchemy.orm",
+    "services.management_service.config",
+    "services.management_service.db.models",
+    "config.logging_config",
+]
+
+
+@pytest.fixture(autouse=True)
+def _restore_stubbed_modules():
+    previous = {name: sys.modules.get(name) for name in _STUB_MODULE_NAMES}
+    yield
+    for name, module in previous.items():
+        if module is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = module
+
+
 def _install_prioritizer_stubs():
     sqlalchemy_module = types.ModuleType("sqlalchemy")
     sqlalchemy_orm_module = types.ModuleType("sqlalchemy.orm")

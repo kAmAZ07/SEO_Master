@@ -18,6 +18,7 @@ fake_config.settings = types.SimpleNamespace(
     mock_mode=True,
     schema_policy='warn',
 )
+previous_config = sys.modules.get('config')
 sys.modules['config'] = fake_config
 
 MODULE_PATH = ADAPTER_DIR / 'meta_injector.py'
@@ -25,6 +26,10 @@ SPEC = importlib.util.spec_from_file_location('tilda_meta_injector', MODULE_PATH
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
+if previous_config is None:
+    sys.modules.pop('config', None)
+else:
+    sys.modules['config'] = previous_config
 TildaMetaInjector = MODULE.TildaMetaInjector
 
 

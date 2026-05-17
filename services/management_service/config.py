@@ -1,6 +1,7 @@
-from typing import Annotated, List, Optional
+import json
+from typing import List, Optional
 
-from pydantic import Field, PostgresDsn, RedisDsn, field_validator
+from pydantic import PostgresDsn, RedisDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,9 +34,7 @@ class Settings(BaseSettings):
     REPORTING_SERVICE_URL: str = 'http://localhost:8003'
     CLIENT_GATEWAY_URL: str = 'http://localhost:8005'
 
-    CORS_ORIGINS: List[str] = Field(
-        default=['http://localhost:3000', 'http://localhost:5173'],
-    )
+    CORS_ORIGINS: str = 'http://localhost:3000,http://localhost:5173'
 
     INTERNAL_API_KEY: str
 
@@ -61,12 +60,22 @@ class Settings(BaseSettings):
     SERVICE_REQUEST_TIMEOUT: int = 30
     SERVICE_REQUEST_RETRIES: int = 3
 
-    @field_validator('CORS_ORIGINS', mode='before')
-    @classmethod
-    def parse_cors_origins(cls, value):
-        if isinstance(value, str):
-            return [origin.strip() for origin in value.split(',') if origin.strip()]
-        return value
+    @property
+    def cors_origins_list(self) -> List[str]:
+        raw = self.CORS_ORIGINS
+        if not raw:
+            return []
+
+        stripped = raw.strip()
+        if stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(origin).strip() for origin in parsed if str(origin).strip()]
+
+        return [origin.strip() for origin in raw.split(',') if origin.strip()]
 
     @field_validator('CELERY_BROKER_URL', mode='before')
     @classmethod

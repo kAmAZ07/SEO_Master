@@ -77,6 +77,12 @@ async def _handle_event(event: dict) -> None:
         raise
 
 
+async def _handle_message(body: bytes) -> None:
+    import json
+
+    await _handle_event(json.loads(body.decode("utf-8")))
+
+
 async def maybe_start_task_created_consumer() -> None:
     if not settings.rabbitmq_url:
         return

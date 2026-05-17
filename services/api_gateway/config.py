@@ -79,7 +79,7 @@ class Settings(BaseSettings):
             raise ValueError(f"LOG_FORMAT must be one of {allowed_formats}")
         return v_lower
     
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "case_sensitive": True}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "case_sensitive": True, "extra": "ignore"}
 
 
 settings = Settings()

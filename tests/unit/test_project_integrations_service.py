@@ -8,6 +8,7 @@ from services.project_integrations.integrations_service import (
     IntegrationValidationError,
     IntegrationsService,
 )
+from services.project_integrations.models import ProjectIntegration
 from services.api_gateway.routes.integrations_routes import WordpressSecretResponse
 
 
@@ -131,3 +132,7 @@ def test_wordpress_secret_response_accepts_service_snake_case_payload():
 
     assert response.generated_secret == "secret-value"
     assert response.model_dump(by_alias=True)["generatedSecret"] == "secret-value"
+
+
+def test_project_integration_model_does_not_require_external_project_metadata():
+    assert not ProjectIntegration.__table__.foreign_keys

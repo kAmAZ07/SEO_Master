@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, Index, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
@@ -18,11 +18,7 @@ class ProjectIntegration(Base):
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(
-        String(36),
-        ForeignKey("audit_schema.projects.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    project_id = Column(String(36), nullable=False)
     platform = Column(String(32), nullable=False)
     encrypted_creds = Column(Text, nullable=False)
     creds_hint = Column(String(32), nullable=False)

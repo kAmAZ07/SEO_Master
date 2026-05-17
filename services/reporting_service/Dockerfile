@@ -14,5 +14,8 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY services/reporting_service /app/services/reporting_service
 COPY services/project_integrations /app/services/project_integrations
+COPY services/event_resilience.py /app/services/event_resilience.py
+
+ENV PYTHONPATH=/app
 
 CMD ["uvicorn", "services.reporting_service.main:app", "--host", "0.0.0.0", "--port", "8003"]

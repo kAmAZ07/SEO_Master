@@ -6,6 +6,7 @@ import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Loader from '../components/ui/Loader'
+import { formatProjectStatus } from '../utils/format'
 
 const Projects = () => {
   const dispatch = useAppDispatch()
@@ -99,7 +100,7 @@ const Projects = () => {
                 <div className="grid grid-cols-2 gap-3 rounded-lg bg-gray-50 p-4 text-sm text-gray-600">
                   <div>
                     <p className="text-xs uppercase tracking-wide text-gray-400">Статус</p>
-                    <p className="mt-1 font-medium text-gray-900">{project.status}</p>
+                    <p className="mt-1 font-medium text-gray-900">{formatProjectStatus(project.status)}</p>
                   </div>
                   <div>
                     <p className="text-xs uppercase tracking-wide text-gray-400">Создан</p>

@@ -7,6 +7,7 @@ import ProjectIntegrationsTab from '../components/projects/ProjectIntegrationsTa
 import Card from '../components/ui/Card'
 import Loader from '../components/ui/Loader'
 import { cn } from '../utils/classNames'
+import { formatProjectStatus } from '../utils/format'
 
 type ProjectDetailTab = 'overview' | 'audit' | 'integrations'
 
@@ -144,7 +145,7 @@ const ProjectDetail = () => {
             <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
               <div className="rounded-lg bg-gray-50 p-4">
                 <p className="text-xs uppercase tracking-wide text-gray-400">Статус</p>
-                <p className="mt-2 text-lg font-semibold text-gray-900">{currentProject.status}</p>
+                <p className="mt-2 text-lg font-semibold text-gray-900">{formatProjectStatus(currentProject.status)}</p>
               </div>
               <div className="rounded-lg bg-gray-50 p-4">
                 <p className="text-xs uppercase tracking-wide text-gray-400">Создан</p>

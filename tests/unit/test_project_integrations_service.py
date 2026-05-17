@@ -8,6 +8,7 @@ from services.project_integrations.integrations_service import (
     IntegrationValidationError,
     IntegrationsService,
 )
+from services.api_gateway.routes.integrations_routes import WordpressSecretResponse
 
 
 def test_credentials_vault_round_trip():
@@ -117,3 +118,16 @@ def test_wp_config_line_escapes_generated_secret():
     service = IntegrationsService(vault=CredentialsVault(Fernet.generate_key().decode("utf-8")))
 
     assert service._build_wp_config_line("abc'def") == "define('SEO_MASTER_HMAC_SECRET', 'abc\\'def');"
+
+
+def test_wordpress_secret_response_accepts_service_snake_case_payload():
+    response = WordpressSecretResponse(
+        platform="wordpress",
+        connected=True,
+        status="secret_generated",
+        generated_secret="secret-value",
+        wp_config_line="define('SEO_MASTER_HMAC_SECRET', 'secret-value');",
+    )
+
+    assert response.generated_secret == "secret-value"
+    assert response.model_dump(by_alias=True)["generatedSecret"] == "secret-value"

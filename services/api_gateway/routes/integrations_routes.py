@@ -1,7 +1,7 @@
 ﻿from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from config.database_config import get_db
@@ -92,11 +92,10 @@ class IntegrationResponse(BaseModel):
 
 
 class WordpressSecretResponse(IntegrationResponse):
+    model_config = ConfigDict(populate_by_name=True)
+
     generated_secret: str = Field(..., alias="generatedSecret")
     wp_config_line: str = Field(..., alias="wpConfigLine")
-
-    class Config:
-        allow_population_by_field_name = True
 
 
 class IntegrationsListResponse(BaseModel):
@@ -123,6 +122,7 @@ def _map_integration_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     if isinstance(exc, IntegrationValidationError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    logger.exception("Integration request failed", exc_info=exc)
     return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Integration request failed")
 
 

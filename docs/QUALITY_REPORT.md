@@ -1,6 +1,6 @@
 # Quality Report
 
-Generated locally on 2026-05-17.
+Generated locally on 2026-05-18.
 
 ## Current Verified Results
 
@@ -13,7 +13,7 @@ Backend unit tests:
 Result:
 
 ```text
-37 passed, 69 warnings
+39 passed, 71 warnings
 ```
 
 Backend coverage:
@@ -25,7 +25,7 @@ Backend coverage:
 Result:
 
 ```text
-TOTAL: 6924 statements, 4025 missed, 42% coverage
+TOTAL: 7040 statements, 4091 missed, 42% coverage
 ```
 
 Generated artifacts:
@@ -58,10 +58,10 @@ Result:
 
 ```text
 3 test files passed, 6 tests passed
-Statements: 7.91%
-Branches: 7.18%
-Functions: 7.80%
-Lines: 8.03%
+Statements: 7.67%
+Branches: 6.96%
+Functions: 7.67%
+Lines: 7.78%
 ```
 
 Generated artifacts:
@@ -74,6 +74,7 @@ Currently covered:
 - HITL empty state
 - HITL API normalization and approve/reject calls
 - shared `Input` component, including password visibility toggle
+- WordPress HMAC secret metadata is covered by backend unit tests
 
 Recommended next step:
 
@@ -133,6 +134,15 @@ Signature formula:
 HMAC_SHA256(secret, timestamp + METHOD_UPPER + path_with_query + sha256(raw_body))
 ```
 
+WordPress integration now supports server-side HMAC secret generation:
+
+- `POST /api/projects/{project_id}/integrations/wordpress/secret` generates a cryptographically strong secret.
+- The generated secret is returned to the UI once.
+- The secret is stored only inside encrypted project integration credentials.
+- The UI later shows `key_id`, fingerprint, expiration, and grace-period metadata.
+- `POST /api/projects/{project_id}/integrations/wordpress/rotate` generates a replacement secret and records old-key grace metadata.
+- `POST /api/projects/{project_id}/integrations/wordpress/verify` checks the WordPress plugin health endpoint after the secret is copied into `wp-config.php`.
+
 ## FF-Score Status
 
 FF-Score is implemented in `services/semantic_service/scoring/ff_score_calculator.py`.
@@ -168,7 +178,7 @@ Recommended next step:
 ## Main Quality Risks
 
 - Backend coverage is currently low at 42%.
-- Frontend automated coverage exists, but is still low at 8.03% lines.
+- Frontend automated coverage exists, but is still low at 7.78% lines.
 - Performance claims cannot be made until load tests are run.
 - Several Pydantic V1-style validators produce deprecation warnings under Pydantic V2.
 - Some Russian UI/documentation strings still show encoding damage in source files.

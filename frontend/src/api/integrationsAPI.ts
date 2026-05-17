@@ -1,5 +1,10 @@
 ﻿import api from './axiosConfig'
-import type { IntegrationPlatform, ProjectIntegrationStatus, ProjectIntegrationsResponse } from '@/types/integrations'
+import type {
+  IntegrationPlatform,
+  ProjectIntegrationStatus,
+  ProjectIntegrationsResponse,
+  WordpressSecretResponse,
+} from '@/types/integrations'
 
 export interface SaveTildaIntegrationPayload {
   publicKey: string
@@ -11,6 +16,10 @@ export interface SaveTildaIntegrationPayload {
 export interface SaveWordpressIntegrationPayload {
   baseUrl: string
   hmacSecret: string
+}
+
+export interface GenerateWordpressSecretPayload {
+  baseUrl: string
 }
 
 export interface SaveGSCIntegrationPayload {
@@ -49,6 +58,19 @@ interface RawIntegrationStatus {
     plugin?: string | null
     version?: string | null
   } | null
+  hmac_key_id?: string | null
+  hmac_secret_fingerprint?: string | null
+  hmac_secret_generated_at?: string | null
+  hmac_secret_expires_at?: string | null
+  hmac_secret_grace_until?: string | null
+  hmac_rotation?: Record<string, unknown> | null
+}
+
+interface RawWordpressSecretResponse extends RawIntegrationStatus {
+  generatedSecret?: string
+  generated_secret?: string
+  wpConfigLine?: string
+  wp_config_line?: string
 }
 
 interface RawIntegrationsResponse {
@@ -76,6 +98,18 @@ const mapIntegrationStatus = (item: RawIntegrationStatus): ProjectIntegrationSta
         version: item.plugin_health.version ?? null,
       }
     : null,
+  hmacKeyId: item.hmac_key_id ?? null,
+  hmacSecretFingerprint: item.hmac_secret_fingerprint ?? null,
+  hmacSecretGeneratedAt: item.hmac_secret_generated_at ?? null,
+  hmacSecretExpiresAt: item.hmac_secret_expires_at ?? null,
+  hmacSecretGraceUntil: item.hmac_secret_grace_until ?? null,
+  hmacRotation: item.hmac_rotation ?? null,
+})
+
+const mapWordpressSecretResponse = (item: RawWordpressSecretResponse): WordpressSecretResponse => ({
+  ...mapIntegrationStatus(item),
+  generatedSecret: item.generatedSecret ?? item.generated_secret ?? '',
+  wpConfigLine: item.wpConfigLine ?? item.wp_config_line ?? '',
 })
 
 export const fetchProjectIntegrations = async (projectId: string): Promise<ProjectIntegrationsResponse> => {
@@ -99,6 +133,24 @@ export const saveWordpressIntegration = async (
   payload: SaveWordpressIntegrationPayload,
 ): Promise<ProjectIntegrationStatus> => {
   const response = await api.post<RawIntegrationStatus>(`/projects/${projectId}/integrations/wordpress`, payload)
+  return mapIntegrationStatus(response.data)
+}
+
+export const generateWordpressSecret = async (
+  projectId: string,
+  payload: GenerateWordpressSecretPayload,
+): Promise<WordpressSecretResponse> => {
+  const response = await api.post<RawWordpressSecretResponse>(`/projects/${projectId}/integrations/wordpress/secret`, payload)
+  return mapWordpressSecretResponse(response.data)
+}
+
+export const rotateWordpressSecret = async (projectId: string): Promise<WordpressSecretResponse> => {
+  const response = await api.post<RawWordpressSecretResponse>(`/projects/${projectId}/integrations/wordpress/rotate`)
+  return mapWordpressSecretResponse(response.data)
+}
+
+export const verifyWordpressIntegration = async (projectId: string): Promise<ProjectIntegrationStatus> => {
+  const response = await api.post<RawIntegrationStatus>(`/projects/${projectId}/integrations/wordpress/verify`)
   return mapIntegrationStatus(response.data)
 }
 

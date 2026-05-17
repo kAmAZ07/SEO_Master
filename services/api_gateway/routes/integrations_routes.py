@@ -36,6 +36,13 @@ class WordpressIntegrationRequest(BaseModel):
         allow_population_by_field_name = True
 
 
+class WordpressSecretRequest(BaseModel):
+    base_url: str = Field(..., alias="baseUrl")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
 class GSCIntegrationRequest(BaseModel):
     property_url: str = Field(..., alias="propertyUrl")
     credentials_json: str = Field(..., alias="credentialsJson")
@@ -76,6 +83,20 @@ class IntegrationResponse(BaseModel):
     plugin_health: Optional[Dict[str, Any]] = None
     account_identifier: Optional[str] = None
     auth_mode: Optional[str] = None
+    hmac_key_id: Optional[str] = None
+    hmac_secret_fingerprint: Optional[str] = None
+    hmac_secret_generated_at: Optional[str] = None
+    hmac_secret_expires_at: Optional[str] = None
+    hmac_secret_grace_until: Optional[str] = None
+    hmac_rotation: Optional[Dict[str, Any]] = None
+
+
+class WordpressSecretResponse(IntegrationResponse):
+    generated_secret: str = Field(..., alias="generatedSecret")
+    wp_config_line: str = Field(..., alias="wpConfigLine")
+
+    class Config:
+        allow_population_by_field_name = True
 
 
 class IntegrationsListResponse(BaseModel):
@@ -161,6 +182,62 @@ async def save_wordpress_integration(
         raise _map_integration_error(exc) from exc
 
     logger.info("Saved WordPress integration", extra={"project_id": project_id, "platform": "wordpress"})
+    return IntegrationResponse(**integration)
+
+
+@router.post("/projects/{project_id}/integrations/wordpress/secret", response_model=WordpressSecretResponse)
+async def generate_wordpress_secret(
+    project_id: str,
+    payload: WordpressSecretRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> WordpressSecretResponse:
+    _get_owned_project(db, project_id, str(current_user.id))
+
+    try:
+        integration = await service.generate_wordpress_secret(
+            db,
+            project_id,
+            base_url=payload.base_url,
+        )
+    except Exception as exc:
+        raise _map_integration_error(exc) from exc
+
+    logger.info("Generated WordPress HMAC secret", extra={"project_id": project_id, "platform": "wordpress"})
+    return WordpressSecretResponse(**integration)
+
+
+@router.post("/projects/{project_id}/integrations/wordpress/rotate", response_model=WordpressSecretResponse)
+async def rotate_wordpress_secret(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> WordpressSecretResponse:
+    _get_owned_project(db, project_id, str(current_user.id))
+
+    try:
+        integration = await service.rotate_wordpress_secret(db, project_id)
+    except Exception as exc:
+        raise _map_integration_error(exc) from exc
+
+    logger.info("Rotated WordPress HMAC secret", extra={"project_id": project_id, "platform": "wordpress"})
+    return WordpressSecretResponse(**integration)
+
+
+@router.post("/projects/{project_id}/integrations/wordpress/verify", response_model=IntegrationResponse)
+async def verify_wordpress_integration(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> IntegrationResponse:
+    _get_owned_project(db, project_id, str(current_user.id))
+
+    try:
+        integration = await service.verify_wordpress_integration(db, project_id)
+    except Exception as exc:
+        raise _map_integration_error(exc) from exc
+
+    logger.info("Verified WordPress integration", extra={"project_id": project_id, "platform": "wordpress"})
     return IntegrationResponse(**integration)
 
 

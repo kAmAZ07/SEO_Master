@@ -1,7 +1,10 @@
 ﻿from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import hashlib
 import json
+import os
+import secrets
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -22,6 +25,7 @@ class IntegrationNotFoundError(LookupError):
 
 class IntegrationsService:
     SUPPORTED_PLATFORMS = ("tilda", "wordpress", "gsc", "ga4", "yandex")
+    WORDPRESS_SECRET_BYTES = 32
 
     def __init__(self, vault: CredentialsVault | None = None) -> None:
         self._vault = vault
@@ -89,6 +93,7 @@ class IntegrationsService:
             raise IntegrationValidationError("WordPress base_url and hmac_secret are required")
 
         plugin_health = await self.validate_wordpress_plugin(normalized_base_url)
+        key_meta = self._build_hmac_key_metadata(hmac_secret)
         integration = self._upsert_integration(
             db=db,
             project_id=str(project_id),
@@ -101,8 +106,123 @@ class IntegrationsService:
             details={
                 "base_url": normalized_base_url,
                 "plugin_health": plugin_health,
+                "status": "connected",
+                "hmac_key": key_meta,
+                "secret_delivery": "manual",
             },
         )
+        return self.serialize_integration(integration)
+
+    async def generate_wordpress_secret(
+        self,
+        db: Session,
+        project_id: str,
+        *,
+        base_url: str,
+    ) -> Dict[str, Any]:
+        normalized_base_url = self._normalize_base_url(base_url)
+        if not normalized_base_url:
+            raise IntegrationValidationError("WordPress base_url is required")
+
+        secret = self._generate_secret()
+        key_meta = self._build_hmac_key_metadata(secret)
+        details = {
+            "base_url": normalized_base_url,
+            "status": "secret_generated",
+            "hmac_key": key_meta,
+            "secret_delivery": "shown_once",
+        }
+        integration = self._upsert_integration(
+            db=db,
+            project_id=str(project_id),
+            platform="wordpress",
+            credentials={
+                "base_url": normalized_base_url,
+                "hmac_secret": secret,
+            },
+            hint_source=key_meta["fingerprint"],
+            details=details,
+        )
+        return {
+            **self.serialize_integration(integration),
+            "generated_secret": secret,
+            "wp_config_line": self._build_wp_config_line(secret),
+        }
+
+    async def rotate_wordpress_secret(
+        self,
+        db: Session,
+        project_id: str,
+    ) -> Dict[str, Any]:
+        integration = self._require_integration(db, str(project_id), "wordpress")
+        credentials = self.vault.decrypt(integration.encrypted_creds)
+        details = dict(integration.details or {})
+        base_url = credentials.get("base_url") or details.get("base_url")
+        if not base_url:
+            raise IntegrationValidationError("WordPress base_url is missing for this integration")
+
+        previous_secret = credentials.get("hmac_secret")
+        new_secret = self._generate_secret()
+        key_meta = self._build_hmac_key_metadata(new_secret)
+        rotation_meta: Dict[str, Any] = {
+            "rotated_at": datetime.now(timezone.utc).isoformat(),
+            "grace_until": key_meta["grace_until"],
+        }
+        if previous_secret:
+            rotation_meta["previous_fingerprint"] = self._fingerprint_secret(previous_secret)
+
+        updated_credentials = {
+            "base_url": str(base_url),
+            "hmac_secret": new_secret,
+        }
+        if previous_secret:
+            updated_credentials["previous_hmac_secret"] = previous_secret
+
+        details = {
+            **details,
+            "base_url": str(base_url),
+            "status": "rotation_pending",
+            "hmac_key": key_meta,
+            "hmac_rotation": rotation_meta,
+            "secret_delivery": "shown_once",
+        }
+        integration.encrypted_creds = self.vault.encrypt(updated_credentials)
+        integration.creds_hint = self._build_hint(key_meta["fingerprint"])
+        integration.details = details
+        db.add(integration)
+        db.commit()
+        db.refresh(integration)
+
+        return {
+            **self.serialize_integration(integration),
+            "generated_secret": new_secret,
+            "wp_config_line": self._build_wp_config_line(new_secret),
+        }
+
+    async def verify_wordpress_integration(
+        self,
+        db: Session,
+        project_id: str,
+    ) -> Dict[str, Any]:
+        integration = self._require_integration(db, str(project_id), "wordpress")
+        credentials = self.vault.decrypt(integration.encrypted_creds)
+        details = dict(integration.details or {})
+        base_url = credentials.get("base_url") or details.get("base_url")
+        if not base_url:
+            raise IntegrationValidationError("WordPress base_url is missing for this integration")
+
+        plugin_health = await self.validate_wordpress_plugin(str(base_url))
+        details = {
+            **details,
+            "base_url": str(base_url),
+            "status": "connected",
+            "plugin_health": plugin_health,
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+        }
+        integration.details = details
+        db.add(integration)
+        db.commit()
+        db.refresh(integration)
         return self.serialize_integration(integration)
 
     async def save_gsc_credentials(
@@ -401,12 +521,21 @@ class IntegrationsService:
             return payload
 
         details = dict(integration.details or {})
+        payload["status"] = str(details.get("status") or payload["status"])
         if target_platform == "tilda":
             payload["project_identifier"] = details.get("external_project_id")
             payload["page_mappings_count"] = len(details.get("page_mappings") or {})
         elif target_platform == "wordpress":
             payload["site_url"] = details.get("base_url")
             payload["plugin_health"] = details.get("plugin_health") or {}
+            hmac_key = details.get("hmac_key") if isinstance(details.get("hmac_key"), dict) else {}
+            rotation = details.get("hmac_rotation") if isinstance(details.get("hmac_rotation"), dict) else {}
+            payload["hmac_key_id"] = hmac_key.get("key_id")
+            payload["hmac_secret_fingerprint"] = hmac_key.get("fingerprint")
+            payload["hmac_secret_generated_at"] = hmac_key.get("generated_at")
+            payload["hmac_secret_expires_at"] = hmac_key.get("expires_at")
+            payload["hmac_secret_grace_until"] = hmac_key.get("grace_until") or rotation.get("grace_until")
+            payload["hmac_rotation"] = rotation or None
         elif target_platform == "gsc":
             payload["site_url"] = details.get("property_url")
             payload["project_identifier"] = details.get("account_identifier")
@@ -483,6 +612,31 @@ class IntegrationsService:
             return "***"
         prefix = cleaned[:6]
         return prefix if len(cleaned) <= 6 else f"{prefix}..."
+
+    def _generate_secret(self) -> str:
+        return secrets.token_urlsafe(self.WORDPRESS_SECRET_BYTES)
+
+    def _fingerprint_secret(self, secret: str) -> str:
+        return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+    def _build_hmac_key_metadata(self, secret: str) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        rotation_days = int(os.getenv("HMAC_ROTATION_DAYS", "90"))
+        grace_days = int(os.getenv("HMAC_GRACE_DAYS", "7"))
+        fingerprint = self._fingerprint_secret(secret)
+        return {
+            "key_id": f"wp_{fingerprint[:16]}",
+            "fingerprint": fingerprint[:16],
+            "generated_at": now.isoformat(),
+            "expires_at": (now + timedelta(days=rotation_days)).isoformat(),
+            "grace_until": (now + timedelta(days=rotation_days + grace_days)).isoformat(),
+            "rotation_days": rotation_days,
+            "grace_days": grace_days,
+        }
+
+    def _build_wp_config_line(self, secret: str) -> str:
+        escaped = secret.replace("\\", "\\\\").replace("'", "\\'")
+        return f"define('SEO_MASTER_HMAC_SECRET', '{escaped}');"
 
     def _normalize_base_url(self, base_url: str) -> str:
         value = str(base_url or "").strip()

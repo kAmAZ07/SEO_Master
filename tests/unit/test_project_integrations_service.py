@@ -84,3 +84,36 @@ def test_serialize_wordpress_integration_exposes_only_hint():
     assert payload["hint"] == "secret..."
     assert payload["site_url"] == "https://example.com"
     assert "hmac_secret" not in payload
+
+
+def test_wordpress_hmac_metadata_exposes_safe_fields_only():
+    service = IntegrationsService(vault=CredentialsVault(Fernet.generate_key().decode("utf-8")))
+    secret = service._generate_secret()
+    metadata = service._build_hmac_key_metadata(secret)
+    integration = SimpleNamespace(
+        platform="wordpress",
+        creds_hint="hint...",
+        connected_at=None,
+        updated_at=None,
+        details={
+            "base_url": "https://example.com",
+            "status": "secret_generated",
+            "hmac_key": metadata,
+        },
+    )
+
+    payload = service.serialize_integration(integration)
+
+    assert len(secret) >= 32
+    assert payload["status"] == "secret_generated"
+    assert payload["hmac_key_id"].startswith("wp_")
+    assert payload["hmac_secret_fingerprint"] == metadata["fingerprint"]
+    assert payload["hmac_secret_expires_at"] == metadata["expires_at"]
+    assert "generated_secret" not in payload
+    assert "hmac_secret" not in payload
+
+
+def test_wp_config_line_escapes_generated_secret():
+    service = IntegrationsService(vault=CredentialsVault(Fernet.generate_key().decode("utf-8")))
+
+    assert service._build_wp_config_line("abc'def") == "define('SEO_MASTER_HMAC_SECRET', 'abc\\'def');"

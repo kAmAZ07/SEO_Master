@@ -21,9 +21,20 @@ export interface ProjectIntegrationStatus {
   pluginHealth?: PluginHealthStatus | null
   accountIdentifier?: string | null
   authMode?: string | null
+  hmacKeyId?: string | null
+  hmacSecretFingerprint?: string | null
+  hmacSecretGeneratedAt?: string | null
+  hmacSecretExpiresAt?: string | null
+  hmacSecretGraceUntil?: string | null
+  hmacRotation?: Record<string, unknown> | null
 }
 
 export interface ProjectIntegrationsResponse {
   projectId: string
   items: ProjectIntegrationStatus[]
+}
+
+export interface WordpressSecretResponse extends ProjectIntegrationStatus {
+  generatedSecret: string
+  wpConfigLine: string
 }

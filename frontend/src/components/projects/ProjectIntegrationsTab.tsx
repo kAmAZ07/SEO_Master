@@ -14,15 +14,17 @@ import {
 } from 'lucide-react'
 import {
   fetchProjectIntegrations,
+  generateWordpressSecret,
   revokeIntegration,
+  rotateWordpressSecret,
   saveGA4Integration,
   saveGSCIntegration,
   saveTildaIntegration,
-  saveWordpressIntegration,
   saveYandexIntegration,
+  verifyWordpressIntegration,
 } from '@/api/integrationsAPI'
 import { getApiErrorMessage } from '@/api/authAPI'
-import type { ProjectIntegrationStatus, SupportedIntegrationPlatform } from '@/types/integrations'
+import type { ProjectIntegrationStatus, SupportedIntegrationPlatform, WordpressSecretResponse } from '@/types/integrations'
 import Button from '@/components/ui/Button'
 import Card from '@/components/ui/Card'
 import Input from '@/components/ui/Input'
@@ -124,7 +126,8 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
   const [reloadToken, setReloadToken] = useState(0)
 
   const [tildaForm, setTildaForm] = useState({ publicKey: '', secretKey: '', projectId: '' })
-  const [wordpressForm, setWordpressForm] = useState({ baseUrl: projectUrl ?? '', hmacSecret: '' })
+  const [wordpressForm, setWordpressForm] = useState({ baseUrl: projectUrl ?? '' })
+  const [wordpressSecret, setWordpressSecret] = useState<WordpressSecretResponse | null>(null)
   const [gscForm, setGscForm] = useState({ propertyUrl: projectUrl ?? '', credentialsJson: '', tokenJson: '' })
   const [ga4Form, setGa4Form] = useState({ propertyId: '', credentialsJson: '', tokenJson: '' })
   const [yandexForm, setYandexForm] = useState({ token: '', userId: '', hostId: '' })
@@ -191,6 +194,71 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
     setReloadToken((value) => value + 1)
   }
 
+  const handleGenerateWordpressSecret = async () => {
+    const baseUrl = wordpressForm.baseUrl.trim()
+    if (!baseUrl) {
+      setNotice({ type: 'error', text: 'Укажите URL сайта WordPress перед генерацией секрета.' })
+      return
+    }
+
+    setSavingPlatform('wordpress')
+    setNotice(null)
+    try {
+      const generated = await generateWordpressSecret(projectId, { baseUrl })
+      setWordpressSecret(generated)
+      setWordpressForm({ baseUrl: generated.siteUrl ?? baseUrl })
+      setIntegrations((current) => ({ ...current, wordpress: generated }))
+      setNotice({ type: 'success', text: 'HMAC-секрет сгенерирован. Скопируйте его сейчас: повторно он не будет показан.' })
+    } catch (integrationError) {
+      setNotice({
+        type: 'error',
+        text: getApiErrorMessage(integrationError, 'Не удалось сгенерировать HMAC-секрет.'),
+      })
+    } finally {
+      setSavingPlatform(null)
+    }
+  }
+
+  const handleRotateWordpressSecret = async () => {
+    if (!window.confirm('Сгенерировать новый HMAC-секрет? Старый секрет останется только в grace-period метаданных, а новый будет показан один раз.')) {
+      return
+    }
+
+    setSavingPlatform('wordpress')
+    setNotice(null)
+    try {
+      const rotated = await rotateWordpressSecret(projectId)
+      setWordpressSecret(rotated)
+      setIntegrations((current) => ({ ...current, wordpress: rotated }))
+      setNotice({ type: 'success', text: 'Новый HMAC-секрет сгенерирован. Обновите SEO_MASTER_HMAC_SECRET в wp-config.php.' })
+    } catch (integrationError) {
+      setNotice({
+        type: 'error',
+        text: getApiErrorMessage(integrationError, 'Не удалось выполнить ротацию HMAC-секрета.'),
+      })
+    } finally {
+      setSavingPlatform(null)
+    }
+  }
+
+  const handleVerifyWordpressIntegration = async () => {
+    setSavingPlatform('wordpress')
+    setNotice(null)
+    try {
+      const verified = await verifyWordpressIntegration(projectId)
+      setWordpressSecret(null)
+      setIntegrations((current) => ({ ...current, wordpress: verified }))
+      setNotice({ type: 'success', text: 'WordPress-плагин проверен, интеграция подключена.' })
+    } catch (integrationError) {
+      setNotice({
+        type: 'error',
+        text: getApiErrorMessage(integrationError, 'Не удалось проверить WordPress-плагин.'),
+      })
+    } finally {
+      setSavingPlatform(null)
+    }
+  }
+
   const handleSave = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setSavingPlatform(activePlatform)
@@ -209,13 +277,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
         saved = await saveTildaIntegration(projectId, { publicKey, secretKey, projectId: externalProjectId })
         setTildaForm({ publicKey: '', secretKey: '', projectId: '' })
       } else if (activePlatform === 'wordpress') {
-        const baseUrl = wordpressForm.baseUrl.trim()
-        const hmacSecret = wordpressForm.hmacSecret.trim()
-        if (!baseUrl || !hmacSecret) {
-          throw new Error('Необходимо указать URL сайта WordPress и HMAC-секрет.')
-        }
-        saved = await saveWordpressIntegration(projectId, { baseUrl, hmacSecret })
-        setWordpressForm((current) => ({ ...current, baseUrl: saved.siteUrl ?? baseUrl, hmacSecret: '' }))
+        throw new Error('Для WordPress используйте генерацию HMAC-секрета.')
       } else if (activePlatform === 'gsc') {
         const propertyUrl = gscForm.propertyUrl.trim()
         const credentialsJson = gscForm.credentialsJson.trim()
@@ -308,6 +370,10 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
     if (activeIntegration.projectIdentifier) rows.push({ label: 'Идентификатор', value: activeIntegration.projectIdentifier })
     if (activeIntegration.accountIdentifier) rows.push({ label: 'Аккаунт', value: activeIntegration.accountIdentifier })
     if (activeIntegration.authMode) rows.push({ label: 'Режим авторизации', value: activeIntegration.authMode })
+    if (activeIntegration.hmacKeyId) rows.push({ label: 'HMAC key_id', value: activeIntegration.hmacKeyId })
+    if (activeIntegration.hmacSecretFingerprint) rows.push({ label: 'Fingerprint', value: activeIntegration.hmacSecretFingerprint })
+    if (activeIntegration.hmacSecretExpiresAt) rows.push({ label: 'Истекает', value: formatDate(activeIntegration.hmacSecretExpiresAt) })
+    if (activeIntegration.hmacSecretGraceUntil) rows.push({ label: 'Grace до', value: formatDate(activeIntegration.hmacSecretGraceUntil) })
     if (activeIntegration.hint) rows.push({ label: 'Подсказка', value: activeIntegration.hint })
     if (typeof activeIntegration.pageMappingsCount === 'number') {
       rows.push({ label: 'Сопоставлено страниц', value: String(activeIntegration.pageMappingsCount) })
@@ -344,23 +410,37 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
               </a>
             )}
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            className="border-emerald-300 bg-white text-emerald-800 hover:bg-emerald-100"
-            onClick={() => void handleDisconnect(activePlatform)}
-            disabled={disconnectingPlatform === activePlatform}
-          >
-            <Unplug className="mr-2 h-4 w-4" />
-            {disconnectingPlatform === activePlatform ? 'Отключаем...' : 'Отключить'}
-          </Button>
+          <div className="flex flex-col gap-2">
+            {activePlatform === 'wordpress' && (
+              <Button
+                type="button"
+                variant="outline"
+                className="border-blue-300 bg-white text-blue-800 hover:bg-blue-50"
+                onClick={() => void handleRotateWordpressSecret()}
+                disabled={savingPlatform === 'wordpress'}
+              >
+                <KeyRound className="mr-2 h-4 w-4" />
+                {savingPlatform === 'wordpress' ? 'Генерируем...' : 'Rotate HMAC'}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              className="border-emerald-300 bg-white text-emerald-800 hover:bg-emerald-100"
+              onClick={() => void handleDisconnect(activePlatform)}
+              disabled={disconnectingPlatform === activePlatform}
+            >
+              <Unplug className="mr-2 h-4 w-4" />
+              {disconnectingPlatform === activePlatform ? 'Отключаем...' : 'Отключить'}
+            </Button>
+          </div>
         </div>
       </div>
     )
   }
 
   const renderForm = () => {
-    if (activeIntegration?.connected) {
+    if (activeIntegration?.connected && !(activePlatform === 'wordpress' && activeIntegration.status !== 'connected')) {
       return renderConnectedState()
     }
 
@@ -381,6 +461,9 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
     }
 
     if (activePlatform === 'wordpress') {
+      const visibleSecret = wordpressSecret
+      const hasStoredSecret = Boolean(activeIntegration?.hmacSecretFingerprint)
+
       return (
         <div className="space-y-6">
           <ol className="space-y-4">
@@ -406,30 +489,59 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
             </li>
 
             <li className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-              <p className="text-sm font-semibold text-gray-900">3. Укажите HMAC-секрет в wp-config.php</p>
+              <p className="text-sm font-semibold text-gray-900">3. Сгенерируйте HMAC-секрет</p>
               <p className="mt-1 text-sm text-gray-600">
-                Откройте <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">wp-config.php</code> и добавьте строку ниже перед{' '}
-                <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">/* That&apos;s all */</code>. Используйте то же значение, что введёте на шаге 4.
+                Укажите URL сайта. Секрет будет создан на сервере, сохранён в зашифрованном хранилище и показан здесь только один раз.
               </p>
-              <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-900 px-4 py-3 text-xs text-emerald-300">
-                {`define('SEO_MASTER_HMAC_SECRET', 'your-secret-here');`}
-              </pre>
-              <p className="mt-2 text-xs text-gray-500">
+              <div className="mt-4 space-y-4">
+                <Input label="URL сайта WordPress" value={wordpressForm.baseUrl} onChange={(event) => setWordpressForm({ baseUrl: event.target.value })} placeholder="https://example.com" autoComplete="url" required />
+                <Button type="button" onClick={() => void handleGenerateWordpressSecret()} disabled={savingPlatform === 'wordpress'} className="w-full md:w-auto">
+                  <KeyRound className="mr-2 h-4 w-4" />
+                  {savingPlatform === 'wordpress' ? 'Генерируем...' : hasStoredSecret ? 'Сгенерировать заново' : 'Сгенерировать HMAC secret'}
+                </Button>
+              </div>
+            </li>
+
+            <li className="rounded-xl border border-blue-100 bg-blue-50 p-4">
+              <p className="text-sm font-semibold text-gray-900">4. Добавьте секрет в wp-config.php</p>
+              <p className="mt-1 text-sm text-gray-600">
+                Откройте <code className="rounded bg-blue-100 px-1 py-0.5 text-xs">wp-config.php</code> и добавьте строку перед{' '}
+                <code className="rounded bg-blue-100 px-1 py-0.5 text-xs">/* That&apos;s all */</code>.
+              </p>
+              {visibleSecret ? (
+                <div className="mt-4 space-y-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-500">Secret, показывается один раз</p>
+                    <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-900 px-4 py-3 text-xs text-emerald-300">{visibleSecret.generatedSecret}</pre>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-500">wp-config.php</p>
+                    <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-900 px-4 py-3 text-xs text-emerald-300">{visibleSecret.wpConfigLine}</pre>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 text-sm text-blue-900 md:grid-cols-2">
+                    {visibleSecret.hmacKeyId && <p><span className="font-semibold">key_id:</span> {visibleSecret.hmacKeyId}</p>}
+                    {visibleSecret.hmacSecretFingerprint && <p><span className="font-semibold">fingerprint:</span> {visibleSecret.hmacSecretFingerprint}</p>}
+                    {visibleSecret.hmacSecretExpiresAt && <p><span className="font-semibold">expires:</span> {formatDate(visibleSecret.hmacSecretExpiresAt)}</p>}
+                    {visibleSecret.hmacSecretGraceUntil && <p><span className="font-semibold">grace:</span> {formatDate(visibleSecret.hmacSecretGraceUntil)}</p>}
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-3 rounded-lg border border-blue-200 bg-white px-4 py-3 text-sm text-blue-800">
+                  После генерации секрет появится в этом блоке. Если вы уже закрыли страницу, старый secret нельзя восстановить: сгенерируйте новый и обновите WordPress.
+                </p>
+              )}
+              <p className="mt-3 text-xs text-blue-700">
                 Затем перейдите в <strong>Настройки → SEO Master Connector</strong> в панели WordPress и укажите <strong>Project ID</strong> текущего проекта.
               </p>
             </li>
 
-            <li className="rounded-xl border border-blue-100 bg-blue-50 p-4">
-              <p className="text-sm font-semibold text-gray-900">4. Подключите к SEO Master</p>
-              <p className="mt-1 mb-4 text-sm text-gray-600">Введите URL сайта WordPress и тот же HMAC-секрет, что прописали в wp-config.php.</p>
-              <form onSubmit={handleSave} className="space-y-4">
-                <Input label="URL сайта WordPress" value={wordpressForm.baseUrl} onChange={(event) => setWordpressForm((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://example.com" autoComplete="url" required />
-                <Input label="HMAC Secret" type="password" value={wordpressForm.hmacSecret} onChange={(event) => setWordpressForm((current) => ({ ...current, hmacSecret: event.target.value }))} placeholder="your-secret-here" autoComplete="new-password" required />
-                <Button type="submit" disabled={savingPlatform === 'wordpress'} className="w-full md:w-auto">
-                  <KeyRound className="mr-2 h-4 w-4" />
-                  {savingPlatform === 'wordpress' ? 'Сохраняем...' : 'Подключить WordPress'}
-                </Button>
-              </form>
+            <li className="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
+              <p className="text-sm font-semibold text-gray-900">5. Проверьте подключение</p>
+              <p className="mt-1 mb-4 text-sm text-gray-600">После обновления wp-config.php проверьте health endpoint плагина и завершите подключение.</p>
+              <Button type="button" onClick={() => void handleVerifyWordpressIntegration()} disabled={savingPlatform === 'wordpress' || !hasStoredSecret} className="w-full md:w-auto">
+                <CheckCircle2 className="mr-2 h-4 w-4" />
+                {savingPlatform === 'wordpress' ? 'Проверяем...' : 'Проверить и подключить'}
+              </Button>
             </li>
           </ol>
         </div>
@@ -515,6 +627,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
           const meta = platformMeta[platform]
           const Icon = meta.icon
           const integration = integrations[platform]
+          const isConnected = integration?.status === 'connected'
           return (
             <button
               key={platform}
@@ -533,8 +646,8 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
                 <div className="flex-1">
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="text-lg font-semibold text-gray-900">{meta.label}</h3>
-                    <span className={cn('rounded-full px-3 py-1 text-xs font-semibold', integration?.connected ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600')}>
-                      {integration?.connected ? 'Подключено' : 'Не настроено'}
+                    <span className={cn('rounded-full px-3 py-1 text-xs font-semibold', isConnected ? 'bg-emerald-100 text-emerald-700' : integration?.connected ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600')}>
+                      {isConnected ? 'Подключено' : integration?.connected ? 'Настройка' : 'Не настроено'}
                     </span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-gray-600">{meta.description}</p>

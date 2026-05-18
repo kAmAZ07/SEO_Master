@@ -4,10 +4,9 @@ import json
 import os
 import time
 from typing import Any, Dict, Optional, Tuple
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
-from urllib.request import Request, urlopen
 
+import httpx
 import pytest
 
 pytestmark = [pytest.mark.e2e]
@@ -33,21 +32,27 @@ def _http_request(
         payload_bytes = json.dumps(json_payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         request_headers['Content-Type'] = 'application/json'
 
-    req = Request(url=url, data=payload_bytes, headers=request_headers, method=method.upper())
-
     try:
-        with urlopen(req, timeout=timeout) as response:
-            raw = response.read()
-            content_type = response.headers.get('Content-Type', '')
-            if 'application/json' in content_type and raw:
-                return response.status, json.loads(raw.decode('utf-8')), raw
-            return response.status, raw.decode('utf-8', errors='replace'), raw
-    except HTTPError as exc:
-        raw = exc.read() if exc.fp else b''
+        request_kwargs: Dict[str, Any] = {
+            "headers": request_headers,
+            "timeout": timeout,
+            "trust_env": False,
+        }
+        if payload_bytes is not None:
+            request_kwargs["content"] = payload_bytes
+        response = httpx.request(method.upper(), url, **request_kwargs)
+    except httpx.HTTPError as exc:
+        raise AssertionError(f'Network error for {method} {url}: {exc}') from exc
+
+    raw = response.content
+    if response.status_code >= 400:
         body_text = raw.decode('utf-8', errors='replace') if raw else ''
-        raise AssertionError(f'HTTP {exc.code} for {method} {url}: {body_text[:500]}') from exc
-    except URLError as exc:
-        raise AssertionError(f'Network error for {method} {url}: {exc.reason}') from exc
+        raise AssertionError(f'HTTP {response.status_code} for {method} {url}: {body_text[:500]}')
+
+    content_type = response.headers.get('Content-Type', '')
+    if 'application/json' in content_type and raw:
+        return response.status_code, response.json(), raw
+    return response.status_code, raw.decode('utf-8', errors='replace'), raw
 
 
 def _wait_for_json(url: str, expected_key: str, expected_value: Any, timeout_seconds: int = 180) -> Dict[str, Any]:
@@ -111,16 +116,16 @@ def _signed_patch(
 ) -> Dict[str, Any]:
     body = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
     headers = _build_hmac_headers('PATCH', url, body, project_id=project_id, secret=secret)
-    req = Request(url=url, data=body, headers=headers, method='PATCH')
 
     try:
-        with urlopen(req, timeout=timeout) as response:
-            raw = response.read()
-            return json.loads(raw.decode('utf-8')) if raw else {}
-    except HTTPError as exc:
-        raw = exc.read() if exc.fp else b''
-        body_text = raw.decode('utf-8', errors='replace') if raw else ''
-        raise AssertionError(f'HMAC PATCH failed {exc.code}: {body_text[:600]}') from exc
+        response = httpx.patch(url, content=body, headers=headers, timeout=timeout, trust_env=False)
+    except httpx.HTTPError as exc:
+        raise AssertionError(f'HMAC PATCH network error: {exc}') from exc
+
+    if response.status_code >= 400:
+        raise AssertionError(f'HMAC PATCH failed {response.status_code}: {response.text[:600]}')
+
+    return response.json() if response.content else {}
 
 
 @pytest.mark.timeout(900)
@@ -128,6 +133,7 @@ def test_extended_e2e_wordpress_tilda_stack():
     api_gateway_url = os.getenv('E2E_API_GATEWAY_URL', 'http://localhost:8000')
     management_url = os.getenv('E2E_MANAGEMENT_URL', 'http://localhost:8004')
     client_gateway_url = os.getenv('E2E_CLIENT_GATEWAY_URL', 'http://localhost:8005')
+    tilda_adapter_url = os.getenv('E2E_TILDA_ADAPTER_URL', 'http://localhost:8010')
     wordpress_url = os.getenv('E2E_WORDPRESS_URL', 'http://localhost:8086')
 
     project_id = os.getenv('E2E_PROJECT_ID', 'e2e-project')
@@ -137,6 +143,7 @@ def test_extended_e2e_wordpress_tilda_stack():
     _wait_for_json(f'{api_gateway_url}/health', 'status', 'healthy', timeout_seconds=180)
     _wait_for_json(f'{management_url}/health', 'status', 'healthy', timeout_seconds=180)
     _wait_for_json(f'{client_gateway_url}/health', 'status', 'healthy', timeout_seconds=180)
+    _wait_for_json(f'{tilda_adapter_url}/health/ready', 'status', 'ready', timeout_seconds=180)
 
     _wait_for_condition(
         lambda: _http_request('GET', f'{wordpress_url}/wp-json/seo-master/v1/health', timeout=10)[1].get('status') == 'ok',
@@ -211,6 +218,19 @@ def test_extended_e2e_wordpress_tilda_stack():
     )
     assert tilda_response.get('status') in {'applied', 'received'}
 
+    tilda_logs_status, tilda_logs_payload, _ = _http_request(
+        'GET',
+        f'{client_gateway_url}/changes/pending/{project_id}?status_filter=applied&limit=100',
+        headers={'X-Internal-API-Key': internal_key},
+        timeout=20,
+    )
+    assert tilda_logs_status == 200
+    assert isinstance(tilda_logs_payload, list)
+    assert any(
+        item.get('entity_id') == 'tilda-page-1' and item.get('entity_type') == 'tilda_page'
+        for item in tilda_logs_payload
+    ), 'No applied Tilda deployment log found'
+
     opt_payload = {
         'project_id': project_id,
         'url': 'http://wordpress/?p=' + post_id,
@@ -222,10 +242,11 @@ def test_extended_e2e_wordpress_tilda_stack():
         json_payload=opt_payload,
         timeout=600,
     )
-    assert opt_status == 200
+    assert opt_status == 202
     assert isinstance(opt_result, dict)
-    assert opt_result.get('status') == 'completed'
-    assert bool(opt_result.get('success')) is True
+    assert opt_result.get('status') == 'queued'
+    assert opt_result.get('project_id') == project_id
+    assert isinstance(opt_result.get('celery_task_id'), str) and opt_result.get('celery_task_id')
 
     email = f'e2e_{int(time.time())}@example.com'
     reg_status, reg_payload, _ = _http_request(

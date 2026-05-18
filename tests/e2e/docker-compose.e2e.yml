@@ -1,0 +1,137 @@
+name: seo-master-e2e
+
+services:
+  postgres:
+    container_name: seo-postgres-e2e
+
+  redis:
+    container_name: seo-redis-e2e
+
+  rabbitmq:
+    container_name: seo-rabbitmq-e2e
+
+  audit-service:
+    container_name: seo-audit-service-e2e
+    command: python -m uvicorn services.audit_service.main:app --host 0.0.0.0 --port 8001
+    environment:
+      ENVIRONMENT: development
+      LOG_DIR: /tmp/seo-logs
+      MASTER_ENCRYPTION_KEY: jUjeQmNdhnyd0bXIS8kmvPbSkbQ2x3JsCGEd4YaWxPQ=
+
+  semantic-service:
+    container_name: seo-semantic-service-e2e
+    command: python -m uvicorn services.semantic_service.main:app --host 0.0.0.0 --port 8002
+    environment:
+      ENVIRONMENT: development
+      LOG_DIR: /tmp/seo-logs
+
+  reporting-service:
+    container_name: seo-reporting-service-e2e
+    command: python -m uvicorn services.reporting_service.main:app --host 0.0.0.0 --port 8003
+    environment:
+      ENVIRONMENT: development
+      LOG_DIR: /tmp/seo-logs
+      MASTER_ENCRYPTION_KEY: jUjeQmNdhnyd0bXIS8kmvPbSkbQ2x3JsCGEd4YaWxPQ=
+
+  wordpress:
+    build:
+      context: .
+      dockerfile: tests/e2e/mocks/Dockerfile
+    image: seo-mock-wordpress-e2e:latest
+    container_name: seo-mock-wordpress-e2e
+    environment:
+      E2E_PROJECT_ID: e2e-project
+      E2E_WORDPRESS_HMAC_SECRET: e2e-wordpress-secret
+    ports:
+      - "8086:8086"
+    volumes:
+      - ./tests/e2e/mocks:/app:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json,urllib.request; data=json.load(urllib.request.urlopen('http://localhost:8086/wp-json/seo-master/v1/health', timeout=5)); assert data.get('status') == 'ok'",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+      backend:
+        aliases:
+          - wordpress
+
+  tilda-adapter:
+    container_name: seo-tilda-adapter-e2e
+    command: python -m uvicorn main:app --app-dir /app/adapters/tilda-adapter --host 0.0.0.0 --port 8010
+    environment:
+      ENVIRONMENT: development
+      LOG_DIR: /tmp/seo-logs
+      TILDA_INTERNAL_API_KEY: change-me-e2e
+      TILDA_MOCK_MODE: "true"
+
+  client-api-gateway:
+    container_name: seo-client-api-gateway-e2e
+    command: python -m uvicorn services.client_api_gateway.main:app --host 0.0.0.0 --port 8005
+    environment:
+      ENVIRONMENT: development
+      LOG_DIR: /tmp/seo-logs
+      INTERNAL_API_KEY: change-me-e2e
+      MASTER_ENCRYPTION_KEY: jUjeQmNdhnyd0bXIS8kmvPbSkbQ2x3JsCGEd4YaWxPQ=
+      WORDPRESS_BASE_URL: http://wordpress:8086
+      WORDPRESS_HMAC_SECRET: e2e-wordpress-secret
+      CLIENT_API_HMAC_KEYS_JSON: '{"e2e-project":[{"key_id":"ck_e2e","secret":"e2e-shared-secret","is_active":true}]}'
+      CLIENT_API_IP_WHITELIST: "*"
+      TILDA_ADAPTER_URL: http://tilda-adapter:8010
+      TILDA_INTERNAL_API_KEY: change-me-e2e
+      TILDA_PUBLIC_KEY: e2e-public-key
+      TILDA_SECRET_KEY: e2e-secret-key
+      TILDA_PROJECT_ID: e2e-tilda-project
+    depends_on:
+      wordpress:
+        condition: service_healthy
+      tilda-adapter:
+        condition: service_started
+
+  management-web:
+    container_name: seo-management-web-e2e
+    command: python -m uvicorn services.management_service.main:app --host 0.0.0.0 --port 8004
+    environment:
+      ENVIRONMENT: development
+      LOG_DIR: /tmp/seo-logs
+      CELERY_BROKER_URL: amqp://seo_user:rabbitmq_pass@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://:redis_pass@redis:6379/0
+      INTERNAL_API_KEY: change-me-e2e
+      MASTER_ENCRYPTION_KEY: jUjeQmNdhnyd0bXIS8kmvPbSkbQ2x3JsCGEd4YaWxPQ=
+      CLIENT_API_HMAC_KEYS_JSON: '{"e2e-project":[{"key_id":"ck_e2e","secret":"e2e-shared-secret","is_active":true}]}'
+
+  management-worker:
+    container_name: seo-management-worker-e2e
+    environment:
+      ENVIRONMENT: development
+      LOG_DIR: /tmp/seo-logs
+      CELERY_BROKER_URL: amqp://seo_user:rabbitmq_pass@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://:redis_pass@redis:6379/0
+      INTERNAL_API_KEY: change-me-e2e
+      MASTER_ENCRYPTION_KEY: jUjeQmNdhnyd0bXIS8kmvPbSkbQ2x3JsCGEd4YaWxPQ=
+      CLIENT_API_HMAC_KEYS_JSON: '{"e2e-project":[{"key_id":"ck_e2e","secret":"e2e-shared-secret","is_active":true}]}'
+
+  management-beat:
+    container_name: seo-management-beat-e2e
+    environment:
+      ENVIRONMENT: development
+      LOG_DIR: /tmp/seo-logs
+      CELERY_BROKER_URL: amqp://seo_user:rabbitmq_pass@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://:redis_pass@redis:6379/0
+      INTERNAL_API_KEY: change-me-e2e
+      MASTER_ENCRYPTION_KEY: jUjeQmNdhnyd0bXIS8kmvPbSkbQ2x3JsCGEd4YaWxPQ=
+      CLIENT_API_HMAC_KEYS_JSON: '{"e2e-project":[{"key_id":"ck_e2e","secret":"e2e-shared-secret","is_active":true}]}'
+
+  api-gateway:
+    container_name: seo-api-gateway-e2e
+    command: python -m uvicorn services.api_gateway.main:app --host 0.0.0.0 --port 8000
+    environment:
+      ENVIRONMENT: development
+      LOG_DIR: /tmp/seo-logs
+      MASTER_ENCRYPTION_KEY: jUjeQmNdhnyd0bXIS8kmvPbSkbQ2x3JsCGEd4YaWxPQ=

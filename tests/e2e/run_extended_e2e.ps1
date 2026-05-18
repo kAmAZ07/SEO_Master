@@ -28,16 +28,22 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Failed to start docker compose stack'
 }
 
-$env:E2E_API_GATEWAY_URL = 'http://localhost:8000'
-$env:E2E_MANAGEMENT_URL = 'http://localhost:8004'
-$env:E2E_CLIENT_GATEWAY_URL = 'http://localhost:8005'
-$env:E2E_WORDPRESS_URL = 'http://localhost:8086'
+$env:E2E_API_GATEWAY_URL = 'http://127.0.0.1:8000'
+$env:E2E_MANAGEMENT_URL = 'http://127.0.0.1:8004'
+$env:E2E_CLIENT_GATEWAY_URL = 'http://127.0.0.1:8005'
+$env:E2E_TILDA_ADAPTER_URL = 'http://127.0.0.1:8010'
+$env:E2E_WORDPRESS_URL = 'http://127.0.0.1:8086'
 $env:E2E_PROJECT_ID = 'e2e-project'
 $env:E2E_HMAC_SECRET = 'e2e-shared-secret'
 $env:E2E_INTERNAL_API_KEY = 'change-me-e2e'
+$env:RUN_E2E = '1'
+
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
+$venvPython = Join-Path $repoRoot '.venv\Scripts\python.exe'
+$pythonExe = if (Test-Path $venvPython) { $venvPython } else { 'python' }
 
 Write-Host 'Running extended E2E tests...'
-python -m pytest tests/e2e/test_extended_stack.py -q
+& $pythonExe -m pytest tests/e2e/test_extended_stack.py -q
 $testExitCode = $LASTEXITCODE
 
 if (-not $KeepStack) {

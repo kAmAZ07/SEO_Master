@@ -7,7 +7,8 @@ import pytest
 
 
 ADAPTER_DIR = Path(__file__).resolve().parents[2] / 'adapters' / 'tilda-adapter'
-sys.path.insert(0, str(ADAPTER_DIR))
+ADAPTER_PATH = str(ADAPTER_DIR)
+sys.path.insert(0, ADAPTER_PATH)
 
 fake_config = types.ModuleType('config')
 fake_config.settings = types.SimpleNamespace(
@@ -25,11 +26,17 @@ MODULE_PATH = ADAPTER_DIR / 'meta_injector.py'
 SPEC = importlib.util.spec_from_file_location('tilda_meta_injector', MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
-SPEC.loader.exec_module(MODULE)
-if previous_config is None:
-    sys.modules.pop('config', None)
-else:
-    sys.modules['config'] = previous_config
+try:
+    SPEC.loader.exec_module(MODULE)
+finally:
+    if previous_config is None:
+        sys.modules.pop('config', None)
+    else:
+        sys.modules['config'] = previous_config
+    try:
+        sys.path.remove(ADAPTER_PATH)
+    except ValueError:
+        pass
 TildaMetaInjector = MODULE.TildaMetaInjector
 
 

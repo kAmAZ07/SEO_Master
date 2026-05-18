@@ -291,6 +291,55 @@ def _load_tilda_credentials(db, project_id: str) -> Dict[str, Any]:
         raise
 
 
+def _normalize_tilda_mapping_key(value: Any) -> Optional[str]:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if "://" not in text:
+        return text
+
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(text)
+    except Exception:
+        return text
+
+    normalized_path = parsed.path.rstrip("/") or "/"
+    return f"{parsed.scheme}://{parsed.netloc}{normalized_path}"
+
+
+def _resolve_tilda_page_id_from_credentials(
+    *,
+    credentials: Dict[str, Any],
+    entity_id: str,
+    metadata: Optional[Dict[str, Any]],
+) -> str:
+    metadata = metadata or {}
+    page_mappings = credentials.get("page_mappings") or {}
+
+    for key in ("page_id", "tilda_page_id", "external_page_id", "pageId"):
+        candidate = metadata.get(key)
+        if candidate:
+            return str(candidate)
+
+    if entity_id in page_mappings:
+        return str(page_mappings[entity_id])
+
+    canonical_url = _normalize_tilda_mapping_key(metadata.get("url") or entity_id)
+    if canonical_url and canonical_url in page_mappings:
+        return str(page_mappings[canonical_url])
+
+    if entity_id and "://" not in str(entity_id):
+        return str(entity_id)
+
+    raise ValueError(
+        "Tilda page mapping is missing for this entity. Provide page_id metadata or register a page mapping first."
+    )
+
+
 async def dispatch_change(
     *,
     db,
@@ -328,11 +377,10 @@ async def dispatch_change(
 
     if platform == "tilda":
         tilda_credentials = _load_tilda_credentials(db, project_id)
-        page_id = integrations_service.resolve_tilda_page_id(
-            db,
-            project_id,
-            entity_id,
-            enriched_metadata,
+        page_id = _resolve_tilda_page_id_from_credentials(
+            credentials=tilda_credentials,
+            entity_id=entity_id,
+            metadata=enriched_metadata,
         )
         result = await _dispatch_to_tilda(
             change_type=normalized_change_type,

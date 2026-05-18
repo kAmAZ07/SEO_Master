@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY config/ ./config/
 COPY database/ ./database/
+COPY adapters/wordpress-plugin/dist/ ./adapters/wordpress-plugin/dist/
 COPY services/api_gateway/ ./services/api_gateway/
 COPY services/project_integrations/ ./services/project_integrations/
 

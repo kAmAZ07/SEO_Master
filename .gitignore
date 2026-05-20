@@ -7,6 +7,9 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+!adapters/wordpress-plugin/dist/
+!adapters/wordpress-plugin/dist/*.zip
+adapters/wordpress-plugin/dist/*/
 downloads/
 eggs/
 .eggs/

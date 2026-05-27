@@ -42,7 +42,7 @@ from services.project_integrations.models import ProjectIntegration
 
 DEMO_SEED_VERSION = "2026-05-defense"
 DEMO_NAMESPACE = uuid.UUID("0f16c9ac-9db8-49de-a1f4-59f7dcbb9fd0")
-DEMO_USER_EMAIL = "demo-defense@seo-master.local"
+DEMO_USER_EMAIL = "demo-defense@seo-master-demo.ru"
 DEMO_USER_PASSWORD = "DemoPass2026!"
 DEMO_USER_PASSWORD_HASH = "$pbkdf2-sha256$29000$ei8lpFQKAaDUWiultBYCIA$8KmwWsik.pUAvCJoBaMxEHVBQqwRj87FVTUq58XNnYQ"
 DEMO_USER_NAME = "Defense Demo User"

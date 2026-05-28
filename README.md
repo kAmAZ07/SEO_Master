@@ -16,7 +16,6 @@ SEO Master - веб-приложение для SEO-аудита, анализа
 - [Что находится в репозитории](#что-находится-в-репозитории)
 - [Архитектура](#архитектура)
 - [Проверки качества](#проверки-качества)
-- [Документация](#документация)
 
 ## Назначение проекта
 
@@ -211,18 +210,6 @@ HITL означает, что важные изменения не публик�
 - нагрузочный сценарий для Client API Gateway в [tests/load/client_api_gateway_k6.js](tests/load/client_api_gateway_k6.js).
 
 E2E-стенд позволяет показать работу WordPress/Tilda/HITL без подключения реального сайта. Это важно для безопасной демонстрации: проверяется контракт взаимодействия, но реальные страницы не изменяются.
-
-## Документация
-
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - архитектура и границы сервисов.
-- [docs/API.md](docs/API.md) - основные API-маршруты.
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) - развёртывание.
-- [docs/HITL_WORKFLOW.md](docs/HITL_WORKFLOW.md) - жизненный цикл HITL.
-- [docs/HMAC_CONTRACT.md](docs/HMAC_CONTRACT.md) - формат HMAC-подписи.
-- [docs/SECURITY.md](docs/SECURITY.md) - безопасность.
-- [docs/DEMO_SEED.md](docs/DEMO_SEED.md) - демонстрационные данные.
-- [tests/e2e/README.md](tests/e2e/README.md) - E2E-стенд.
-- [docs/sql/hitl_lifecycle_metrics.sql](docs/sql/hitl_lifecycle_metrics.sql) - SQL для анализа жизненного цикла HITL.
 
 ## Безопасность
 

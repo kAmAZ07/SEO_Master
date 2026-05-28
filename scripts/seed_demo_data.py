@@ -132,10 +132,14 @@ def build_password_hash(password: str) -> str:
 
 
 def upsert_demo_user(db, email: str, password: str) -> User:
+    user_id = stable_uuid("user")
     user = db.query(User).filter(User.email == email).first()
     if user is None:
+        user = db.query(User).filter(User.id == user_id).first()
+
+    if user is None:
         user = User(
-            id=stable_uuid("user"),
+            id=user_id,
             email=email,
             hashed_password=build_password_hash(password),
             full_name=DEMO_USER_NAME,
@@ -143,6 +147,7 @@ def upsert_demo_user(db, email: str, password: str) -> User:
             is_superuser=False,
         )
     else:
+        user.email = email
         user.full_name = DEMO_USER_NAME
         user.is_active = True
         user.hashed_password = build_password_hash(password)

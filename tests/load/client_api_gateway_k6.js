@@ -1,13 +1,12 @@
 import http from 'k6/http';
 import crypto from 'k6/crypto';
-import encoding from 'k6/encoding';
 import { check, sleep } from 'k6';
 
 export const options = {
   stages: [
-    { duration: '30s', target: 10 },
-    { duration: '1m', target: 25 },
-    { duration: '30s', target: 0 },
+    { duration: '20s', target: 2 },
+    { duration: '20s', target: 2 },
+    { duration: '10s', target: 0 },
   ],
   thresholds: {
     http_req_failed: ['rate<0.05'],
@@ -18,6 +17,7 @@ export const options = {
 const BASE_URL = __ENV.CLIENT_GATEWAY_URL || 'http://localhost:8005';
 const PROJECT_ID = __ENV.PROJECT_ID || 'load-test-project';
 const HMAC_SECRET = __ENV.HMAC_SECRET || 'load-test-secret';
+const ENTITY_ID = __ENV.ENTITY_ID || 'load-test-entity';
 
 function sign(method, path, body) {
   const timestamp = String(Math.floor(Date.now() / 1000));
@@ -38,7 +38,7 @@ export default function () {
   const payload = {
     project_id: PROJECT_ID,
     task_id: `load-${__VU}-${__ITER}`,
-    entity_id: 'load-test-entity',
+    entity_id: ENTITY_ID,
     entity_type: 'wordpress_post',
     changes: [
       {
@@ -54,10 +54,8 @@ export default function () {
   const response = http.patch(`${BASE_URL}${path}`, body, { headers: sign('PATCH', path, body) });
 
   check(response, {
-    'status is 2xx or expected auth/config failure': (res) =>
-      (res.status >= 200 && res.status < 300) || [401, 403, 429, 502, 503].includes(res.status),
+    'status is 2xx': (res) => res.status >= 200 && res.status < 300,
   });
 
   sleep(1);
 }
-

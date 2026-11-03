@@ -136,10 +136,13 @@ final class StoreFixture {
     public ScriptedSQL $sql;
     public SM_V2_WPDB_Store $store;
     public array $invalidated = [];
+    public array $cache_attempts = [];
     public bool $fail_cache = false;
-    public function __construct() {
-        $this->sql = new ScriptedSQL();
-        $this->store = new SM_V2_WPDB_Store($this->sql, function (int $entity_id): void {
+    public function __construct(?RollbackFaultSQL $faults = null) {
+        $this->sql = $faults === null ? new ScriptedSQL() : $faults->inner;
+        $this->store = new SM_V2_WPDB_Store($faults ?? $this->sql, function (int $entity_id): void {
+            require_condition(!$this->sql->in_transaction && $this->sql->calls[array_key_last($this->sql->calls)][0] === 'COMMIT', 'cache callback ran before COMMIT');
+            $this->cache_attempts[] = $entity_id;
             if ($this->fail_cache) { throw new RuntimeException('Injected post-commit cache failure'); }
             $this->invalidated[] = $entity_id;
         });
@@ -154,6 +157,171 @@ function require_store_error(callable $action, string $code): void {
         return;
     }
     throw new RuntimeException("Expected $code");
+}
+
+// Decorates the existing SQL fixture; even intercepted failing attempts remain visible in the trace.
+final class RollbackFaultSQL implements SM_V2_SQL {
+    public string $failure = '';
+    public bool $triggered = false;
+    public array $calls = [];
+    public function __construct(public ScriptedSQL $inner) {}
+    public function tables(): array { return $this->inner->tables(); }
+    public function character_set(): string { return $this->inner->character_set(); }
+    public function query(string $sql, array $identifiers = [], array $parameters = []): array|int {
+        $this->calls[] = [$sql, $identifiers, $parameters];
+        if (str_starts_with($sql, 'UPDATE %i SET receipt') &&
+            (($this->failure === 'guard_save' && substr($parameters[1], 14, 1) === '8') ||
+             ($this->failure === 'reverse_receipt_save' && $parameters[1] === RollbackStoreFixture::REVERSE))) {
+            $this->triggered = true;
+            throw new SM_V2_Error('storage_failure', 503);
+        }
+        if ($this->failure === 'restore_readback' && str_starts_with($sql, 'INSERT INTO %i (post_id') &&
+            $parameters[1] === '_seo_master_meta_title') {
+            $this->triggered = true;
+            $parameters[2] .= '#';
+        }
+        $result = $this->inner->query($sql, $identifiers, $parameters);
+        if ($sql === 'COMMIT' && $this->failure === 'lost_commit') {
+            $this->triggered = true;
+            throw new SM_V2_Error('storage_failure', 503);
+        }
+        return $result;
+    }
+}
+final class RollbackStoreFixture {
+    public const PROJECT = '11111111-1111-4111-8111-111111111111';
+    public const SITE = '22222222-2222-4222-8222-222222222222';
+    public const ORIGINAL = '33333333-3333-4333-8333-333333333333';
+    public const REVERSE = '77777777-7777-4777-8777-777777777777';
+    public const OTHER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    public StoreFixture $fixture;
+    public RollbackFaultSQL $faults;
+    public array $original;
+    public array $apply;
+    public array $reverse;
+    public array $identity;
+    public array $applied_rows;
+    private array $original_row;
+    private SM_V2_Service $service;
+    private string $secret;
+    private string $receipt_secret;
+    public function __construct(bool $no_op = false) {
+        $this->faults = new RollbackFaultSQL(new ScriptedSQL());
+        $this->fixture = new StoreFixture($this->faults);
+        $values = ['title' => $no_op ? 'Approved title' : '', 'description' => " legacy\tline\nCR\r😀\\" . str_repeat('L', 3000), 'jsonld' => str_repeat('L', 8192)];
+        $before = ['entity_id' => 7, 'post_type' => 'post', 'post_status' => 'publish', 'fields' => []];
+        foreach ($values as $field => $value) {
+            $before['fields'][$field] = ['state' => 'value', 'value' => $value];
+            $this->fixture->sql->meta_rows[] = [
+                'meta_id' => count($this->fixture->sql->meta_rows) + 1,
+                'meta_key' => '_seo_master_' . ($field === 'jsonld' ? 'schema_jsonld' : 'meta_' . $field), 'meta_value' => $value,
+            ];
+        }
+        $this->secret = bin2hex(random_bytes(32));
+        $this->receipt_secret = bin2hex(random_bytes(32));
+        $this->service = new SM_V2_Service(new SM_V2_Config(
+            self::PROJECT, self::SITE, 'fault-test-key', $this->secret, $this->receipt_secret, true,
+        ), $this->fixture->store, '0.3.0-dev');
+        $after = $before;
+        $changes = [];
+        $approved = $no_op ? ['title' => 'Approved title'] : ['title' => 'Approved title', 'description' => 'Approved description',
+            'jsonld' => '{"@context":"https://schema.org","@type":"Article","name":"Approved"}'];
+        foreach ($approved as $field => $value) {
+            $after['fields'][$field] = ['state' => 'value', 'value' => $value];
+            $changes[] = ['op' => 'set', 'field' => $field, 'value' => $value];
+        }
+        $command = [
+            'project_id' => self::PROJECT, 'site_id' => self::SITE, 'entity_id' => 7, 'operation_id' => self::ORIGINAL,
+            'task_id' => '44444444-4444-4444-8444-444444444444', 'proposal_version' => '55555555-5555-4555-8555-555555555555',
+            'approval_ref' => '66666666-6666-4666-8666-666666666666', 'before_digest' => sm_v2_digest($before),
+            'expected_after_digest' => sm_v2_digest($after), 'changes' => $changes,
+        ];
+        $command['proposal_hash'] = sm_v2_proposal_hash($command);
+        $this->apply = $command;
+        $this->original = $this->send($command, '/seo-master/v2/apply');
+        require_condition(sm_v2_canonical($this->original['before']) === sm_v2_canonical($before), 'original lost exact legacy before');
+        $this->original_row = $this->fixture->sql->operations[self::ORIGINAL];
+        $this->applied_rows = $this->fixture->sql->meta_rows;
+        $this->identity = sm_v2_guard_identity($this->original);
+        $this->reverse = [
+            'project_id' => self::PROJECT, 'site_id' => self::SITE, 'entity_id' => 7, 'operation_id' => self::REVERSE,
+            'task_id' => $command['task_id'], 'proposal_version' => $command['proposal_version'], 'approval_ref' => $command['approval_ref'],
+            'reason' => 'Mandatory actual-store fault regression', 'original_operation_id' => self::ORIGINAL,
+            'original_receipt_id' => $this->original['receipt_id'], 'original_request_hash' => $this->original['request_hash'],
+            'original_proposal_hash' => $this->original['proposal_hash'], 'before_digest' => $this->original['after_digest'],
+            'expected_after_digest' => $this->original['before_digest'],
+        ];
+        $this->reverse['proposal_hash'] = sm_v2_rollback_proposal_hash($this->reverse);
+        $this->fixture->invalidated = [];
+        $this->fixture->cache_attempts = [];
+    }
+    public function send(array $command, string $route = '/seo-master/v2/rollback'): array {
+        return $this->request('POST', $route, sm_v2_canonical($command), $command['operation_id'] ?? '-');
+    }
+    public function status(string $operation_id): array {
+        return $this->request('GET', '/seo-master/v2/operations/' . $operation_id, '', $operation_id);
+    }
+    private function request(string $method, string $route, string $body, string $operation_id): array {
+        $this->faults->calls = $this->fixture->sql->calls = [];
+        $headers = [
+            'x-seo-project-id' => self::PROJECT, 'x-seo-site-id' => self::SITE, 'x-seo-key-id' => 'fault-test-key',
+            'x-seo-timestamp' => '1793715600', 'x-seo-nonce' => bin2hex(random_bytes(16)), 'x-seo-operation-id' => $operation_id,
+        ];
+        $headers['x-seo-signature'] = hash_hmac('sha256', sm_v2_signing_message($method, $route, $body, $headers), $this->secret);
+        return $this->service->handle($method, $route, $body, $headers, 1793715600);
+    }
+    public function require_original(): void {
+        require_condition($this->fixture->sql->operations[self::ORIGINAL] === $this->original_row, 'original receipt was changed');
+        require_condition(!$this->fixture->sql->in_transaction, 'business transaction leaked');
+    }
+    public function require_restored(): void {
+        $actual = [];
+        foreach ($this->fixture->sql->meta_rows as $row) { $actual[$row['meta_key']] = $row['meta_value']; }
+        $fields = $this->original['before']['fields'];
+        require_condition(count($this->fixture->sql->meta_rows) === 3 && $actual === [
+            '_seo_master_meta_title' => $fields['title']['value'],
+            '_seo_master_meta_description' => $fields['description']['value'],
+            '_seo_master_schema_jsonld' => $fields['jsonld']['value'],
+        ], 'restore changed exact empty/control/Unicode/backslash/8192-byte legacy values');
+        require_condition(count($this->fixture->sql->operations) === 3, 'receipt or single-use guard missing');
+        foreach ($this->fixture->sql->operations as $row) { require_condition(is_string($row['receipt']), 'NULL reservation leaked'); }
+        $this->require_original();
+    }
+    public function restore_trace(): array {
+        return [
+            'START TRANSACTION', 'reserve:' . self::REVERSE, 'lock:' . self::REVERSE, 'read:' . self::ORIGINAL,
+            'reserve:' . $this->identity['guard_id'], 'lock:' . $this->identity['guard_id'], 'target', 'meta',
+            'delete:_seo_master_meta_title', 'insert:_seo_master_meta_title',
+            'delete:_seo_master_meta_description', 'insert:_seo_master_meta_description',
+            'delete:_seo_master_schema_jsonld', 'insert:_seo_master_schema_jsonld', 'target', 'meta',
+        ];
+    }
+    public function require_trace(array $expected): void {
+        $actual = [];
+        foreach ($this->faults->calls as [$sql, $identifiers, $parameters]) {
+            if (in_array($sql, ['START TRANSACTION', 'COMMIT', 'ROLLBACK'], true)) { $actual[] = $sql; }
+            foreach ([
+                'INSERT INTO %i (operation_id' => ['reserve:', 0], 'SELECT request_hash, receipt' => ['lock:', 0],
+                'SELECT receipt FROM' => ['read:', 0], 'UPDATE %i SET receipt' => ['save:', 1],
+                'DELETE FROM %i WHERE post_id' => ['delete:', 1], 'INSERT INTO %i (post_id' => ['insert:', 1],
+            ] as $prefix => [$label, $index]) {
+                if (str_starts_with($sql, $prefix)) { $actual[] = $label . $parameters[$index]; }
+            }
+            if (str_starts_with($sql, 'SELECT ID, post_type')) { $actual[] = 'target'; }
+            if (str_starts_with($sql, 'SELECT meta_id, meta_key')) { $actual[] = 'meta'; }
+            require_condition(!str_contains($sql, 'JSON_EXTRACT') && !preg_match('/\A(?:CREATE|ALTER)/', $sql), 'unbounded ledger scan or DDL');
+        }
+        require_condition($actual === $expected, 'actual-store lock/target/write/save/transaction call order changed');
+    }
+    public function resign_guard_reference(string $reference): void {
+        $row = &$this->fixture->sql->operations[$this->identity['guard_id']];
+        $guard = sm_v2_decode($row['receipt'], 131072);
+        $guard['references'][$reference] = $reference === 'entity_id' ? 8 :
+            (in_array($reference, ['original_receipt_id', 'original_request_hash'], true) ? str_repeat('e', 64) : 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee');
+        unset($guard['signature']);
+        $guard['signature'] = sm_v2_guard_signature($guard, $this->receipt_secret);
+        $row['receipt'] = sm_v2_canonical($guard);
+    }
 }
 $operation_id = '33333333-3333-4333-8333-333333333333';
 $request_hash = hash('sha256', 'non-secret-request');
@@ -415,6 +583,180 @@ $tests += [
         }
     },
 ];
+foreach (['guard_save' => 'storage_failure', 'reverse_receipt_save' => 'storage_failure',
+    'restore_readback' => 'storage_postcondition_failed'] as $failure => $code) {
+    $tests['rollback tail failure ' . $failure . ' is atomic and exact-body retry restores legacy before'] = function () use ($failure, $code): void {
+        $probe = new RollbackStoreFixture();
+        $rows = $probe->fixture->sql->meta_rows;
+        $operations = $probe->fixture->sql->operations;
+        $nonces = count($probe->fixture->sql->nonces);
+        $probe->faults->failure = $failure;
+        require_store_error(fn() => $probe->send($probe->reverse), $code);
+        require_condition($probe->faults->triggered, 'tail failure seam was not reached');
+        $trace = $probe->restore_trace();
+        if ($failure !== 'restore_readback') { $trace[] = 'save:' . RollbackStoreFixture::REVERSE; }
+        if ($failure === 'guard_save') { $trace[] = 'save:' . $probe->identity['guard_id']; }
+        $probe->require_trace([...$trace, 'ROLLBACK']);
+        require_condition($probe->fixture->sql->meta_rows === $rows && $probe->fixture->sql->operations === $operations &&
+            $probe->fixture->invalidated === [], 'tail failure retained fields/receipt/guard/reservation or invalidated cache');
+        require_condition(count($probe->fixture->sql->nonces) === $nonces + 1, 'failed authenticated attempt lost nonce claim');
+        $probe->require_original();
+        $probe->faults->failure = '';
+        $receipt = $probe->send($probe->reverse);
+        $probe->require_trace([...$probe->restore_trace(), 'save:' . RollbackStoreFixture::REVERSE, 'save:' . $probe->identity['guard_id'], 'COMMIT']);
+        require_condition(sm_v2_canonical($receipt['after']) === sm_v2_canonical($probe->original['before']) &&
+            $probe->fixture->invalidated === [7], 'retry lost legacy bytes or post-commit cache invalidation');
+        $probe->require_restored();
+    };
+}
+foreach (['lost_commit', 'cache_failure'] as $failure) {
+    $tests['rollback ' . $failure . ' recovers same signed receipt before target and rejects new id'] = function () use ($failure): void {
+        $probe = new RollbackStoreFixture();
+        $probe->faults->failure = $failure === 'lost_commit' ? $failure : '';
+        $probe->fixture->fail_cache = $failure === 'cache_failure';
+        require_store_error(fn() => $probe->send($probe->reverse), 'needs_reconciliation');
+        require_condition($failure !== 'lost_commit' || $probe->faults->triggered, 'post-commit fault was not reached');
+        $trace = [...$probe->restore_trace(), 'save:' . RollbackStoreFixture::REVERSE, 'save:' . $probe->identity['guard_id'], 'COMMIT'];
+        $probe->require_trace($failure === 'lost_commit' ? [...$trace, 'ROLLBACK'] : $trace);
+        $probe->require_restored();
+        $operations = $probe->fixture->sql->operations;
+        $durable = $operations[RollbackStoreFixture::REVERSE]['receipt'];
+        $probe->faults->failure = '';
+        $probe->fixture->fail_cache = false;
+        $probe->fixture->sql->meta_rows[0]['meta_value'] = 'later manual drift';
+        $drifted = $probe->fixture->sql->meta_rows;
+        $receipt = $probe->send($probe->reverse);
+        $probe->require_trace(['START TRANSACTION', 'reserve:' . RollbackStoreFixture::REVERSE, 'lock:' . RollbackStoreFixture::REVERSE, 'COMMIT']);
+        require_condition(sm_v2_canonical($receipt) === $durable && $receipt['operation_type'] === 'rollback' &&
+            $probe->fixture->sql->meta_rows === $drifted && $probe->fixture->sql->operations === $operations &&
+            $probe->fixture->invalidated === [7], 'same-id recovery changed receipt, repeated restore or failed cache healing');
+        $probe->fixture->sql->meta_rows = $probe->applied_rows;
+        $other = $probe->reverse;
+        $other['operation_id'] = RollbackStoreFixture::OTHER;
+        require_store_error(fn() => $probe->send($other), 'rollback_already_consumed');
+        $probe->require_trace([
+            'START TRANSACTION', 'reserve:' . RollbackStoreFixture::OTHER, 'lock:' . RollbackStoreFixture::OTHER,
+            'read:' . RollbackStoreFixture::ORIGINAL, 'reserve:' . $probe->identity['guard_id'], 'lock:' . $probe->identity['guard_id'],
+            'read:' . RollbackStoreFixture::REVERSE, 'ROLLBACK',
+        ]);
+        require_condition($probe->fixture->sql->meta_rows === $probe->applied_rows &&
+            $probe->fixture->sql->operations === $operations && $probe->fixture->invalidated === [7], 'consumed guard reached target or leaked new reservation');
+        $probe->require_original();
+    };
+}
+foreach (['project_id', 'site_id', 'entity_id', 'original_operation_id', 'original_receipt_id', 'original_request_hash'] as $reference) {
+    $tests['correctly signed guard with mismatched ' . $reference . ' reconciles before target'] = function () use ($reference): void {
+        $probe = new RollbackStoreFixture();
+        $probe->send($probe->reverse);
+        $probe->require_restored();
+        $probe->resign_guard_reference($reference);
+        $operations = $probe->fixture->sql->operations;
+        $rows = $probe->fixture->sql->meta_rows;
+        $other = $probe->reverse;
+        $other['operation_id'] = RollbackStoreFixture::OTHER;
+        require_store_error(fn() => $probe->send($other), 'needs_reconciliation');
+        $probe->require_trace([
+            'START TRANSACTION', 'reserve:' . RollbackStoreFixture::OTHER, 'lock:' . RollbackStoreFixture::OTHER,
+            'read:' . RollbackStoreFixture::ORIGINAL, 'reserve:' . $probe->identity['guard_id'], 'lock:' . $probe->identity['guard_id'], 'ROLLBACK',
+        ]);
+        require_condition($probe->fixture->sql->operations === $operations && $probe->fixture->sql->meta_rows === $rows &&
+            $probe->fixture->invalidated === [7], 'signed identity mismatch changed ledger/fields/cache or leaked reservation');
+        $probe->require_original();
+    };
+}
+$tests['cache scheduling is transaction-only bounded deduplicated and rollback-safe'] = function (): void {
+    $fixture = new StoreFixture();
+    require_store_error(fn() => $fixture->store->schedule_cache_invalidation(7), 'needs_reconciliation');
+    require_condition($fixture->sql->calls === [], 'outside-transaction scheduling reached SQL');
+    $fixture->store->begin();
+    $calls = $fixture->sql->calls;
+    foreach ([0, -1, 2147483648] as $entity_id) {
+        require_store_error(fn() => $fixture->store->schedule_cache_invalidation($entity_id), 'invalid_schema');
+    }
+    $fixture->store->schedule_cache_invalidation(7);
+    $fixture->store->schedule_cache_invalidation(7);
+    require_condition($fixture->sql->calls === $calls && $fixture->cache_attempts === [], 'scheduling performed target SQL or callback before commit');
+    $fixture->store->rollback();
+    $fixture->store->begin();
+    $fixture->store->commit();
+    require_condition($fixture->cache_attempts === [], 'rollback retained scheduled callback');
+    $fixture->store->begin();
+    $fixture->store->schedule_cache_invalidation(7);
+    $fixture->store->schedule_cache_invalidation(7);
+    $fixture->store->schedule_cache_invalidation(2147483647);
+    $fixture->store->commit();
+    require_condition($fixture->invalidated === [7, 2147483647] && $fixture->sql->meta_rows === [] &&
+        $fixture->sql->operations === [], 'deduplication or scheduling-only semantics changed');
+};
+$tests['scheduled cache callbacks wait for confirmed COMMIT and resume after exception'] = function (): void {
+    $fixture = new StoreFixture();
+    $fixture->store->begin();
+    $fixture->store->schedule_cache_invalidation(7);
+    $fixture->sql->fail_commit = true;
+    require_store_error(fn() => $fixture->store->commit(), 'needs_reconciliation');
+    require_condition($fixture->cache_attempts === [], 'failed COMMIT invoked cache callback');
+    $fixture->store->rollback();
+    $fixture->sql->fail_commit = false;
+    $fixture->store->begin();
+    $fixture->store->commit();
+    require_condition($fixture->cache_attempts === [], 'failed transaction leaked scheduled cache callback');
+    $fixture->store->begin();
+    $fixture->store->schedule_cache_invalidation(7);
+    $fixture->fail_cache = true;
+    require_store_error(fn() => $fixture->store->commit(), 'needs_reconciliation');
+    $fixture->store->rollback();
+    $fixture->fail_cache = false;
+    $fixture->store->begin();
+    $fixture->store->schedule_cache_invalidation(7);
+    $fixture->store->commit();
+    require_condition($fixture->cache_attempts === [7, 7] && $fixture->invalidated === [7], 'cache exception was hidden or explicit retry did not resume');
+};
+foreach (['status_apply', 'status_rollback', 'retry_apply', 'retry_rollback'] as $path) {
+    $tests['verified ' . $path . ' heals after repeated cache failures without target or ledger mutations'] = function () use ($path): void {
+        $probe = new RollbackStoreFixture();
+        $is_rollback = str_ends_with($path, 'rollback');
+        if ($is_rollback) { $probe->send($probe->reverse); }
+        $operation = $is_rollback ? RollbackStoreFixture::REVERSE : RollbackStoreFixture::ORIGINAL;
+        $recover = str_starts_with($path, 'status') ? fn() => $probe->status($operation) :
+            ($is_rollback ? fn() => $probe->send($probe->reverse) : fn() => $probe->send($probe->apply, '/seo-master/v2/apply'));
+        $operations = $probe->fixture->sql->operations;
+        $probe->fixture->sql->meta_rows[0]['meta_value'] = 'later manual drift';
+        $rows = $probe->fixture->sql->meta_rows;
+        $probe->fixture->cache_attempts = $probe->fixture->invalidated = [];
+        $probe->fixture->fail_cache = true;
+        for ($attempt = 1; $attempt <= 2; ++$attempt) {
+            require_store_error($recover, 'needs_reconciliation');
+            require_condition(count($probe->fixture->cache_attempts) === $attempt && $probe->fixture->invalidated === [],
+                'recovery did not resume post-commit callback or falsely reported cache success');
+        }
+        $probe->fixture->fail_cache = false;
+        $receipt = $recover();
+        $probe->require_trace(str_starts_with($path, 'status') ? ['START TRANSACTION', 'read:' . $operation, 'COMMIT'] :
+            ['START TRANSACTION', 'reserve:' . $operation, 'lock:' . $operation, 'COMMIT']);
+        require_condition($probe->fixture->cache_attempts === [7, 7, 7] && $probe->fixture->invalidated === [7] &&
+            sm_v2_canonical($receipt) === $operations[$operation]['receipt'] &&
+            $probe->fixture->sql->operations === $operations && $probe->fixture->sql->meta_rows === $rows,
+            'recovery changed receipt/ledger/fields or did not schedule current-entity cache invalidation');
+        $probe->require_original();
+    };
+}
+$tests['no-op apply and rollback recovery do not invalidate cache for unrelated changes'] = function (): void {
+    $probe = new RollbackStoreFixture(true);
+    require_condition($probe->original['outcome'] === 'no_op' && $probe->original['applied_fields'] === [], 'fixture apply is not no-op');
+    $receipt = $probe->send($probe->reverse);
+    require_condition($receipt['outcome'] === 'no_op' && $receipt['applied_fields'] === [], 'fixture rollback is not no-op');
+    $operations = $probe->fixture->sql->operations;
+    $probe->fixture->sql->meta_rows[0]['meta_value'] = 'unrelated later value';
+    $rows = $probe->fixture->sql->meta_rows;
+    $probe->fixture->fail_cache = true;
+    foreach ([
+        fn() => $probe->send($probe->apply, '/seo-master/v2/apply'), fn() => $probe->send($probe->reverse),
+        fn() => $probe->status(RollbackStoreFixture::ORIGINAL), fn() => $probe->status(RollbackStoreFixture::REVERSE),
+    ] as $recover) { require_condition($recover()['outcome'] === 'no_op', 'no-op recovery changed outcome'); }
+    require_condition($probe->fixture->cache_attempts === [] && $probe->fixture->sql->operations === $operations &&
+        $probe->fixture->sql->meta_rows === $rows, 'no-op recovery invalidated cache or restored unrelated later changes');
+    $probe->require_original();
+};
 $failures = [];
 foreach ($tests as $name => $test) {
     try { $test(); } catch (Throwable $error) { $failures[] = "$name: {$error->getMessage()}"; }

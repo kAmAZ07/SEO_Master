@@ -220,6 +220,12 @@ final class SM_V2_WPDB_Store implements SM_V2_Store {
         if (count($rows) !== 1 || $rows[0]['receipt'] === null) { throw new SM_V2_Error('needs_reconciliation', 503); }
         return $this->decode_receipt($rows[0]['receipt']);
     }
+    public function schedule_cache_invalidation(int $entity_id): void {
+        $this->require_transaction();
+        if ($entity_id < 1 || $entity_id > 2147483647) { throw new SM_V2_Error('invalid_schema', 400); }
+        // A verified recovery invalidates current cache only; it never restores historical receipt fields.
+        $this->changed_entities[$entity_id] = true;
+    }
     public function commit(): void {
         $this->require_transaction();
         try { $this->query('COMMIT'); }

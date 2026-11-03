@@ -33,6 +33,7 @@ ENV/
 .venv
 
 # Environment variables & secrets
+.seo-local/
 .env
 .env.*
 !.env.example

@@ -20,8 +20,16 @@ class BackendToolingTests(unittest.TestCase):
         management = backend.get_profile("management")
         client = backend.get_profile("client")
         self.assertNotEqual(management.runtime_input, client.runtime_input)
-        self.assertEqual(len(management.tests), 3)
-        self.assertEqual(len(client.tests), 1)
+        self.assertEqual(management.tests, (
+            "tests/unit/test_hitl_handler.py",
+            "tests/unit/test_orchestrator.py",
+            "tests/unit/test_prioritizer.py",
+            "tests/unit/test_management_model_imports.py",
+        ))
+        self.assertEqual(client.tests, (
+            "tests/unit/test_client_gateway_rollback.py",
+            "tests/unit/test_client_model_imports.py",
+        ))
         with self.assertRaises(ValueError):
             backend.get_profile("../management")
 

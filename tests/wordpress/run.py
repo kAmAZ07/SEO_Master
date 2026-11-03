@@ -88,7 +88,8 @@ def digest(value: str) -> str:
 
 def run_php(php: Path, root: Path, environment: dict[str, str], arguments: list[str], stdin: str | None = None) -> str:
     result = subprocess.run(
-        [str(php), "-n", *arguments], cwd=root, env=environment, input=stdin,
+        [str(php), "-n", "-d", "disable_functions=ctype_digit", *arguments],
+        cwd=root, env=environment, input=stdin,
         encoding="utf-8", capture_output=True, timeout=45, check=False,
     )
     if result.returncode != 0:

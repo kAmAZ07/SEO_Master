@@ -12,7 +12,10 @@ function sm_v2_convert_document($value) {
         $converted = [];
         foreach (get_object_vars($value) as $key => $entry) {
             // Protocol object names are fixed nonnumeric schema names. Do not silently collapse object keys into list indices.
-            if (!is_string($key) || ctype_digit($key)) { throw new SM_V2_Error('invalid_schema', 400); }
+            // Scan only the decoded key's bytes: exact ASCII, no optional ctype extension or locale dependence.
+            if (!is_string($key) || ($key !== '' && strspn($key, '0123456789', 0, strlen($key)) === strlen($key))) {
+                throw new SM_V2_Error('invalid_schema', 400);
+            }
             $converted[$key] = sm_v2_convert_document($entry);
         }
         return $converted;

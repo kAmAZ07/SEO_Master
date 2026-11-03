@@ -67,7 +67,6 @@ celerybeat.pid
 
 # Docker
 docker-compose.override.yml
-.dockerignore
 *.tar
 
 # IDE

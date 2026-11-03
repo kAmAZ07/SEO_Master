@@ -1,0 +1,85 @@
+# Арсений — @kAmAZ07, Александра — @sshpv.
+# Последнее совпавшее правило имеет приоритет.
+# Не перечисленные отдельно файлы обслуживает Арсений как владелец платформы.
+* @kAmAZ07
+
+# Александра: от URL до неизменяемой версии предложения.
+/services/api_gateway/ @sshpv
+/services/audit_service/ @sshpv
+/services/semantic_service/ @sshpv
+/services/project_integrations/ @sshpv
+/services/reporting_service/ @sshpv
+/services/event_resilience.py @sshpv
+/shared/netpolicy.py @sshpv
+/shared/projects/ @sshpv
+/database/ @sshpv
+/frontend/ @sshpv
+/contracts/netpolicy.md @sshpv
+/contracts/public_audit.md @sshpv
+/contracts/projects.md @sshpv
+/README.md @sshpv
+
+# Тесты зоны Александры. Новые unit-тесты получают владельца вместе с модулем.
+/tests/fixtures/ @sshpv
+/tests/unit/test_api_gateway_auth.py @sshpv
+/tests/unit/test_api_gateway_error_headers.py @sshpv
+/tests/unit/test_api_gateway_protected_routes_layout.py @sshpv
+/tests/unit/test_audit_task_created_handler.py @sshpv
+/tests/unit/test_audit_top_findings.py @sshpv
+/tests/unit/test_csv_exporter.py @sshpv
+/tests/unit/test_cwv_analyzer.py @sshpv
+/tests/unit/test_eeat_analyzer.py @sshpv
+/tests/unit/test_ff_score_calculator.py @sshpv
+/tests/unit/test_meta_checker.py @sshpv
+/tests/unit/test_metrics_calculator.py @sshpv
+/tests/unit/test_netpolicy.py @sshpv
+/tests/unit/test_project_integrations_service.py @sshpv
+/tests/unit/test_public_audit_core.py @sshpv
+/tests/unit/test_public_audit_gateway.py @sshpv
+/tests/unit/test_public_audit_lifecycle.py @sshpv
+/tests/unit/test_public_audit_rate_limit.py @sshpv
+/tests/unit/test_public_crawler.py @sshpv
+/tests/unit/test_domain_verification.py @sshpv
+/tests/unit/test_domain_verification_network.py @sshpv
+/tests/unit/test_project_access.py @sshpv
+/tests/unit/test_project_core.py @sshpv
+/tests/unit/test_project_scope.py @sshpv
+/tests/unit/test_projects_gateway.py @sshpv
+/tests/unit/test_public_audit_claim_token.py @sshpv
+/tests/integration/test_migrations_postgres.py @sshpv
+
+# Арсений: согласование, CMS и платформа.
+/.github/ @kAmAZ07
+/.dockerignore @kAmAZ07
+/.env.example @kAmAZ07
+/Dockerfile @kAmAZ07
+/Makefile @kAmAZ07
+/docker-compose.yml @kAmAZ07
+/docker-compose.dev.yml @kAmAZ07
+/docker-compose.prod.yml @kAmAZ07
+/scripts/ @kAmAZ07
+/config/ @kAmAZ07
+/docs/ @kAmAZ07
+/services/management_service/ @kAmAZ07
+/services/client_api_gateway/ @kAmAZ07
+/adapters/wordpress-plugin/ @kAmAZ07
+/adapters/tilda-adapter/ @kAmAZ07
+/tests/e2e/ @kAmAZ07
+/tests/platform/ @kAmAZ07
+
+# Исключения внутри каталогов Александры: ставить после общих правил.
+/database/migrations/env.py @kAmAZ07
+/services/api_gateway/routes/protected/hitl_routes.py @kAmAZ07
+/services/api_gateway/events/hitl_approved.py @kAmAZ07
+/services/api_gateway/Dockerfile @kAmAZ07
+/services/audit_service/Dockerfile @kAmAZ07
+/services/semantic_service/Dockerfile @kAmAZ07
+/services/reporting_service/Dockerfile @kAmAZ07
+/frontend/package-lock.json @kAmAZ07
+/frontend/src/pages/HITL.tsx @kAmAZ07
+/frontend/src/pages/HITL.test.tsx @kAmAZ07
+/frontend/src/store/slices/hitlSlice.ts @kAmAZ07
+/frontend/src/api/hitlAPI.ts @kAmAZ07
+/frontend/src/api/hitlAPI.test.ts @kAmAZ07
+/frontend/src/types/hitl.ts @kAmAZ07
+/frontend/src/components/hitl/ @kAmAZ07

@@ -29,7 +29,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=dependencies /usr/local/bin /usr/local/bin
 
-COPY . .
+COPY config/ ./config/
+COPY database/ ./database/
+COPY shared/ ./shared/
+COPY services/management_service/ ./services/management_service/
+COPY services/project_integrations/ ./services/project_integrations/
+COPY services/event_resilience.py ./services/event_resilience.py
 
 RUN groupadd -r appuser && useradd -r -g appuser appuser && \
     chown -R appuser:appuser /app

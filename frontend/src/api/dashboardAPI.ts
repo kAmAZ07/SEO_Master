@@ -1,11 +1,13 @@
 import api from './axiosConfig'
 import type { DashboardStats, Project } from '@/types/dashboard'
+import { clearAuditClaimToken, readAuditClaimToken } from './auditClaim'
 
 export interface CreateProjectPayload {
   name: string
   url: string
   description?: string
   sourceAuditId?: string
+  claimToken?: string
 }
 
 export const fetchProjects = async (): Promise<Project[]> => {
@@ -24,7 +26,11 @@ export const fetchProjectDetails = async (projectId: string): Promise<Project> =
 }
 
 export const createProject = async (payload: CreateProjectPayload): Promise<Project> => {
-  const response = await api.post('/projects', payload)
+  const claimToken = payload.claimToken ?? (payload.sourceAuditId ? readAuditClaimToken(payload.sourceAuditId) : undefined)
+  const response = await api.post('/projects', claimToken ? { ...payload, claimToken } : payload)
+  if (payload.sourceAuditId) {
+    clearAuditClaimToken(payload.sourceAuditId)
+  }
   return response.data
 }
 

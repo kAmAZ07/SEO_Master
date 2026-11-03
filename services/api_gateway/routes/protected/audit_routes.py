@@ -13,6 +13,11 @@ from services.api_gateway.auth import (
     get_current_user,
 )
 from services.api_gateway.config import settings
+from services.api_gateway.projects.errors import UrlOutOfScope
+from services.api_gateway.projects.http import handle_project_errors
+from services.api_gateway.projects.network import make_fetch
+from services.api_gateway.projects.verification import DomainVerificationService, VerificationConfig, scope_of
+from shared.projects.roles import Permission
 
 from services.api_gateway.routes.protected.common import (
     _collect_recent_audits,
@@ -76,13 +81,19 @@ def _audit_status_response(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @router.post("/audit/full")
+@handle_project_errors
 async def start_project_audit(
     request: StartProjectAuditRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project = _get_owned_project(request.projectId, current_user, db)
+    project = _get_owned_project(request.projectId, current_user, db, permission=Permission.MANAGE)
     root_url = request.url or project.url
+    # Полный обход допустим только внутри области проекта и после подтверждения прав на неё (ТЗ §5.2, AC-03).
+    if not scope_of(project).contains(root_url):
+        raise UrlOutOfScope("url is outside the project scope")
+    if settings.DOMAIN_VERIFICATION_ENFORCED:
+        DomainVerificationService(db, make_fetch(), VerificationConfig.from_settings(settings)).require_fresh(project)
     payload = {
         "project_id": str(project.id),
         "root_url": root_url,

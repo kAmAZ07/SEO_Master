@@ -8,6 +8,10 @@ from config.database_config import get_db
 from config.logging_config import get_logger
 from database.models import Project, User
 from services.api_gateway.auth import get_current_user
+from services.api_gateway.projects import access
+from services.api_gateway.projects.errors import ProjectError
+from services.api_gateway.projects.http import to_http_exception
+from shared.projects.roles import Permission
 from services.project_integrations import (
     IntegrationNotFoundError,
     IntegrationValidationError,
@@ -106,15 +110,12 @@ class IntegrationsListResponse(BaseModel):
 service = IntegrationsService()
 
 
-def _get_owned_project(db: Session, project_id: str, user_id: str) -> Project:
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id, Project.owner_id == user_id)
-        .first()
-    )
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    return project
+def _get_owned_project(db: Session, project_id: str, user_id: str, permission: Permission = Permission.MANAGE) -> Project:
+    """Проект из workspace пользователя. Подключение и смена интеграций требуют права MANAGE."""
+    try:
+        return access.resolve_project(db, user_id, project_id, permission)
+    except ProjectError as exc:
+        raise to_http_exception(exc, not_found_detail="Project not found" if exc.http_status == 404 else None) from exc
 
 
 def _map_integration_error(exc: Exception) -> HTTPException:
@@ -132,7 +133,7 @@ async def list_project_integrations(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> IntegrationsListResponse:
-    _get_owned_project(db, project_id, str(current_user.id))
+    _get_owned_project(db, project_id, str(current_user.id), Permission.READ)
     items = [IntegrationResponse(**item) for item in service.list_integrations(db, project_id)]
     return IntegrationsListResponse(project_id=project_id, items=items)
 

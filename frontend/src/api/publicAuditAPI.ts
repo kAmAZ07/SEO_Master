@@ -1,5 +1,6 @@
 import api from './axiosConfig'
 import axios from 'axios'
+import { storeAuditClaimToken } from './auditClaim'
 import type { AuditRequest, AuditStatus, AuditFinding, AuditIssueSummary, AuditSummary, AuditPage, AuditCriterion } from '@/types/audit'
 
 const asObject = (value: unknown): Record<string, unknown> =>
@@ -195,6 +196,7 @@ export const submitAuditRequest = async (request: AuditRequest): Promise<AuditSt
 
   const response = await api.post('/public/quick-audit', { url: request.url })
   const data = asObject(response.data)
+  storeAuditClaimToken(asString(data.uid || data.audit_id), asString(data.claim_token))
 
   return {
     uid: asString(data.uid || data.audit_id),

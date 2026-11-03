@@ -4,7 +4,7 @@ import json
 from typing import Optional, Dict, Any, List
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from pathlib import Path
 from functools import lru_cache
 
@@ -24,7 +24,7 @@ class SecretsManager:
                 raise ValueError("MASTER_ENCRYPTION_KEY must be set in production")
             master_key = "dev-master-key-change-in-production"
         
-        kdf = PBKDF2(
+        kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=b'seo-platform-salt',

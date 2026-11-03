@@ -36,6 +36,7 @@ from services.audit_service.public_policy import (
     public_options,
 )
 from services.audit_service.public_view import build_public_view, is_expired
+from shared.projects.claims import hash_claim_token, new_claim_token
 
 logger = get_logger(__name__)
 
@@ -146,6 +147,7 @@ async def _enqueue_audit(
     runner,
     audit_id: str | None = None,
     extra_options: dict | None = None,
+    claim_token_hash: str | None = None,
 ) -> AuditQueuedResponse:
     audit_id = audit_id or str(uuid.uuid4())
     row_options = payload.options.model_dump()
@@ -158,6 +160,8 @@ async def _enqueue_audit(
     row_kwargs = {}
     if row_cls is CrawlResult:
         row_kwargs["crawled_at"] = now
+    if claim_token_hash is not None and row_cls is PublicAuditResult:
+        row_kwargs["claim_token_hash"] = claim_token_hash
     async with get_session() as session:
         row = row_cls(
             audit_id=audit_id,
@@ -187,16 +191,16 @@ async def _enqueue_audit(
 
 @app.post("/audit/public", response_model=PublicAuditResponse)
 async def start_public_audit(payload: PublicAuditRequest) -> PublicAuditResponse:
-    return PublicAuditResponse(
-        **(
-            await _enqueue_audit(
-                payload=payload,
-                row_cls=PublicAuditResult,
-                mode="public",
-                runner=run_public_audit_pipeline,
-            )
-        ).model_dump()
+    # Токен показывается только в этом ответе; хранится его хэш (см. shared/projects/claims.py).
+    claim_token = new_claim_token()
+    queued = await _enqueue_audit(
+        payload=payload,
+        row_cls=PublicAuditResult,
+        mode="public",
+        runner=run_public_audit_pipeline,
+        claim_token_hash=hash_claim_token(claim_token),
     )
+    return PublicAuditResponse(**queued.model_dump(), claim_token=claim_token)
 
 
 @app.post("/audit/full", response_model=FullAuditResponse)

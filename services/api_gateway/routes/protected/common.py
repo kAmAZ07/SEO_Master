@@ -18,6 +18,11 @@ from database.models import (
     User,
 )
 from services.api_gateway.config import settings
+from services.api_gateway.projects import access
+from services.api_gateway.projects.errors import ProjectError
+from services.api_gateway.projects.http import to_http_exception
+from services.api_gateway.projects.verification import DomainVerificationService, VerificationConfig, VerificationState
+from shared.projects.roles import Permission
 
 logger = get_logger(__name__)
 
@@ -37,7 +42,8 @@ def _serialize_project(project: Project) -> Dict[str, Any]:
         "id": str(project.id),
         "name": project.name,
         "url": project.url,
-        "description": None,
+        "description": project.description,
+        "scope": {"origin": project.origin, "pathPrefix": project.path_prefix},
         "status": project.status,
         "createdAt": project.created_at.isoformat() if project.created_at else None,
         "updatedAt": project.updated_at.isoformat() if project.updated_at else None,
@@ -77,15 +83,17 @@ def _get_owned_project(
     db: Session,
     *,
     not_found_detail: str = "Project not found",
+    permission: Permission = Permission.READ,
 ) -> Project:
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
-    if not project:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=not_found_detail)
-    return project
+    """Проект, доступный пользователю через членство в workspace. Чужой проект — 404, как и несуществующий."""
+    try:
+        return access.resolve_project(db, str(current_user.id), project_id, permission)
+    except ProjectError as exc:
+        raise to_http_exception(exc, not_found_detail=not_found_detail) from exc
 
 
 def _get_owned_projects(current_user: User, db: Session) -> List[Project]:
-    return db.query(Project).filter(Project.owner_id == current_user.id).order_by(Project.created_at.desc()).all()
+    return access.list_projects(db, str(current_user.id))
 
 
 def _resolve_project_for_private_flow(
@@ -96,10 +104,10 @@ def _resolve_project_for_private_flow(
     if project_id:
         return _get_owned_project(project_id, current_user, db)
 
-    project = db.query(Project).filter(Project.owner_id == current_user.id).order_by(Project.created_at.desc()).first()
-    if not project:
+    projects = access.list_projects(db, str(current_user.id))
+    if not projects:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сначала создайте проект, чтобы использовать этот инструмент.")
-    return project
+    return projects[0]
 
 
 def _project_ids(projects: Iterable[Project]) -> List[str]:
@@ -225,12 +233,37 @@ def _latest_project_audit_at(db: Session, project_id: str) -> Optional[str]:
     return max(values).isoformat() if values else None
 
 
+async def _no_network(_url: str):
+    raise RuntimeError("the state summary must not use the network")
+
+
+def _serialize_verification(state: VerificationState) -> Dict[str, Any]:
+    return {
+        "state": state.state,
+        "method": "http_challenge",
+        "scope": {"origin": state.scope_origin, "pathPrefix": state.scope_path_prefix},
+        "freshDays": state.fresh_days,
+        "verifiedAt": _serialize_datetime(state.verified_at),
+        "freshUntil": _serialize_datetime(state.fresh_until),
+        "challengeExpiresAt": _serialize_datetime(state.challenge_expires_at),
+        "attempts": state.attempts,
+        "lastErrorCode": state.last_error_code,
+        "lastStatus": state.last_status,
+    }
+
+
+def _project_verification(project: Project, db: Session) -> Dict[str, Any]:
+    service = DomainVerificationService(db, _no_network, VerificationConfig.from_settings(settings))
+    return _serialize_verification(service.state(project))
+
+
 def _serialize_project_private(project: Project, db: Session) -> Dict[str, Any]:
     project_id = str(project.id)
     tracked_keywords = _load_tracked_keywords(db, [project_id])
     backlink_count = _count_project_backlinks(db, [project_id])
     return {
         **_serialize_project(project),
+        "verification": _project_verification(project, db),
         "ffScore": _serialize_ff_score(_latest_ff_score(db, project_id)),
         "lastAudit": _latest_project_audit_at(db, project_id),
         "stats": {

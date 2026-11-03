@@ -304,6 +304,8 @@ async def create_quick_audit(audit_request: QuickAuditRequest, request: Request)
             "audit_id": audit_uid,
             "status": "queued",
             "message": _STAGE_MESSAGES["queued"],
+            # Одноразовый токен присоединения аудита к проекту после регистрации (AL-4). Показывается один раз.
+            "claim_token": result.get("claim_token"),
             "status_url": f"/api/public/audit-status/{audit_uid}",
             "estimated_time_seconds": settings.PUBLIC_AUDIT_TIMEOUT_SECONDS,
             "expires_in_days": settings.PUBLIC_AUDIT_RETENTION_DAYS,

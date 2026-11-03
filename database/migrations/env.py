@@ -59,6 +59,9 @@ def create_partitions(connection):
     ]
 
     for parent_table, partition_configs in range_partitions:
+        # После отката до пустой БД родительской таблицы нет: партиции создавать не к чему.
+        if not connection.execute(text("SELECT to_regclass(:name) IS NOT NULL"), {"name": parent_table}).scalar():
+            continue
         for partition_name, start_date, end_date in partition_configs:
             check_sql = text(f"""
                 SELECT EXISTS (

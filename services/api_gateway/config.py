@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     PUBLIC_AUDIT_RETENTION_DAYS: int = Field(default=7, env="PUBLIC_AUDIT_RETENTION_DAYS")
     # Прокси, которым доверяется X-Forwarded-For / X-Real-IP (CIDR списком через запятую). Заголовки от других адресов игнорируются.
     PUBLIC_TRUSTED_PROXIES: str = Field(default="127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7", env="PUBLIC_TRUSTED_PROXIES")
+
+    # Подтверждение прав на сайт (ТЗ §5.2). Значения конфигурируемые; срок актуальности виден в API/UI.
+    DOMAIN_CHALLENGE_TTL_HOURS: int = Field(default=24, ge=1, le=168, env="DOMAIN_CHALLENGE_TTL_HOURS")
+    DOMAIN_VERIFICATION_FRESH_DAYS: int = Field(default=30, ge=1, le=365, env="DOMAIN_VERIFICATION_FRESH_DAYS")
+    DOMAIN_CHECK_MIN_INTERVAL_SECONDS: int = Field(default=5, ge=0, le=3600, env="DOMAIN_CHECK_MIN_INTERVAL_SECONDS")
+    DOMAIN_CHECK_MAX_ATTEMPTS: int = Field(default=20, ge=1, le=1000, env="DOMAIN_CHECK_MAX_ATTEMPTS")
+    # Полный обход и публикация требуют свежего подтверждения. Отключать только для локальной разработки.
+    DOMAIN_VERIFICATION_ENFORCED: bool = Field(default=True, env="DOMAIN_VERIFICATION_ENFORCED")
     
     AUDIT_SERVICE_URL: str = Field(default="http://localhost:8001", env="AUDIT_SERVICE_URL")
     MANAGEMENT_SERVICE_URL: str = Field(default="http://localhost:8004", env="MANAGEMENT_SERVICE_URL")

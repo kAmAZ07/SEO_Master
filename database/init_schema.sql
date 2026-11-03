@@ -15,22 +15,96 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+-- Рабочие пространства (AL-4). Личное пространство создаётся для каждого пользователя.
+CREATE TABLE IF NOT EXISTS audit_schema.workspaces (
+    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    name VARCHAR(255) NOT NULL,
+    kind VARCHAR(16) NOT NULL DEFAULT 'personal',
+    owner_id VARCHAR(36) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    CONSTRAINT ck_workspaces_kind CHECK (kind IN ('personal', 'team'))
+);
+
+CREATE UNIQUE INDEX uq_workspaces_one_personal_per_owner ON audit_schema.workspaces(owner_id) WHERE kind = 'personal';
+
+CREATE TABLE IF NOT EXISTS audit_schema.workspace_members (
+    workspace_id VARCHAR(36) NOT NULL REFERENCES audit_schema.workspaces(id) ON DELETE CASCADE,
+    user_id VARCHAR(36) NOT NULL,
+    role VARCHAR(16) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    PRIMARY KEY (workspace_id, user_id),
+    CONSTRAINT ck_workspace_members_role CHECK (role IN ('owner', 'admin', 'reviewer', 'deployer', 'viewer'))
+);
+
+CREATE INDEX idx_workspace_members_user_id ON audit_schema.workspace_members(user_id);
+
+-- Домен не является глобальной блокировкой: уникальна область (origin + path_prefix) внутри workspace.
 CREATE TABLE IF NOT EXISTS audit_schema.projects (
     id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
     name VARCHAR(255) NOT NULL,
-    url VARCHAR(2048) NOT NULL UNIQUE,
+    url VARCHAR(2048) NOT NULL,
+    description TEXT,
     status VARCHAR(50) DEFAULT 'active',
     owner_id VARCHAR(36) NOT NULL,
+    workspace_id VARCHAR(36) NOT NULL REFERENCES audit_schema.workspaces(id),
+    origin VARCHAR(2048),
+    path_prefix VARCHAR(1024),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_projects_workspace_scope UNIQUE (workspace_id, origin, path_prefix)
 );
 
 CREATE INDEX idx_projects_owner_id ON audit_schema.projects(owner_id);
 CREATE INDEX idx_projects_status ON audit_schema.projects(status);
 CREATE INDEX idx_projects_url ON audit_schema.projects(url);
+CREATE INDEX idx_projects_workspace_id ON audit_schema.projects(workspace_id);
 
 CREATE TRIGGER update_projects_updated_at BEFORE UPDATE ON audit_schema.projects
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TABLE IF NOT EXISTS audit_schema.domain_authorizations (
+    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    project_id VARCHAR(36) NOT NULL REFERENCES audit_schema.projects(id) ON DELETE CASCADE,
+    workspace_id VARCHAR(36) NOT NULL REFERENCES audit_schema.workspaces(id),
+    method VARCHAR(32) NOT NULL DEFAULT 'http_challenge',
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    scope_origin VARCHAR(2048) NOT NULL,
+    scope_path_prefix VARCHAR(1024) NOT NULL,
+    challenge_hash VARCHAR(64) NOT NULL,
+    subject_user_id VARCHAR(36) NOT NULL,
+    issued_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    verified_at TIMESTAMP WITH TIME ZONE,
+    revoked_at TIMESTAMP WITH TIME ZONE,
+    last_checked_at TIMESTAMP WITH TIME ZONE,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error_code VARCHAR(64),
+    evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    CONSTRAINT ck_domain_authorizations_method CHECK (method IN ('http_challenge')),
+    CONSTRAINT ck_domain_authorizations_status CHECK (status IN ('pending', 'verified', 'superseded', 'expired', 'failed', 'revoked'))
+);
+
+CREATE INDEX idx_domain_authorizations_project ON audit_schema.domain_authorizations(project_id);
+CREATE UNIQUE INDEX uq_domain_authorizations_open ON audit_schema.domain_authorizations(project_id, status)
+    WHERE status IN ('pending', 'verified');
+
+CREATE TABLE IF NOT EXISTS audit_schema.legacy_project_id_map (
+    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    source VARCHAR(64) NOT NULL,
+    legacy_id VARCHAR(64) NOT NULL,
+    project_id VARCHAR(36) REFERENCES audit_schema.projects(id) ON DELETE SET NULL,
+    status VARCHAR(16) NOT NULL,
+    reason VARCHAR(255) NOT NULL DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_legacy_project_id_map_source_id UNIQUE (source, legacy_id),
+    CONSTRAINT ck_legacy_project_id_map_status CHECK (status IN ('matched', 'unmatched', 'ambiguous'))
+);
+
+CREATE INDEX idx_legacy_project_id_map_project ON audit_schema.legacy_project_id_map(project_id);
 
 CREATE TABLE IF NOT EXISTS audit_schema.project_integrations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -210,6 +284,7 @@ CREATE TABLE IF NOT EXISTS audit_schema.public_audit_results (
     findings JSONB NOT NULL DEFAULT '[]'::jsonb,
     pages JSONB NOT NULL DEFAULT '[]'::jsonb,
     options JSONB NOT NULL DEFAULT '{}'::jsonb,
+    claim_token_hash VARCHAR(64),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
 );

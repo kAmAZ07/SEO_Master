@@ -1,6 +1,6 @@
 """partition crawl results by project
 
-Revision ID: 20260414_001_crawl_results_partitioning
+Revision ID: 20260414_001_crawl_partitions
 Revises: 001_initial_migration
 Create Date: 2026-04-14 00:00:00.000000
 
@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "20260414_001_crawl_results_partitioning"
+revision = "20260414_001_crawl_partitions"
 down_revision = "001_initial_migration"
 branch_labels = None
 depends_on = None

@@ -10,7 +10,7 @@ if (!is_string($secret) || strlen($secret) !== 64 || !is_string($receipt_secret)
     exit(1);
 }
 $vectors = json_decode(stream_get_contents(STDIN), true, 32, JSON_THROW_ON_ERROR);
-$results = ['signing' => [], 'snapshots' => [], 'changes' => [], 'documents' => []];
+$results = ['signing' => [], 'snapshots' => [], 'changes' => [], 'documents' => [], 'rollback' => []];
 foreach ($vectors['documents'] as $vector) {
     try {
         $document = sm_v2_decode($vector['body']);
@@ -29,6 +29,28 @@ foreach ($vectors['snapshots'] as $snapshot) {
     $results['snapshots'][] = [
         'canonical' => sm_v2_canonical($snapshot), 'digest' => sm_v2_digest($snapshot),
         'receipt_signature' => sm_v2_receipt_signature($snapshot, $receipt_secret),
+    ];
+}
+foreach ($vectors['rollback'] as $vector) {
+    $identity = sm_v2_guard_identity($vector['original']);
+    $command = $vector['command'];
+    $command['proposal_hash'] = sm_v2_rollback_proposal_hash($command);
+    $request_hash = hash('sha256', sm_v2_canonical($command));
+    $guard = [
+        'protocol' => 'seo-master/v2', 'kind' => 'rollback_guard', 'guard_id' => $identity['guard_id'],
+        'identity_digest' => $identity['identity_digest'], 'references' => $identity['references'],
+        'rollback_operation_id' => $command['operation_id'], 'rollback_request_hash' => $request_hash,
+        'rollback_receipt_id' => sm_v2_receipt_id($command['operation_id'], $request_hash),
+    ];
+    $variant = $vector['original'];
+    $variant['key_id'] = 'rotated-key';
+    $variant['signature'] = 'not-part-of-identity';
+    $variant['approval_ref'] = $command['approval_ref'];
+    if (sm_v2_guard_identity($variant) !== $identity) { throw new RuntimeException('Guard identity depends on unstable metadata'); }
+    $results['rollback'][] = [
+        'identity' => $identity, 'proposal_hash' => $command['proposal_hash'],
+        'guard_signature' => sm_v2_guard_signature($guard, $receipt_secret),
+        'receipt_signature' => sm_v2_receipt_signature($guard, $receipt_secret),
     ];
 }
 foreach ($vectors['changes'] as $vector) {

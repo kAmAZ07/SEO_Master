@@ -11,7 +11,14 @@ final class AdapterFixture {
     public static array $options = [];
     public static bool $is_admin = false;
     public static int $settings_nonces = 0;
+    public static array $cache_invalidations = [];
 }
+final class WP_REST_Response {
+    public array $headers = [];
+    public function __construct(public array $body, public int $status) {}
+    public function header(string $name, string $value): void { $this->headers[$name] = $value; }
+}
+function wp_cache_delete($key, $group): void { AdapterFixture::$cache_invalidations[] = [$key, $group]; }
 final class WP_Error {
     public function __construct(public string $code, public string $message = '', public array $details = []) {}
 }
@@ -51,13 +58,13 @@ assertion($bootstrap_output === '', 'bootstrap emitted output/BOM');
 seo_master_bootstrap();
 seo_master_register_routes();
 seo_master_register_settings();
-assertion(count(AdapterFixture::$routes) === 10, 'route collection incomplete');
+assertion(count(AdapterFixture::$routes) === 12, 'route collection incomplete');
 foreach (['meta', 'schema', 'interlinks'] as $route) {
     $definition = AdapterFixture::$routes['seo-master/v1/' . $route];
     $result = $definition['callback']();
     assertion($result instanceof WP_Error && $result->code === 'upgrade_required' && $result->details['status'] === 426, 'v1 mutation reopened');
 }
-foreach (['challenge', 'snapshot', 'dry-run', 'apply', 'operations/(?P<operation_id>[0-9a-f-]{36})'] as $route) {
+foreach (['challenge', 'snapshot', 'dry-run', 'apply', 'rollback', 'rollback/dry-run', 'operations/(?P<operation_id>[0-9a-f-]{36})'] as $route) {
     assertion(AdapterFixture::$routes['seo-master/v2/' . $route]['permission_callback'] === 'seo_master_v2_permission', 'sensitive route missing boundary permission');
 }
 $capabilities = seo_master_capabilities();
@@ -65,6 +72,9 @@ assertion(!$capabilities['paired'] && !$capabilities['apply_enabled'] && !$capab
 assertion(!isset($capabilities['project_id'], $capabilities['site_id']), 'public discovery exposes binding');
 assertion(in_array('h1', $capabilities['unsupported_manual'], true), 'H1 incorrectly advertised');
 assertion($capabilities['runtime_validation'] === 'pending_real_wordpress_innodb_matrix', 'stub evidence advertised as compatibility');
+assertion(($capabilities['rollback_enabled'] ?? null) === false && ($capabilities['rollback_model'] ?? null) === 'per_original_single_use_guard_v2', 'rollback capability untruthful');
+assertion(($capabilities['manual_target_aba_detection'] ?? null) === false, 'general target ABA detection incorrectly claimed');
+assertion(!in_array('rollback_endpoint', $capabilities['unsupported_manual'], true), 'implemented source endpoint still marked missing');
 assertion(!isset(AdapterFixture::$hooks['the_title']), 'unsafe H1 hook still registered');
 assertion(!isset(AdapterFixture::$hooks['wpseo_schema_graph'], AdapterFixture::$hooks['rank_math/json_ld']), 'third-party graph hook registered');
 assertion(seo_master_v2_permission(new RequestStub()) === true, 'valid boundary rejected');
@@ -86,6 +96,11 @@ $admin_html = ob_get_clean();
 assertion(AdapterFixture::$settings_nonces === 1 && str_contains($admin_html, 'seo_master_site_id'), 'admin form lacks Settings API nonce/site binding');
 assertion(seo_master_filter_h1_title('Original', 7) === 'Original', 'H1 output changed');
 assertion(seo_master_get_supported_wordpress_versions() === [], 'unverified Tested versions advertised');
+$rollback_receipt = ['kind' => 'receipt', 'operation_type' => 'rollback', 'entity_id' => 7];
+$response = seo_master_v2_response($rollback_receipt);
+assertion($response->body === $rollback_receipt && $response->status === 200 &&
+    $response->headers['Cache-Control'] === 'no-store, private', 'rollback response changed or cacheable');
+assertion(AdapterFixture::$cache_invalidations === [[7, 'post_meta']], 'rollback receipt/status cache healing absent');
 foreach ($failures as $failure) { fwrite(STDERR, "FAIL: $failure\n"); }
 printf("WP adapter boundaries: %d/%d passed (standalone stubs, not WP runtime)\n", $assertions - count($failures), $assertions);
 exit($failures === [] ? 0 : 1);

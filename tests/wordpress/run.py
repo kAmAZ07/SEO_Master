@@ -133,14 +133,50 @@ def check_vectors(php: Path, root: Path, environment: dict[str, str]) -> None:
         })
     expected_changes = [as_object(entry)["valid"] for entry in as_array(vectors["changes"])]
     expected_documents = [as_object(entry)["valid"] for entry in as_array(vectors["documents"])]
+    expected_rollbacks: list[JsonValue] = []
+    guard_key = hmac.new(receipt_secret.encode("ascii"), b"SEO-MASTER-ROLLBACK-GUARD-KEY-V2", hashlib.sha256).digest()
+    for entry in as_array(vectors["rollback"]):
+        vector = as_object(entry)
+        original = as_object(vector["original"])
+        references = {
+            "project_id": original["project_id"], "site_id": original["site_id"], "entity_id": original["entity_id"],
+            "original_operation_id": original["operation_id"], "original_receipt_id": original["receipt_id"],
+            "original_request_hash": original["request_hash"],
+        }
+        identity_digest = digest("SEO-MASTER-ROLLBACK-GUARD-IDENTITY-V2\n" + canonical(references))
+        uuid_bytes = bytearray.fromhex(identity_digest[:32])
+        uuid_bytes[6] = (uuid_bytes[6] & 15) | 128
+        uuid_bytes[8] = (uuid_bytes[8] & 63) | 128
+        uuid_hex = uuid_bytes.hex()
+        guard_id = f"{uuid_hex[:8]}-{uuid_hex[8:12]}-{uuid_hex[12:16]}-{uuid_hex[16:20]}-{uuid_hex[20:]}"
+        command = as_object(vector["command"])
+        proposal = {name: value for name, value in command.items() if name not in {"operation_id", "approval_ref", "proposal_hash"}}
+        proposal_hash = digest("SEO-MASTER-ROLLBACK-PROPOSAL-V2\n" + canonical(proposal))
+        command["proposal_hash"] = proposal_hash
+        request_hash = digest(canonical(command))
+        guard: dict[str, JsonValue] = {
+            "protocol": "seo-master/v2", "kind": "rollback_guard", "guard_id": guard_id,
+            "identity_digest": identity_digest, "references": references, "rollback_operation_id": command["operation_id"],
+            "rollback_request_hash": request_hash,
+            "rollback_receipt_id": digest("SEO-MASTER-RECEIPT-ID-V2\n" + as_string(command["operation_id"]) + "\n" + request_hash),
+        }
+        guard_signature = hmac.new(guard_key, ("SEO-MASTER-ROLLBACK-GUARD-V2\n" + canonical(guard)).encode("utf-8"), hashlib.sha256).hexdigest()
+        ordinary_signature = hmac.new(receipt_key, ("SEO-MASTER-RECEIPT-V2\n" + canonical(guard)).encode("utf-8"), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(guard_signature, ordinary_signature):
+            raise RuntimeError("Guard and receipt purposes must be separated")
+        expected_rollbacks.append({
+            "identity": {"guard_id": guard_id, "identity_digest": identity_digest, "references": references},
+            "proposal_hash": proposal_hash, "guard_signature": guard_signature, "receipt_signature": ordinary_signature,
+        })
     expected: dict[str, JsonValue] = {
         "signing": expected_signing, "snapshots": expected_snapshots, "changes": expected_changes, "documents": expected_documents,
+        "rollback": expected_rollbacks,
     }
     if actual != expected:
         raise RuntimeError("Python/PHP vector mismatch (secret material omitted)")
     if len({as_object(entry)["body_digest"] for entry in expected_signing}) != len(expected_signing):
         raise RuntimeError("Signing corpus must exercise distinct byte encodings")
-    print(f"Python/PHP vectors: {len(expected_signing)} signing + {len(expected_snapshots)} canonical/receipt + {len(expected_changes)} schema + {len(expected_documents)} raw-document passed")
+    print(f"Python/PHP vectors: {len(expected_signing)} signing + {len(expected_snapshots)} canonical/receipt + {len(expected_changes)} schema + {len(expected_documents)} raw-document + {len(expected_rollbacks)} rollback identity/purpose passed")
 
 
 def main() -> int:

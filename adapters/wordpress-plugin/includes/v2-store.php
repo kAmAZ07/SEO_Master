@@ -181,6 +181,19 @@ final class SM_V2_WPDB_Store implements SM_V2_Store {
                 else { sm_v2_text($value['value'], $field === 'title' ? 512 : 2000); }
             } else { throw new SM_V2_Error('invalid_schema', 400); }
         }
+        $this->persist_fields($entity_id, $fields);
+    }
+    public function restore_fields(int $entity_id, array $fields): void {
+        $this->require_transaction();
+        if (!isset($this->locked_entities[$entity_id])) { throw new SM_V2_Error('needs_reconciliation', 503); }
+        if (count($fields) < 1 || count($fields) > 3) { throw new SM_V2_Error('unsupported_snapshot', 422); }
+        foreach ($fields as $field => $state) {
+            if (!is_string($field) || !isset(self::META[$field])) { throw new SM_V2_Error('unsupported_snapshot', 422); }
+            sm_v2_restore_state($state);
+        }
+        $this->persist_fields($entity_id, $fields);
+    }
+    private function persist_fields(int $entity_id, array $fields): void {
         foreach ($fields as $field => $value) {
             $this->query('DELETE FROM %i WHERE post_id = ? AND BINARY meta_key = ?', [$this->tables['meta']], [$entity_id, self::META[$field]]);
             if ($value['state'] === 'value') {
@@ -214,7 +227,9 @@ final class SM_V2_WPDB_Store implements SM_V2_Store {
         $this->in_transaction = false;
         $this->locked_entities = [];
         // Invalidate only after commit; a crash here is a visibility/verification gate, not permission to replay with a new operation.
-        foreach (array_keys($this->changed_entities) as $entity_id) { ($this->invalidate_cache)($entity_id); }
+        try {
+            foreach (array_keys($this->changed_entities) as $entity_id) { ($this->invalidate_cache)($entity_id); }
+        } catch (Throwable $error) { throw new SM_V2_Error('needs_reconciliation', 503); }
         $this->changed_entities = [];
     }
     public function rollback(): void {

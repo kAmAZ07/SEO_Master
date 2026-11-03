@@ -4,6 +4,15 @@ if (!defined('ABSPATH')) { exit; }
 function seo_master_upgrade_required() {
     return new WP_Error('upgrade_required', 'Legacy mutations are disabled; a trusted v2 gateway is required.', array('status' => 426));
 }
+function seo_master_v2_response(array $result) {
+    if (($result['kind'] ?? null) === 'receipt' && isset($result['entity_id']) && is_int($result['entity_id'])) {
+        // Includes rollback/status recovery after committed writes with an interrupted response/cache invalidation.
+        wp_cache_delete($result['entity_id'], 'post_meta');
+    }
+    $response = new WP_REST_Response($result, 200);
+    $response->header('Cache-Control', 'no-store, private');
+    return $response;
+}
 function seo_master_handle_meta_patch($request) { return seo_master_upgrade_required(); }
 function seo_master_handle_schema_patch($request) { return seo_master_upgrade_required(); }
 function seo_master_handle_interlinks_patch($request) { return seo_master_upgrade_required(); }
@@ -19,7 +28,7 @@ function seo_master_register_routes() {
         register_rest_route('seo-master/v1', '/' . $route, array('methods' => 'PATCH', 'callback' => 'seo_master_upgrade_required', 'permission_callback' => '__return_true'));
     }
     register_rest_route('seo-master/v2', '/capabilities', array('methods' => 'GET', 'callback' => 'seo_master_capabilities', 'permission_callback' => '__return_true'));
-    foreach (array('challenge', 'snapshot', 'dry-run', 'apply') as $route) {
+    foreach (array('challenge', 'snapshot', 'dry-run', 'apply', 'rollback', 'rollback/dry-run') as $route) {
         register_rest_route('seo-master/v2', '/' . $route, array('methods' => 'POST', 'callback' => 'seo_master_v2_request', 'permission_callback' => 'seo_master_v2_permission'));
     }
     register_rest_route('seo-master/v2', '/operations/(?P<operation_id>[0-9a-f-]{36})', array(
@@ -63,10 +72,12 @@ function seo_master_capabilities() {
         'protocol' => 'seo-master/v2', 'plugin_version' => SEO_MASTER_CONNECTOR_VERSION, 'wordpress_version' => (string) $wp_version,
         'php_version' => PHP_VERSION, 'paired' => $paired, 'storage_ready' => $storage,
         'apply_enabled' => $paired && $storage && $gateway, 'hitl_authority' => 'trusted_gateway_required',
+        'rollback_enabled' => $paired && $storage && $gateway, 'rollback_model' => 'per_original_single_use_guard_v2',
+        'manual_target_aba_detection' => false,
         'targets' => array('published_unprotected_post', 'published_unprotected_page'),
         'managed_fields' => seo_master_has_supported_seo_plugin() ? array('title', 'description') : array('title', 'description', 'jsonld'),
         'operations' => array('set', 'remove'),
-        'unsupported_manual' => array('post_title', 'h1', 'content', 'html', 'internal_links', 'rollback_endpoint'),
+        'unsupported_manual' => array('post_title', 'h1', 'content', 'html', 'internal_links'),
         'storage_model' => 'innodb_atomic_meta_and_ledger_v2', 'snapshot_digest' => 'canonical_json_sha256_v2',
         'runtime_validation' => 'pending_real_wordpress_innodb_matrix',
         'yoast' => 'unverified_title_description_filters_jsonld_manual', 'rank_math' => 'unverified_title_description_filters_jsonld_manual',
@@ -93,13 +104,7 @@ function seo_master_v2_request($request) {
         }
         $service = new SM_V2_Service(seo_master_v2_config(), seo_master_v2_store(), SEO_MASTER_CONNECTOR_VERSION);
         $result = $service->handle($request->get_method(), $request->get_route(), $request->get_body(), $headers, time());
-        if (($result['kind'] ?? null) === 'receipt' && isset($result['entity_id']) && is_int($result['entity_id'])) {
-            // Also heals post-meta cache after a committed write whose response/cache invalidation was interrupted.
-            wp_cache_delete($result['entity_id'], 'post_meta');
-        }
-        $response = new WP_REST_Response($result, 200);
-        $response->header('Cache-Control', 'no-store, private');
-        return $response;
+        return seo_master_v2_response($result);
     } catch (SM_V2_Error $error) {
         return new WP_Error($error->error_code, 'SEO Master request rejected: ' . $error->error_code, array('status' => $error->http_status));
     } catch (Throwable $error) {

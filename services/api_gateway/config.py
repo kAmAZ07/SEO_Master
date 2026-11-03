@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = Field(default="HS256", env="JWT_ALGORITHM")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, env="ACCESS_TOKEN_EXPIRE_MINUTES")
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, env="REFRESH_TOKEN_EXPIRE_DAYS")
+    JWT_ISSUER: str = Field(default="seo-master-api-gateway", env="JWT_ISSUER")
+    JWT_AUDIENCE: str = Field(default="seo-master-clients", env="JWT_AUDIENCE")
     
     PUBLIC_RATE_LIMIT: int = Field(default=5, env="PUBLIC_RATE_LIMIT")
     PUBLIC_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=3600, env="PUBLIC_RATE_LIMIT_WINDOW_SECONDS")

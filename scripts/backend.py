@@ -31,9 +31,11 @@ PROFILES = (
         "tests/unit/test_hitl_handler.py",
         "tests/unit/test_orchestrator.py",
         "tests/unit/test_prioritizer.py",
+        "tests/unit/test_management_model_imports.py",
     )),
     Profile("client", "services/client_api_gateway/requirements.txt", (
         "tests/unit/test_client_gateway_rollback.py",
+        "tests/unit/test_client_model_imports.py",
     )),
     Profile("api", "services/api_gateway/requirements.txt", (
         "tests/unit/test_api_gateway_auth.py",

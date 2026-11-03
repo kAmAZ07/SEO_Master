@@ -17,7 +17,11 @@ from services.api_gateway.auth import (
     get_password_hash,
     validate_password,
     verify_password,
-    verify_refresh_token,
+    get_current_token_data,
+    revoke_all_sessions,
+    revoke_session,
+    rotate_refresh_token,
+    TokenData,
 )
 
 from services.api_gateway.routes.protected.common import (
@@ -116,12 +120,13 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
 
 @router.post("/auth/refresh")
 async def refresh_token(request: RefreshTokenRequest, db: Session = Depends(get_db)):
-    token_data = verify_refresh_token(request.refresh_token)
+    tokens, token_data = rotate_refresh_token(request.refresh_token)
     user = db.query(User).filter(User.id == token_data.user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user")
 
-    tokens = create_token_pair(user_id=str(user.id), email=user.email)
     return {"token": tokens.access_token, "refreshToken": tokens.refresh_token, "tokens": tokens.dict()}
 
 
@@ -166,9 +171,12 @@ async def change_password(
     current_user.hashed_password = get_password_hash(request.newPassword)
     db.add(current_user)
     db.commit()
-    return {"success": True}
+    # Все ранее выпущенные токены, включая текущий, перестают действовать: нужен повторный вход.
+    revoke_all_sessions(str(current_user.id))
+    return {"success": True, "reauth_required": True}
 
 
 @router.post("/auth/logout")
-async def logout(_: User = Depends(get_current_user)):
+async def logout(token_data: TokenData = Depends(get_current_token_data), _: User = Depends(get_current_user)):
+    revoke_session(token_data)
     return {"success": True}

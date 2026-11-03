@@ -1,0 +1,2 @@
+-r ../services/audit_service/requirements.txt
+-r pytest8.in

@@ -22,6 +22,8 @@
 
 Platform-тесты не импортируют приложения, не открывают рабочий `.env`, не запускают Docker и не обращаются к БД. Регрессии pytest-policy запускают дочерний pytest с искусственными тестами, поэтому стандартной библиотеки для полного platform-набора теперь недостаточно. Статические Docker-тесты проверяют правила конфигурации, а не фактический tar context/runtime образа.
 
+`test_workflow_yaml.py` обязательно разбирает все `.github/workflows/*.yml` через `yaml.safe_load` из закреплённого PyYAML 6.0.3; type stubs включены в tooling-lock и наследующие его management/client test-locks. Runtime requirements/locks и прежние package/hash blocks не меняются. Проверяются наличие jobs/steps и строковый тип команд `run`, отрицательный случай с двоеточием-пробелом и отказ от Python object tags. Две команды pip переведены в YAML block scalar без изменения shell-команды: прежнее plain `--only-binary=:all: -r ...` делало workflow синтаксически недействительным ещё до создания jobs. Реальный RED воспроизведён до исправления. Parser-тест не заменяет GitHub Actions schema validation, фактический CI run или security review deploy workflow.
+
 Frontend проверяется без изменения исходников:
 
     node frontend/node_modules/typescript/bin/tsc --noEmit -p frontend/tsconfig.json

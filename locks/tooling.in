@@ -3,3 +3,5 @@ pytest==7.4.4
 pytest-asyncio==0.23.8
 mypy==1.8.0
 ruff==0.1.15
+PyYAML==6.0.3
+types-PyYAML==6.0.12.20250516

@@ -1,12 +1,17 @@
 name: Deploy to Production
 
+# Деплой выключен, пока нет сервера: задание пропускается (skipped), а не падает.
+# Включить: Settings -> Secrets and variables -> Actions -> Variables -> DEPLOY_ENABLED=true
+# (и задать секреты SERVER_HOST, SERVER_SSH_KEY). Ручной запуск: вкладка Actions -> Run workflow.
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   deploy:
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH

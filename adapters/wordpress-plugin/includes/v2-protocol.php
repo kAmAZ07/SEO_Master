@@ -51,6 +51,9 @@ final class SM_V2_Config {
     public function sign_receipt(array $receipt): string {
         return sm_v2_receipt_signature($receipt, $this->receipt_secret);
     }
+    public function sign_guard(array $guard): string {
+        return sm_v2_guard_signature($guard, $this->receipt_secret);
+    }
 }
 
 function sm_v2_is_list(array $values): bool {
@@ -171,6 +174,32 @@ function sm_v2_jsonld($value): string {
     // Preserve approved JSON bytes; no hidden normalization after approval.
     return $json;
 }
+function sm_v2_rollback_proposal_hash(array $command): string {
+    unset($command['operation_id'], $command['approval_ref'], $command['proposal_hash']);
+    return hash('sha256', "SEO-MASTER-ROLLBACK-PROPOSAL-V2\n" . sm_v2_canonical($command));
+}
+function sm_v2_receipt_id(string $operation, string $request_hash): string {
+    return hash('sha256', "SEO-MASTER-RECEIPT-ID-V2\n" . $operation . "\n" . $request_hash);
+}
+function sm_v2_guard_signature(array $guard, string $secret): string {
+    $key = hash_hmac('sha256', 'SEO-MASTER-ROLLBACK-GUARD-KEY-V2', $secret, true);
+    return hash_hmac('sha256', "SEO-MASTER-ROLLBACK-GUARD-V2\n" . sm_v2_canonical($guard), $key);
+}
+function sm_v2_guard_identity(array $verified_original): array {
+    $references = [
+        'project_id' => $verified_original['project_id'], 'site_id' => $verified_original['site_id'],
+        'entity_id' => $verified_original['entity_id'], 'original_operation_id' => $verified_original['operation_id'],
+        'original_receipt_id' => $verified_original['receipt_id'], 'original_request_hash' => $verified_original['request_hash'],
+    ];
+    $digest = hash('sha256', "SEO-MASTER-ROLLBACK-GUARD-IDENTITY-V2\n" . sm_v2_canonical($references));
+    $uuid = substr($digest, 0, 32);
+    $uuid[12] = '8';
+    $uuid[16] = dechex((hexdec($uuid[16]) & 3) | 8);
+    return [
+        'guard_id' => substr($uuid, 0, 8) . '-' . substr($uuid, 8, 4) . '-' . substr($uuid, 12, 4) . '-' . substr($uuid, 16, 4) . '-' . substr($uuid, 20, 12),
+        'identity_digest' => $digest, 'references' => $references,
+    ];
+}
 function sm_v2_validate_changes($changes): array {
     if (!is_array($changes) || !sm_v2_is_list($changes) || count($changes) < 1 || count($changes) > 3) {
         throw new SM_V2_Error('invalid_schema', 400);
@@ -193,4 +222,92 @@ function sm_v2_validate_changes($changes): array {
         } else { throw new SM_V2_Error('invalid_schema', 400); }
     }
     return $fields;
+}
+
+// Only immutable, verified historical snapshots may use this path; ordinary set remains stricter.
+function sm_v2_restore_state($state): array {
+    try {
+        if (!is_array($state) || !isset($state['state'])) { throw new SM_V2_Error('invalid_schema', 400); }
+        if ($state['state'] === 'missing') { sm_v2_keys($state, ['state']); return $state; }
+        sm_v2_keys($state, ['state', 'value']);
+        $value = $state['value'];
+        if ($state['state'] !== 'value' || !is_string($value) || strlen($value) > 8192 ||
+            preg_match('//u', $value) !== 1 || preg_match('/[<>\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u', $value) === 1 ||
+            preg_match('/\A(?:N;|[aObisdCErR]:)/', trim($value)) === 1) { throw new SM_V2_Error('invalid_schema', 400); }
+        return $state;
+    } catch (SM_V2_Error $error) { throw new SM_V2_Error('unsupported_snapshot', 422); }
+}
+function sm_v2_validate_snapshot($snapshot, bool $must_restore = false): array {
+    if (!is_array($snapshot)) { throw new SM_V2_Error('invalid_schema', 400); }
+    sm_v2_keys($snapshot, ['entity_id', 'post_type', 'post_status', 'fields']);
+    if (!is_int($snapshot['entity_id']) || $snapshot['entity_id'] < 1 || $snapshot['entity_id'] > 2147483647 ||
+        !in_array($snapshot['post_type'], ['post', 'page'], true) || $snapshot['post_status'] !== 'publish' ||
+        !is_array($snapshot['fields'])) { throw new SM_V2_Error('invalid_schema', 400); }
+    sm_v2_keys($snapshot['fields'], ['title', 'description', 'jsonld']);
+    foreach ($snapshot['fields'] as $state) {
+        if ($must_restore) { sm_v2_restore_state($state); continue; }
+        if (!is_array($state) || !isset($state['state'])) { throw new SM_V2_Error('invalid_schema', 400); }
+        if ($state['state'] === 'missing') { sm_v2_keys($state, ['state']); continue; }
+        sm_v2_keys($state, ['state', 'value']);
+        if ($state['state'] !== 'value' || !is_string($state['value']) || strlen($state['value']) > 8192 ||
+            str_contains($state['value'], "\0") || preg_match('//u', $state['value']) !== 1) {
+            throw new SM_V2_Error('invalid_schema', 400);
+        }
+    }
+    return $snapshot;
+}
+function sm_v2_validate_receipt(array $receipt): void {
+    $rollback = ($receipt['operation_type'] ?? 'apply') === 'rollback';
+    $additional = $rollback ? ['operation_type', 'original_operation_id', 'original_receipt_id', 'original_request_hash', 'original_proposal_hash', 'reason'] : [];
+    sm_v2_keys($receipt, array_merge([
+        'protocol', 'kind', 'receipt_id', 'operation_id', 'project_id', 'site_id', 'entity_id', 'task_id',
+        'proposal_version', 'proposal_hash', 'approval_ref', 'request_hash', 'before_digest', 'after_digest',
+        'before', 'after', 'plugin_version', 'key_id', 'applied_at', 'applied_fields', 'outcome', 'warnings', 'signature',
+    ], $additional), $rollback ? [] : ['operation_type']);
+    if ($receipt['protocol'] !== 'seo-master/v2' || $receipt['kind'] !== 'receipt' ||
+        !in_array($receipt['operation_type'] ?? 'apply', ['apply', 'rollback'], true)) { throw new SM_V2_Error('invalid_schema', 400); }
+    foreach (['operation_id', 'project_id', 'site_id', 'task_id', 'proposal_version', 'approval_ref'] as $field) {
+        if (!sm_v2_uuid($receipt[$field])) { throw new SM_V2_Error('invalid_schema', 400); }
+    }
+    foreach (['receipt_id', 'proposal_hash', 'request_hash', 'before_digest', 'after_digest', 'signature'] as $field) {
+        if (!is_string($receipt[$field]) || preg_match('/\A[0-9a-f]{64}\z/D', $receipt[$field]) !== 1) { throw new SM_V2_Error('invalid_schema', 400); }
+    }
+    if (!is_int($receipt['entity_id']) || $receipt['entity_id'] < 1 || $receipt['entity_id'] > 2147483647 ||
+        !is_string($receipt['plugin_version']) || preg_match('/\A[A-Za-z0-9._-]{1,32}\z/D', $receipt['plugin_version']) !== 1 ||
+        !is_string($receipt['key_id']) || preg_match('/\A[A-Za-z0-9_-]{1,64}\z/D', $receipt['key_id']) !== 1 ||
+        !is_string($receipt['applied_at']) || preg_match('/\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\z/D', $receipt['applied_at']) !== 1 ||
+        strtotime($receipt['applied_at']) === false || gmdate('Y-m-d\TH:i:s\Z', strtotime($receipt['applied_at'])) !== $receipt['applied_at'] ||
+        !hash_equals(sm_v2_receipt_id($receipt['operation_id'], $receipt['request_hash']), $receipt['receipt_id'])) {
+        throw new SM_V2_Error('invalid_schema', 400);
+    }
+    $before = sm_v2_validate_snapshot($receipt['before']);
+    $after = sm_v2_validate_snapshot($receipt['after']);
+    if ($before['entity_id'] !== $receipt['entity_id'] || $after['entity_id'] !== $receipt['entity_id'] ||
+        $before['post_type'] !== $after['post_type'] ||
+        !hash_equals(sm_v2_digest($before), $receipt['before_digest']) || !hash_equals(sm_v2_digest($after), $receipt['after_digest']) ||
+        !is_array($receipt['applied_fields']) || !sm_v2_is_list($receipt['applied_fields']) ||
+        !is_array($receipt['warnings']) || !sm_v2_is_list($receipt['warnings']) || count($receipt['warnings']) > 16) {
+        throw new SM_V2_Error('invalid_schema', 400);
+    }
+    $changed = [];
+    foreach (['title', 'description', 'jsonld'] as $field) {
+        if ($before['fields'][$field] !== $after['fields'][$field]) { $changed[] = $field; }
+    }
+    foreach ($receipt['applied_fields'] as $field) {
+        if (!is_string($field) || !in_array($field, ['title', 'description', 'jsonld'], true)) { throw new SM_V2_Error('invalid_schema', 400); }
+    }
+    $applied = $receipt['applied_fields'];
+    sort($applied, SORT_STRING);
+    sort($changed, SORT_STRING);
+    if ($applied !== $changed || $receipt['outcome'] !== ($changed === [] ? 'no_op' : ($rollback ? 'rollback_applied_unverified' : 'applied_unverified'))) {
+        throw new SM_V2_Error('invalid_schema', 400);
+    }
+    foreach ($receipt['warnings'] as $warning) { sm_v2_text($warning, 128); }
+    if ($rollback) {
+        if (!sm_v2_uuid($receipt['original_operation_id']) || $receipt['original_operation_id'] === $receipt['operation_id']) { throw new SM_V2_Error('invalid_schema', 400); }
+        foreach (['original_receipt_id', 'original_request_hash', 'original_proposal_hash'] as $field) {
+            if (!is_string($receipt[$field]) || preg_match('/\A[0-9a-f]{64}\z/D', $receipt[$field]) !== 1) { throw new SM_V2_Error('invalid_schema', 400); }
+        }
+        sm_v2_text($receipt['reason'], 1024);
+    }
 }

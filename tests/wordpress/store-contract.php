@@ -136,9 +136,13 @@ final class StoreFixture {
     public ScriptedSQL $sql;
     public SM_V2_WPDB_Store $store;
     public array $invalidated = [];
+    public bool $fail_cache = false;
     public function __construct() {
         $this->sql = new ScriptedSQL();
-        $this->store = new SM_V2_WPDB_Store($this->sql, function (int $entity_id): void { $this->invalidated[] = $entity_id; });
+        $this->store = new SM_V2_WPDB_Store($this->sql, function (int $entity_id): void {
+            if ($this->fail_cache) { throw new RuntimeException('Injected post-commit cache failure'); }
+            $this->invalidated[] = $entity_id;
+        });
     }
 }
 function require_condition(bool $condition, string $message): void {
@@ -284,6 +288,131 @@ $tests = [
         $ddl = array_filter($fixture->sql->calls, static fn(array $call): bool => str_starts_with($call[0], 'CREATE TABLE'));
         require_condition(count($ddl) === 2, 'schema count mismatch');
         foreach ($ddl as [$sql]) { require_condition(str_contains($sql, 'ENGINE=InnoDB') && str_contains($sql, 'PRIMARY KEY'), 'non-durable schema'); }
+    },
+];
+$tests += [
+    'post-commit cache failure requires reconciliation and retains durable recovery' => function () use ($operation_id, $request_hash): void {
+        $fixture = new StoreFixture();
+        $fixture->store->begin();
+        $fixture->store->lock_operation($operation_id, $request_hash);
+        $fixture->store->snapshot(7);
+        $fixture->store->write_fields(7, ['title' => ['state' => 'value', 'value' => 'Committed']]);
+        $receipt = ['kind' => 'receipt', 'operation_id' => $operation_id];
+        $fixture->store->save_operation($operation_id, $request_hash, $receipt);
+        $fixture->fail_cache = true;
+        require_store_error(fn() => $fixture->store->commit(), 'needs_reconciliation');
+        $fixture->store->rollback();
+        require_condition(count($fixture->sql->meta_rows) === 1 && isset($fixture->sql->operations[$operation_id]), 'cache failure lost committed state');
+        $fixture->fail_cache = false;
+        $fixture->store->begin();
+        require_condition($fixture->store->read_operation($operation_id) === $receipt, 'post-commit receipt lost');
+        $fixture->store->commit();
+    },
+    'exact restore uses separate validators without weakening ordinary set' => function (): void {
+        $fixture = new StoreFixture();
+        require_store_error(fn() => $fixture->store->restore_fields(7, ['title' => ['state' => 'value', 'value' => '']]), 'needs_reconciliation');
+        $fixture->store->begin();
+        require_store_error(fn() => $fixture->store->restore_fields(7, ['title' => ['state' => 'missing']]), 'needs_reconciliation');
+        $fixture->store->snapshot(7);
+        $restored = [
+            'title' => ['state' => 'value', 'value' => ''],
+            'description' => ['state' => 'value', 'value' => str_repeat('L', 3000)],
+            'jsonld' => ['state' => 'value', 'value' => 'Legacy 😀 \\ raw string'],
+        ];
+        $fixture->store->restore_fields(7, $restored);
+        require_condition($fixture->store->snapshot(7)['fields'] === $restored, 'restore transformed bytes');
+        require_store_error(fn() => $fixture->store->write_fields(7, ['title' => ['state' => 'value', 'value' => '']]), 'invalid_schema');
+        require_store_error(fn() => $fixture->store->write_fields(7, ['description' => $restored['description']]), 'invalid_schema');
+        $fixture->store->rollback();
+        require_condition($fixture->sql->meta_rows === [], 'restore rollback retained fields');
+    },
+    'restore validates complete batch before first DELETE' => function (): void {
+        $fixture = new StoreFixture();
+        $fixture->store->begin();
+        $fixture->store->snapshot(7);
+        foreach ([
+            ['state' => 'value', 'value' => 'O:8:"Injected":0:{}'],
+            ['state' => 'value', 'value' => '<script>unsafe</script>'],
+            ['state' => 'value', 'value' => str_repeat('L', 8193)],
+            ['state' => 'value', 'value' => "bad\0value"],
+            ['state' => 'invented'],
+        ] as $invalid) {
+            $fixture->sql->calls = [];
+            require_store_error(fn() => $fixture->store->restore_fields(7, [
+                'title' => ['state' => 'value', 'value' => 'Valid first'], 'description' => $invalid,
+            ]), 'unsupported_snapshot');
+            require_condition($fixture->sql->calls === [] && $fixture->sql->meta_rows === [], 'unsafe restore reached SQL');
+        }
+        $fixture->store->rollback();
+    },
+    'service actual-store seam locks guard by PK and blocks new id after reversal' => function (): void {
+        $fixture = new StoreFixture();
+        $project = '11111111-1111-4111-8111-111111111111';
+        $site = '22222222-2222-4222-8222-222222222222';
+        $original_id = '33333333-3333-4333-8333-333333333333';
+        $reverse_id = '77777777-7777-4777-8777-777777777777';
+        $secret = bin2hex(random_bytes(32));
+        $service = new SM_V2_Service(new SM_V2_Config($project, $site, 'test-key', $secret, bin2hex(random_bytes(32)), true), $fixture->store, '0.3.0-dev');
+        $send = function (array $command, string $route) use ($service, $project, $site, $secret): array {
+            $body = sm_v2_canonical($command);
+            $headers = [
+                'x-seo-project-id' => $project, 'x-seo-site-id' => $site, 'x-seo-key-id' => 'test-key',
+                'x-seo-timestamp' => '1793715600', 'x-seo-nonce' => bin2hex(random_bytes(16)),
+                'x-seo-operation-id' => $command['operation_id'],
+            ];
+            $headers['x-seo-signature'] = hash_hmac('sha256', sm_v2_signing_message('POST', $route, $body, $headers), $secret);
+            return $service->handle('POST', $route, $body, $headers, 1793715600);
+        };
+        $before = ['entity_id' => 7, 'post_type' => 'post', 'post_status' => 'publish', 'fields' => [
+            'title' => ['state' => 'missing'], 'description' => ['state' => 'missing'], 'jsonld' => ['state' => 'missing'],
+        ]];
+        $after = $before;
+        $after['fields']['title'] = ['state' => 'value', 'value' => 'Native title'];
+        $command = [
+            'project_id' => $project, 'site_id' => $site, 'entity_id' => 7, 'operation_id' => $original_id,
+            'task_id' => '44444444-4444-4444-8444-444444444444', 'proposal_version' => '55555555-5555-4555-8555-555555555555',
+            'approval_ref' => '66666666-6666-4666-8666-666666666666', 'before_digest' => sm_v2_digest($before),
+            'expected_after_digest' => sm_v2_digest($after), 'changes' => [['op' => 'set', 'field' => 'title', 'value' => 'Native title']],
+        ];
+        $command['proposal_hash'] = sm_v2_proposal_hash($command);
+        $original = $send($command, '/seo-master/v2/apply');
+        $original_row = $fixture->sql->operations[$original_id];
+        $reverse = [
+            'project_id' => $project, 'site_id' => $site, 'entity_id' => 7, 'operation_id' => $reverse_id,
+            'task_id' => $command['task_id'], 'proposal_version' => $command['proposal_version'], 'approval_ref' => $command['approval_ref'],
+            'reason' => 'Native seam restore', 'original_operation_id' => $original_id, 'original_receipt_id' => $original['receipt_id'],
+            'original_request_hash' => $original['request_hash'], 'original_proposal_hash' => $original['proposal_hash'],
+            'before_digest' => $original['after_digest'], 'expected_after_digest' => $original['before_digest'],
+        ];
+        $proposal = $reverse;
+        unset($proposal['operation_id'], $proposal['approval_ref']);
+        $reverse['proposal_hash'] = hash('sha256', "SEO-MASTER-ROLLBACK-PROPOSAL-V2\n" . sm_v2_canonical($proposal));
+        $identity = sm_v2_guard_identity($original);
+        foreach ([null, '{"kind":"receipt"}', '{invalid json'] as $corrupt_guard) {
+            $fixture->sql->operations[$identity['guard_id']] = ['request_hash' => $identity['identity_digest'], 'receipt' => $corrupt_guard];
+            $fixture->sql->calls = [];
+            require_store_error(fn() => $send($reverse, '/seo-master/v2/rollback'), 'needs_reconciliation');
+            require_condition(!isset($fixture->sql->operations[$reverse_id]) && $fixture->sql->operations[$original_id] === $original_row, 'bad guard left new-op reservation or changed original');
+            foreach ($fixture->sql->calls as [$sql]) { require_condition(!str_starts_with($sql, 'DELETE FROM') && !str_starts_with($sql, 'SELECT ID, post_type'), 'bad guard reached target'); }
+            unset($fixture->sql->operations[$identity['guard_id']]);
+        }
+        $fixture->sql->calls = [];
+        $receipt = $send($reverse, '/seo-master/v2/rollback');
+        require_condition($receipt['outcome'] === 'rollback_applied_unverified' && $fixture->sql->meta_rows === [], 'actual-store inverse failed');
+        require_condition($fixture->sql->operations[$original_id] === $original_row && count($fixture->sql->operations) === 3, 'original changed or guard missing');
+        $locks = array_values(array_filter($fixture->sql->calls, static fn(array $call): bool =>
+            str_starts_with($call[0], 'INSERT INTO %i (operation_id') ||
+            str_starts_with($call[0], 'SELECT receipt FROM') || str_starts_with($call[0], 'SELECT ID, post_type')));
+        require_condition($locks[0][2][0] === $reverse_id && $locks[1][2][0] === $original_id &&
+            substr($locks[2][2][0], 14, 1) === '8' && $locks[3][2][0] === 7, 'lock order new/original/guard/target changed');
+        $fixture->sql->meta_rows = [['meta_id' => 1, 'meta_key' => '_seo_master_meta_title', 'meta_value' => 'Native title']];
+        $reverse['operation_id'] = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+        $fixture->sql->calls = [];
+        require_store_error(fn() => $send($reverse, '/seo-master/v2/rollback'), 'rollback_already_consumed');
+        require_condition(count($fixture->sql->operations) === 3 && count($fixture->sql->meta_rows) === 1, 'new-id reservation or mutation survived conflict');
+        foreach ($fixture->sql->calls as [$sql]) {
+            require_condition(!str_starts_with($sql, 'SELECT ID, post_type') && !str_starts_with($sql, 'DELETE FROM') && !str_contains($sql, 'JSON_EXTRACT'), 'guard lookup scanned ledger or reached target');
+        }
     },
 ];
 $failures = [];

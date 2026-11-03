@@ -9,6 +9,7 @@ interface SM_V2_Store {
     public function lock_operation(string $operation_id, string $request_hash): ?array;
     public function snapshot(int $entity_id): array;
     public function write_fields(int $entity_id, array $fields): void;
+    public function restore_fields(int $entity_id, array $fields): void;
     public function save_operation(string $operation_id, string $request_hash, array $receipt): void;
     public function read_operation(string $operation_id): ?array;
     public function commit(): void;
@@ -24,9 +25,10 @@ final class SM_V2_Service {
             $status_operation = $match[1];
         } elseif ($method !== 'POST' || !in_array($route, [
             '/seo-master/v2/challenge', '/seo-master/v2/snapshot', '/seo-master/v2/dry-run', '/seo-master/v2/apply',
+            '/seo-master/v2/rollback', '/seo-master/v2/rollback/dry-run',
         ], true)) { throw new SM_V2_Error('invalid_route', 400); }
         if (strlen($body) > 16384) { throw new SM_V2_Error('request_too_large', 413); }
-        $is_command = in_array($route, ['/seo-master/v2/dry-run', '/seo-master/v2/apply'], true);
+        $is_command = in_array($route, ['/seo-master/v2/dry-run', '/seo-master/v2/apply', '/seo-master/v2/rollback', '/seo-master/v2/rollback/dry-run'], true);
         $operation = $headers['x-seo-operation-id'] ?? '';
         $this->authenticate($method, $route, $body, $headers, $now, $is_command || $status_operation !== null);
         if ($status_operation !== null) {
@@ -65,6 +67,9 @@ final class SM_V2_Service {
                 return ['snapshot' => $snapshot, 'digest' => sm_v2_digest($snapshot)];
             });
         }
+        if (in_array($route, ['/seo-master/v2/rollback', '/seo-master/v2/rollback/dry-run'], true)) {
+            return $this->reverse($route, $payload, $operation, hash('sha256', $body), $now);
+        }
         sm_v2_keys($payload, [
             'project_id', 'site_id', 'entity_id', 'operation_id', 'task_id', 'proposal_version',
             'proposal_hash', 'approval_ref', 'before_digest', 'expected_after_digest', 'changes',
@@ -89,6 +94,7 @@ final class SM_V2_Service {
                 if ($existing !== null) { return $this->checked_receipt($existing, $payload['operation_id'], $request_hash); }
             }
             $before = $this->store->snapshot($payload['entity_id']);
+            sm_v2_validate_snapshot($before, true);
             if (!hash_equals(sm_v2_digest($before), $payload['before_digest'])) { throw new SM_V2_Error('precondition_conflict', 409); }
             $after = $before;
             foreach ($fields as $field => $value) { $after['fields'][$field] = $value; }
@@ -122,9 +128,137 @@ final class SM_V2_Service {
             ];
             $receipt['signature'] = $this->config->sign_receipt($receipt);
             $receipt = sm_v2_decode(sm_v2_canonical($receipt), 131072);
+            sm_v2_validate_receipt($receipt);
             $this->store->save_operation($payload['operation_id'], $request_hash, $receipt);
             return $receipt;
         });
+    }
+    private function reverse(string $route, array $payload, string $operation, string $request_hash, int $now): array {
+        sm_v2_keys($payload, [
+            'project_id', 'site_id', 'entity_id', 'operation_id', 'task_id', 'proposal_version', 'proposal_hash', 'approval_ref',
+            'reason', 'original_operation_id', 'original_receipt_id', 'original_request_hash', 'original_proposal_hash',
+            'before_digest', 'expected_after_digest',
+        ]);
+        foreach (['operation_id', 'task_id', 'proposal_version', 'approval_ref', 'original_operation_id'] as $field) {
+            if (!sm_v2_uuid($payload[$field])) { throw new SM_V2_Error('invalid_schema', 400); }
+        }
+        foreach (['proposal_hash', 'original_receipt_id', 'original_request_hash', 'original_proposal_hash', 'before_digest', 'expected_after_digest'] as $field) {
+            if (!is_string($payload[$field]) || preg_match('/\A[0-9a-f]{64}\z/D', $payload[$field]) !== 1) { throw new SM_V2_Error('invalid_schema', 400); }
+        }
+        sm_v2_text($payload['reason'], 1024);
+        if ($payload['operation_id'] === $payload['original_operation_id']) { throw new SM_V2_Error('invalid_schema', 400); }
+        if ($operation !== $payload['operation_id']) { throw new SM_V2_Error('scope_mismatch', 403); }
+        if (!hash_equals(sm_v2_rollback_proposal_hash($payload), $payload['proposal_hash'])) { throw new SM_V2_Error('proposal_hash_conflict', 409); }
+        $dry_run = $route === '/seo-master/v2/rollback/dry-run';
+        if (!$dry_run && !$this->config->can_publish()) { throw new SM_V2_Error('trusted_gateway_required', 503); }
+        return $this->transaction(function () use ($payload, $request_hash, $now, $dry_run): array {
+            if (!$dry_run) {
+                $existing = $this->store->lock_operation($payload['operation_id'], $request_hash);
+                if ($existing !== null) {
+                    $existing = $this->checked_receipt($existing, $payload['operation_id'], $request_hash);
+                    if (($existing['operation_type'] ?? null) !== 'rollback') { throw new SM_V2_Error('needs_reconciliation', 503); }
+                    return $existing;
+                }
+            }
+            $original = $this->store->read_operation($payload['original_operation_id']);
+            if ($original === null || ($original['project_id'] ?? null) !== $this->config->project() ||
+                ($original['site_id'] ?? null) !== $this->config->site() || ($original['entity_id'] ?? null) !== $payload['entity_id']) {
+                throw new SM_V2_Error('operation_not_found', 404);
+            }
+            $original = $this->checked_receipt($original, $payload['original_operation_id']);
+            if (($original['operation_type'] ?? 'apply') !== 'apply') { throw new SM_V2_Error('unsupported_original_operation', 422); }
+            foreach (['receipt_id', 'request_hash', 'proposal_hash'] as $field) {
+                if (!hash_equals($original[$field], $payload['original_' . $field])) { throw new SM_V2_Error('original_reference_conflict', 409); }
+            }
+            if (!hash_equals($original['after_digest'], $payload['before_digest']) ||
+                !hash_equals($original['before_digest'], $payload['expected_after_digest'])) { throw new SM_V2_Error('original_reference_conflict', 409); }
+            sm_v2_validate_snapshot($original['before'], true);
+            if (in_array('jsonld', $original['applied_fields'], true) && !$this->config->can_write_jsonld()) { throw new SM_V2_Error('unsupported_field', 422); }
+            $identity = sm_v2_guard_identity($original);
+            try {
+                $guard = $dry_run ? $this->store->read_operation($identity['guard_id']) :
+                    $this->store->lock_operation($identity['guard_id'], $identity['identity_digest']);
+            } catch (SM_V2_Error $error) {
+                if ($error->error_code === 'idempotency_conflict') { throw new SM_V2_Error('needs_reconciliation', 503); }
+                throw $error;
+            }
+            if ($guard !== null) {
+                $this->check_consumed_guard($guard, $identity, $original);
+                throw new SM_V2_Error('rollback_already_consumed', 409);
+            }
+            $before = $this->store->snapshot($payload['entity_id']);
+            if (!hash_equals(sm_v2_digest($before), $original['after_digest'])) { throw new SM_V2_Error('precondition_conflict', 409); }
+            $after = $original['before'];
+            if ($dry_run) {
+                return [
+                    'outcome' => 'ready', 'operation_type' => 'rollback', 'before' => $before, 'after' => $after,
+                    'before_digest' => sm_v2_digest($before), 'after_digest' => sm_v2_digest($after), 'proposal_hash' => $payload['proposal_hash'],
+                    'original_operation_id' => $original['operation_id'], 'original_receipt_id' => $original['receipt_id'],
+                    'warnings' => ['trusted_gateway_must_validate_hitl', 'public_html_not_verified'],
+                ];
+            }
+            $changed = [];
+            foreach (['title', 'description', 'jsonld'] as $field) {
+                if ($before['fields'][$field] !== $after['fields'][$field]) { $changed[$field] = $after['fields'][$field]; }
+            }
+            if ($changed !== []) { $this->store->restore_fields($payload['entity_id'], $changed); }
+            if (!hash_equals(sm_v2_digest($this->store->snapshot($payload['entity_id'])), $original['before_digest'])) {
+                throw new SM_V2_Error('storage_postcondition_failed', 503);
+            }
+            $receipt = [
+                'protocol' => 'seo-master/v2', 'kind' => 'receipt', 'operation_type' => 'rollback',
+                'receipt_id' => sm_v2_receipt_id($payload['operation_id'], $request_hash),
+                'operation_id' => $payload['operation_id'], 'project_id' => $payload['project_id'], 'site_id' => $payload['site_id'],
+                'entity_id' => $payload['entity_id'], 'task_id' => $payload['task_id'], 'proposal_version' => $payload['proposal_version'],
+                'proposal_hash' => $payload['proposal_hash'], 'approval_ref' => $payload['approval_ref'], 'request_hash' => $request_hash,
+                'before_digest' => sm_v2_digest($before), 'after_digest' => sm_v2_digest($after), 'before' => $before, 'after' => $after,
+                'original_operation_id' => $original['operation_id'], 'original_receipt_id' => $original['receipt_id'],
+                'original_request_hash' => $original['request_hash'], 'original_proposal_hash' => $original['proposal_hash'], 'reason' => $payload['reason'],
+                'plugin_version' => $this->plugin_version, 'key_id' => $this->config->key_id(), 'applied_at' => gmdate('Y-m-d\TH:i:s\Z', $now),
+                'applied_fields' => array_keys($changed), 'outcome' => $changed === [] ? 'no_op' : 'rollback_applied_unverified',
+                'warnings' => ['trusted_gateway_must_validate_hitl', 'public_html_not_verified'],
+            ];
+            $receipt['signature'] = $this->config->sign_receipt($receipt);
+            $receipt = sm_v2_decode(sm_v2_canonical($receipt), 131072);
+            sm_v2_validate_receipt($receipt);
+            $guard = [
+                'protocol' => 'seo-master/v2', 'kind' => 'rollback_guard', 'guard_id' => $identity['guard_id'],
+                'identity_digest' => $identity['identity_digest'], 'references' => $identity['references'],
+                'rollback_operation_id' => $receipt['operation_id'], 'rollback_receipt_id' => $receipt['receipt_id'],
+                'rollback_request_hash' => $request_hash,
+            ];
+            $guard['signature'] = $this->config->sign_guard($guard);
+            $this->store->save_operation($payload['operation_id'], $request_hash, $receipt);
+            $this->store->save_operation($identity['guard_id'], $identity['identity_digest'], $guard);
+            return $receipt;
+        });
+    }
+
+    private function check_consumed_guard(array $guard, array $identity, array $original): void {
+        try {
+            sm_v2_keys($guard, ['protocol', 'kind', 'guard_id', 'identity_digest', 'references', 'rollback_operation_id', 'rollback_receipt_id', 'rollback_request_hash', 'signature']);
+            $unsigned = $guard;
+            unset($unsigned['signature']);
+            if ($guard['protocol'] !== 'seo-master/v2' || $guard['kind'] !== 'rollback_guard' || $guard['guard_id'] !== $identity['guard_id'] ||
+                !is_string($guard['identity_digest']) || !hash_equals($identity['identity_digest'], $guard['identity_digest']) ||
+                !is_array($guard['references']) || sm_v2_canonical($guard['references']) !== sm_v2_canonical($identity['references']) ||
+                !sm_v2_uuid($guard['rollback_operation_id']) || !is_string($guard['rollback_request_hash']) ||
+                preg_match('/\A[0-9a-f]{64}\z/D', $guard['rollback_request_hash']) !== 1 ||
+                !is_string($guard['rollback_receipt_id']) || !hash_equals(sm_v2_receipt_id($guard['rollback_operation_id'], $guard['rollback_request_hash']), $guard['rollback_receipt_id']) ||
+                !is_string($guard['signature']) || !hash_equals($this->config->sign_guard($unsigned), $guard['signature'])) {
+                throw new SM_V2_Error('needs_reconciliation', 503);
+            }
+            // Bounded PRIMARY KEY lookup, never an unindexed JSON/full-ledger search.
+            $receipt = $this->store->read_operation($guard['rollback_operation_id']);
+            if ($receipt === null) { throw new SM_V2_Error('needs_reconciliation', 503); }
+            $receipt = $this->checked_receipt($receipt, $guard['rollback_operation_id'], $guard['rollback_request_hash']);
+            if (($receipt['operation_type'] ?? null) !== 'rollback' || $receipt['receipt_id'] !== $guard['rollback_receipt_id'] ||
+                $receipt['original_operation_id'] !== $original['operation_id'] || $receipt['original_receipt_id'] !== $original['receipt_id'] ||
+                $receipt['original_request_hash'] !== $original['request_hash'] || $receipt['original_proposal_hash'] !== $original['proposal_hash'] ||
+                $receipt['before_digest'] !== $original['after_digest'] || $receipt['after_digest'] !== $original['before_digest']) {
+                throw new SM_V2_Error('needs_reconciliation', 503);
+            }
+        } catch (SM_V2_Error $error) { throw new SM_V2_Error('needs_reconciliation', 503); }
     }
 
     private function authenticate(string $method, string $route, string $body, array $headers, int $now, bool $has_operation): void {
@@ -151,6 +285,8 @@ final class SM_V2_Service {
     }
 
     private function checked_receipt(array $receipt, string $operation_id, ?string $request_hash = null): array {
+        try { sm_v2_validate_receipt($receipt); }
+        catch (SM_V2_Error $error) { throw new SM_V2_Error('needs_reconciliation', 503); }
         $signature = $receipt['signature'] ?? null;
         $unsigned = $receipt;
         unset($unsigned['signature']);

@@ -21,6 +21,7 @@ final class MemoryStore implements SM_V2_Store {
     public function check_storage(): void {
         if ($this->fail_storage) { throw new SM_V2_Error('unsupported_storage', 503); }
     }
+    public function restore_fields(int $entity_id, array $fields): void { $this->write_fields($entity_id, $fields); }
     public function claim_nonce(string $key_id, string $nonce, int $expires): void {
         $key = $key_id . ':' . $nonce;
         if (isset($this->nonces[$key])) { throw new SM_V2_Error('replay', 409); }
@@ -28,6 +29,7 @@ final class MemoryStore implements SM_V2_Store {
     }
     public function begin(): void { $this->events[] = 'begin'; $this->backup = [$this->fields, $this->operations, $this->writes]; }
     public function lock_operation(string $operation_id, string $request_hash): ?array {
+        $this->events[] = 'lock:' . $operation_id;
         if (!isset($this->operations[$operation_id])) { return null; }
         if (!hash_equals($this->operations[$operation_id]['request_hash'], $request_hash)) {
             throw new SM_V2_Error('idempotency_conflict', 409);
@@ -35,10 +37,12 @@ final class MemoryStore implements SM_V2_Store {
         return $this->operations[$operation_id]['receipt'];
     }
     public function snapshot(int $entity_id): array {
+        $this->events[] = 'snapshot';
         if ($this->post_status !== 'publish') { throw new SM_V2_Error('target_not_found', 404); }
         return ['entity_id' => $entity_id, 'post_type' => 'post', 'post_status' => $this->post_status, 'fields' => $this->fields];
     }
     public function write_fields(int $entity_id, array $fields): void {
+        $this->events[] = 'write';
         foreach ($fields as $field => $value) {
             $this->fields[$field] = $value;
             ++$this->writes;
@@ -338,6 +342,249 @@ $tests = [
         $fixture->send($command);
         $fixture->store->operations[ContractFixture::OPERATION]['receipt']['entity_id'] = 99;
         expect_error(fn() => $fixture->send($command), 'needs_reconciliation');
+    },
+];
+function rollback_hash(array $command): string {
+    unset($command['operation_id'], $command['approval_ref'], $command['proposal_hash']);
+    return hash('sha256', "SEO-MASTER-ROLLBACK-PROPOSAL-V2\n" . sm_v2_canonical($command));
+}
+function rollback_command(array $original, string $operation = '77777777-7777-4777-8777-777777777777'): array {
+    $command = [
+        'project_id' => $original['project_id'], 'site_id' => $original['site_id'], 'entity_id' => $original['entity_id'],
+        'operation_id' => $operation, 'task_id' => '88888888-8888-4888-8888-888888888888',
+        'proposal_version' => '99999999-9999-4999-8999-999999999999', 'approval_ref' => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        'reason' => 'Одобренное восстановление точного before',
+        'original_operation_id' => $original['operation_id'], 'original_receipt_id' => $original['receipt_id'],
+        'original_request_hash' => $original['request_hash'], 'original_proposal_hash' => $original['proposal_hash'],
+        'before_digest' => $original['after_digest'], 'expected_after_digest' => $original['before_digest'],
+    ];
+    $command['proposal_hash'] = rollback_hash($command);
+    return $command;
+}
+function resign_original(ContractFixture $fixture): array {
+    $original = $fixture->store->operations[ContractFixture::OPERATION]['receipt'];
+    unset($original['signature']);
+    $original['signature'] = sm_v2_receipt_signature($original, $fixture->receipt_secret);
+    $fixture->store->operations[ContractFixture::OPERATION]['receipt'] = $original;
+    return $original;
+}
+function guard_id(ContractFixture $fixture): string {
+    $guards = array_filter($fixture->store->operations, fn(array $entry): bool => ($entry['receipt']['kind'] ?? null) === 'rollback_guard');
+    check(count($guards) === 1, 'exactly one durable guard required');
+    return array_key_first($guards);
+}
+$tests += [
+    'rollback restores missing empty Unicode and bounded legacy states exactly' => function (): void {
+        foreach ([['state' => 'missing'], ['state' => 'value', 'value' => ''], ['state' => 'value', 'value' => "😀 old \\\\ \"quote\""], ['state' => 'value', 'value' => str_repeat('L', 1024)]] as $state) {
+            $fixture = new ContractFixture();
+            $fixture->store->fields['title'] = $state;
+            $original = $fixture->send($fixture->command());
+            $immutable = $fixture->store->operations[ContractFixture::OPERATION];
+            $receipt = $fixture->send(rollback_command($original), '/seo-master/v2/rollback');
+            check($receipt['outcome'] === 'rollback_applied_unverified' && $receipt['operation_type'] === 'rollback', 'rollback mislabelled');
+            check(sm_v2_canonical($fixture->store->fields) === sm_v2_canonical($original['before']['fields']), 'inverse lost exact legacy state');
+            check($receipt['before'] === $original['after'] && $receipt['after'] === $original['before'], 'inverse snapshots incorrect');
+            check($receipt['original_receipt_id'] === $original['receipt_id'], 'receipt linkage absent');
+            check($fixture->store->operations[ContractFixture::OPERATION] === $immutable, 'original receipt changed');
+            $identifier = guard_id($fixture);
+            check(preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/D', $identifier) === 1 && !sm_v2_uuid($identifier), 'guard lacks reserved RFC UUIDv8 namespace');
+        }
+    },
+    'rollback dry-run writes neither fields operation nor guard' => function (): void {
+        $fixture = new ContractFixture();
+        $original = $fixture->send($fixture->command());
+        $operations = $fixture->store->operations;
+        $writes = $fixture->store->writes;
+        $result = $fixture->send(rollback_command($original), '/seo-master/v2/rollback/dry-run');
+        check($result['outcome'] === 'ready' && $result['after'] === $original['before'], 'rollback preview incorrect');
+        check($fixture->store->operations === $operations && $fixture->store->writes === $writes &&
+            sm_v2_canonical($fixture->store->fields) === sm_v2_canonical($original['after']['fields']), 'rollback dry-run mutated');
+    },
+    'same rollback id exact-body replay returns receipt before later drift CAS' => function (): void {
+        $fixture = new ContractFixture();
+        $original = $fixture->send($fixture->command());
+        $command = rollback_command($original);
+        $receipt = $fixture->send($command, '/seo-master/v2/rollback');
+        $fixture->store->fields['title'] = ['state' => 'value', 'value' => 'Later manual edit'];
+        $writes = $fixture->store->writes;
+        for ($index = 0; $index < 10; ++$index) { check($fixture->send($command, '/seo-master/v2/rollback') === $receipt, 'rollback retry changed receipt'); }
+        check($fixture->store->writes === $writes, 'rollback replay wrote');
+        $command['approval_ref'] = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+        expect_error(fn() => $fixture->send($command, '/seo-master/v2/rollback'), 'idempotency_conflict');
+    },
+    'durable single-use guard blocks new rollback id after return to original after' => function (): void {
+        $fixture = new ContractFixture();
+        $original = $fixture->send($fixture->command());
+        $fixture->send(rollback_command($original), '/seo-master/v2/rollback');
+        $fixture->store->fields = $original['after']['fields'];
+        $writes = $fixture->store->writes;
+        $fixture->store->events = [];
+        expect_error(fn() => $fixture->send(rollback_command($original, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'), '/seo-master/v2/rollback'), 'rollback_already_consumed');
+        check($fixture->store->writes === $writes && $fixture->store->fields === $original['after']['fields'], 'guard allowed second reversal');
+        check(!in_array('snapshot', $fixture->store->events, true) && !in_array('write', $fixture->store->events, true), 'consumed guard checked after target access');
+    },
+    'rollback whole-snapshot drift rejects before any field or guard persists' => function (): void {
+        $fixture = new ContractFixture();
+        $original = $fixture->send($fixture->command());
+        $fixture->store->fields['description'] = ['state' => 'value', 'value' => 'Manual change'];
+        $operations = $fixture->store->operations;
+        expect_error(fn() => $fixture->send(rollback_command($original), '/seo-master/v2/rollback'), 'precondition_conflict');
+        check($fixture->store->operations === $operations && $fixture->store->writes === 1, 'conflict left a reservation');
+    },
+    'unsafe before blocks new apply but ordinary set still rejects empty and oversize' => function (): void {
+        foreach (['O:8:"Injected":0:{}', 'a:0:{}', 'N;', '<script>unsafe</script>', "bad\x01value", str_repeat('X', 8193)] as $unsafe) {
+            $fixture = new ContractFixture();
+            $fixture->store->fields['description'] = ['state' => 'value', 'value' => $unsafe];
+            expect_error(fn() => $fixture->send($fixture->command()), 'unsupported_snapshot');
+            check($fixture->store->writes === 0 && $fixture->store->operations === [], 'irreversible before was applied');
+        }
+        foreach (['', str_repeat('X', 513)] as $value) {
+            $fixture = new ContractFixture();
+            $command = $fixture->command();
+            $command['changes'][0]['value'] = $value;
+            $command['proposal_hash'] = sm_v2_proposal_hash($command);
+            expect_error(fn() => $fixture->send($command), 'invalid_schema');
+        }
+    },
+    'historical unsupported original fails closed without restoring gadgets' => function (): void {
+        $fixture = new ContractFixture();
+        $fixture->send($fixture->command());
+        $fixture->store->operations[ContractFixture::OPERATION]['receipt']['before']['fields']['title'] = ['state' => 'value', 'value' => 'O:8:"Injected":0:{}'];
+        $original = $fixture->store->operations[ContractFixture::OPERATION]['receipt'];
+        $fixture->store->operations[ContractFixture::OPERATION]['receipt']['before_digest'] = sm_v2_digest($original['before']);
+        $original = resign_original($fixture);
+        expect_error(fn() => $fixture->send(rollback_command($original), '/seo-master/v2/rollback'), 'unsupported_snapshot');
+        check($fixture->store->writes === 1 && count($fixture->store->operations) === 1, 'historical unsafe state restored');
+    },
+    'rollback schema self-reference inverse injection and proposal domain reject' => function (): void {
+        foreach (['reason', 'inverse', 'self', 'reserved', 'domain'] as $case) {
+            $fixture = new ContractFixture();
+            $original = $fixture->send($fixture->command());
+            $command = rollback_command($original);
+            if ($case === 'reason') { $command['reason'] = ''; }
+            if ($case === 'inverse') { $command['inverse'] = ['title' => 'caller supplied']; }
+            if ($case === 'self') { $command['original_operation_id'] = $command['operation_id']; }
+            if ($case === 'reserved') { $command['original_operation_id'] = '12345678-1234-8234-8234-123456789abc'; }
+            $command['proposal_hash'] = $case === 'domain' ? sm_v2_proposal_hash($command) : rollback_hash($command);
+            expect_error(fn() => $fixture->send($command, '/seo-master/v2/rollback'), $case === 'domain' ? 'proposal_hash_conflict' : 'invalid_schema');
+            check($fixture->store->writes === 1 && count($fixture->store->operations) === 1, 'invalid rollback wrote');
+        }
+    },
+    'rollback original references scope target and tampered original fail closed' => function (): void {
+        foreach (['missing', 'reference', 'entity', 'scope', 'signature'] as $case) {
+            $fixture = new ContractFixture();
+            $original = $fixture->send($fixture->command());
+            $command = rollback_command($original);
+            if ($case === 'missing') { $command['original_operation_id'] = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'; }
+            if ($case === 'reference') { $command['original_receipt_id'] = str_repeat('0', 64); }
+            if ($case === 'entity') { $command['entity_id'] = 8; }
+            if ($case === 'scope') { $fixture->store->operations[ContractFixture::OPERATION]['receipt']['site_id'] = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'; }
+            if ($case === 'signature') { $fixture->store->operations[ContractFixture::OPERATION]['receipt']['signature'] = str_repeat('0', 64); }
+            $command['proposal_hash'] = rollback_hash($command);
+            $code = $case === 'signature' ? 'needs_reconciliation' : ($case === 'reference' ? 'original_reference_conflict' : 'operation_not_found');
+            expect_error(fn() => $fixture->send($command, '/seo-master/v2/rollback'), $code);
+            check($fixture->store->writes === 1, 'bad original wrote fields');
+        }
+    },
+    'signed but semantically malformed original is not inverse authority' => function (): void {
+        foreach (['digest', 'state', 'proposal', 'applied_fields'] as $case) {
+            $fixture = new ContractFixture();
+            $command = rollback_command($fixture->send($fixture->command()));
+            $original =& $fixture->store->operations[ContractFixture::OPERATION]['receipt'];
+            if ($case === 'digest') { $original['before_digest'] = str_repeat('0', 64); }
+            if ($case === 'state') { $original['before']['fields']['title'] = ['state' => 'unknown']; }
+            if ($case === 'proposal') { $original['proposal_hash'] = 'invalid'; }
+            if ($case === 'applied_fields') { $original['applied_fields'] = ['title', 'title']; }
+            unset($original);
+            resign_original($fixture);
+            expect_error(fn() => $fixture->send($command, '/seo-master/v2/rollback'), 'needs_reconciliation');
+            check($fixture->store->writes === 1, 'malformed original wrote');
+        }
+    },
+    'guard context collision corrupt record and missing first rollback reconcile' => function (): void {
+        foreach (['context', 'kind', 'identity', 'missing_receipt', 'hash_collision'] as $case) {
+            $fixture = new ContractFixture();
+            $original = $fixture->send($fixture->command());
+            $command = rollback_command($original);
+            $fixture->send($command, '/seo-master/v2/rollback');
+            $identifier = guard_id($fixture);
+            $guard =& $fixture->store->operations[$identifier]['receipt'];
+            if ($case === 'kind') { $guard['kind'] = 'receipt'; }
+            if ($case === 'identity') { $guard['identity_digest'] = str_repeat('0', 64); }
+            if ($case === 'context') {
+                $unsigned = $guard;
+                unset($unsigned['signature']);
+                $guard['signature'] = sm_v2_receipt_signature($unsigned, $fixture->receipt_secret);
+            }
+            if ($case === 'missing_receipt') { unset($fixture->store->operations[$command['operation_id']]); }
+            if ($case === 'hash_collision') { $fixture->store->operations[$identifier]['request_hash'] = str_repeat('0', 64); }
+            unset($guard);
+            $fixture->store->fields = $original['after']['fields'];
+            expect_error(fn() => $fixture->send(rollback_command($original, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'), '/seo-master/v2/rollback'), 'needs_reconciliation');
+            check($fixture->store->writes === 2, 'corrupt guard allowed a write');
+        }
+    },
+    'failed reverse write rolls back reverse receipt guard and every field' => function (): void {
+        $fixture = new ContractFixture();
+        $original = $fixture->send($fixture->command());
+        $operations = $fixture->store->operations;
+        $fixture->store->fail_write = true;
+        expect_error(fn() => $fixture->send(rollback_command($original), '/seo-master/v2/rollback'), 'storage_failure');
+        check(sm_v2_canonical($fixture->store->fields) === sm_v2_canonical($original['after']['fields']) &&
+            $fixture->store->operations === $operations && $fixture->store->writes === 1, 'reverse rollback partial');
+        $fixture->store->fail_write = false;
+        check($fixture->send(rollback_command($original), '/seo-master/v2/rollback')['outcome'] === 'rollback_applied_unverified', 'safe retry after failed rollback rejected');
+    },
+    'ambiguous rollback commit recovers same signed receipt and consumed guard' => function (): void {
+        $fixture = new ContractFixture();
+        $original = $fixture->send($fixture->command());
+        $command = rollback_command($original);
+        $fixture->store->lose_commit_response = true;
+        expect_error(fn() => $fixture->send($command, '/seo-master/v2/rollback'), 'needs_reconciliation');
+        $fixture->store->lose_commit_response = false;
+        $route = '/seo-master/v2/operations/' . $command['operation_id'];
+        $receipt = $fixture->service->handle('GET', $route, '', $fixture->headers('GET', $route, '', $command['operation_id']), 1793715600);
+        check($receipt['outcome'] === 'rollback_applied_unverified' && $fixture->send($command, '/seo-master/v2/rollback') === $receipt, 'rollback receipt not recovered');
+        $fixture->store->fields = $original['after']['fields'];
+        expect_error(fn() => $fixture->send(rollback_command($original, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'), '/seo-master/v2/rollback'), 'rollback_already_consumed');
+        check($fixture->store->writes === 2, 'lost commit caused second mutation');
+    },
+    'no-op rollback consumes its original without inflating mutations' => function (): void {
+        $fixture = new ContractFixture();
+        $command = $fixture->command();
+        $command['changes'] = [['op' => 'remove', 'field' => 'title']];
+        $command['expected_after_digest'] = $command['before_digest'];
+        $command['proposal_hash'] = sm_v2_proposal_hash($command);
+        $original = $fixture->send($command);
+        $receipt = $fixture->send(rollback_command($original), '/seo-master/v2/rollback');
+        check($receipt['outcome'] === 'no_op' && $receipt['operation_type'] === 'rollback' && $fixture->store->writes === 0, 'no-op rollback inflated mutations');
+        expect_error(fn() => $fixture->send(rollback_command($original, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'), '/seo-master/v2/rollback'), 'rollback_already_consumed');
+        check($fixture->store->writes === 0, 'no-op consumed guard wrote');
+    },
+    'guard namespace is private and a guard cannot become an ordinary receipt' => function (): void {
+        $fixture = new ContractFixture();
+        $original = $fixture->send($fixture->command());
+        $fixture->send(rollback_command($original), '/seo-master/v2/rollback');
+        $identifier = guard_id($fixture);
+        $route = '/seo-master/v2/operations/' . $identifier;
+        expect_error(fn() => $fixture->service->handle('GET', $route, '', $fixture->headers('GET', $route, '', $identifier), 1793715600), 'invalid_route');
+        $command = rollback_command($original, $identifier);
+        expect_error(fn() => $fixture->send($command, '/seo-master/v2/rollback'), 'authentication_failed');
+        $fixture->store->operations[ContractFixture::OPERATION]['receipt'] = $fixture->store->operations[$identifier]['receipt'];
+        $route = '/seo-master/v2/operations/' . ContractFixture::OPERATION;
+        expect_error(fn() => $fixture->service->handle('GET', $route, '', $fixture->headers('GET', $route, '', ContractFixture::OPERATION), 1793715600), 'operation_not_found');
+    },
+    'rollback trusted-gateway route signature and eligibility remain mandatory' => function (): void {
+        $fixture = new ContractFixture();
+        $original = $fixture->send($fixture->command());
+        $command = rollback_command($original);
+        $fixture->service = new SM_V2_Service(new SM_V2_Config(ContractFixture::PROJECT, ContractFixture::SITE, 'test-key', $fixture->secret, $fixture->receipt_secret, false), $fixture->store, '0.3.0-dev');
+        expect_error(fn() => $fixture->send($command, '/seo-master/v2/rollback'), 'trusted_gateway_required');
+        check($fixture->send($command, '/seo-master/v2/rollback/dry-run')['outcome'] === 'ready', 'safe rollback preview requires publish flag');
+        $body = sm_v2_canonical($command);
+        $headers = $fixture->headers('POST', '/seo-master/v2/rollback/dry-run', $body, $command['operation_id']);
+        expect_error(fn() => $fixture->service->handle('POST', '/seo-master/v2/rollback', $body, $headers, 1793715600), 'authentication_failed');
+        check($fixture->store->writes === 1 && count($fixture->store->operations) === 1, 'policy failure mutated');
     },
 ];
 $failures = [];

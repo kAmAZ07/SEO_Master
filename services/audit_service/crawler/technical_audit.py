@@ -1,21 +1,29 @@
 import asyncio
-import ipaddress
-import socket
-from typing import Type
-from urllib.parse import urlparse
+from typing import Awaitable, Callable, Optional, Type
+from urllib.parse import urlsplit
 
+from shared.netpolicy import NetPolicyError
 from sqlalchemy import select
 
 from services.audit_service.crawler.public_crawler import crawl_public
 from services.audit_service.analyzers.meta_checker import check_meta, check_canonical
 from services.audit_service.analyzers.link_checker import check_links_404
 from services.audit_service.analyzers.schema_validator import validate_jsonld
-from services.audit_service.analyzers.robots_checker import check_robots
+from services.audit_service.analyzers.robots_checker import fetch_robots
 from services.audit_service.analyzers.sitemap_checker import check_sitemap
-from services.audit_service.analyzers.cwv_analyzer import analyze_cwv
+from services.audit_service.analyzers.cwv_analyzer import analyze_cwv_detailed
 from services.audit_service.config import settings
 from services.audit_service.db.session import get_session
 from services.audit_service.db.models import CrawlResult, PublicAuditResult
+from services.audit_service.netio import AuditFetcher, Budget, BudgetExhausted
+from services.audit_service.public_policy import (
+    PUBLIC_FINALIZE_MARGIN_S,
+    PUBLIC_JOB_DEADLINE_S,
+    PUBLIC_MAX_LINK_PROBES,
+    public_options,
+)
+
+ProgressCallback = Callable[..., Awaitable[None]]
 
 
 FINDING_CATALOG = {
@@ -217,6 +225,36 @@ FINDING_CATALOG = {
         "recommendation": "Проверьте логи сервера, конфигурацию TLS и правила доступа для ботов на затронутом URL.",
         "category": "availability",
     },
+    "dns_failure": {
+        "title": "Домен не разрешается",
+        "description": "Имя хоста не удалось преобразовать в публичный адрес.",
+        "recommendation": "Проверьте написание домена и настройки DNS.",
+        "category": "precheck",
+    },
+    "robots_unreachable": {
+        "title": "robots.txt временно недоступен",
+        "description": "Файл robots.txt не удалось получить (ошибка сервера или сети). По стандарту это считается запретом обхода, поэтому страницы не проверялись.",
+        "recommendation": "Убедитесь, что /robots.txt отвечает кодом 200 или 404, и повторите аудит.",
+        "category": "crawlability",
+    },
+    "sitemap_invalid": {
+        "title": "Sitemap не удалось разобрать",
+        "description": "Файл sitemap найден, но он повреждён, слишком велик или содержит небезопасные конструкции XML.",
+        "recommendation": "Проверьте, что sitemap — корректный XML по протоколу sitemaps.org и укладывается в 50 000 адресов и 50 МБ.",
+        "category": "crawlability",
+    },
+    "h1_multiple": {
+        "title": "Несколько заголовков H1",
+        "description": "На странице больше одного заголовка H1.",
+        "recommendation": "Оставьте один основной H1, остальные заголовки сделайте H2–H6.",
+        "category": "content_structure",
+    },
+    "broken_link_server_error": {
+        "title": "Внутренняя ссылка отвечает ошибкой сервера",
+        "description": "Адрес, на который ведёт внутренняя ссылка, ответил кодом 5xx.",
+        "recommendation": "Проверьте доступность страницы и исправьте ссылку или ошибку на сервере.",
+        "category": "links",
+    },
     "page_server_error": {
         "title": "Страница вернула ошибку сервера",
         "description": "Страница ответила кодом статуса 5xx, что препятствует надёжному обходу и индексированию.",
@@ -384,31 +422,21 @@ def _build_criteria_results(findings: list[dict]) -> list[dict]:
     return results
 
 
-def _is_private_ip(host: str) -> bool:
+_INVALID_URL_CODES = frozenset({"invalid_url", "scheme_not_allowed", "userinfo_not_allowed", "port_not_allowed", "method_not_allowed"})
+
+
+async def _precheck_url(root_url: str, fetcher: AuditFetcher) -> list[dict]:
+    """Проверяет адрес политикой сети до начала обхода. Пустой список — адрес допустим."""
     try:
-        infos = socket.getaddrinfo(host, None)
-    except Exception:
-        return False
-    for family, _, _, _, sockaddr in infos:
-        ip = sockaddr[0]
-        try:
-            addr = ipaddress.ip_address(ip)
-            if addr.is_private or addr.is_loopback or addr.is_link_local:
-                return True
-        except ValueError:
-            continue
-    return False
-
-
-def _precheck_url(root_url: str) -> list[dict]:
-    findings = []
-    parsed = urlparse(root_url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        findings.append({"code": "invalid_url", "severity": "high", "confidence": "high", "details": {"root_url": root_url}})
-        return findings
-    if _is_private_ip(parsed.hostname or ""):
-        findings.append({"code": "unsafe_target", "severity": "high", "confidence": "high", "details": {"host": parsed.hostname}})
-    return findings
+        await fetcher.precheck(root_url)
+    except NetPolicyError as exc:
+        host = urlsplit(root_url).hostname or ""
+        if exc.code in _INVALID_URL_CODES:
+            return [{"code": "invalid_url", "severity": "high", "confidence": "high", "details": {"root_url": root_url, "reason": exc.code}}]
+        if exc.code == "dns_failure":
+            return [{"code": "dns_failure", "severity": "high", "confidence": "high", "details": {"host": host}}]
+        return [{"code": "unsafe_target", "severity": "high", "confidence": "high", "details": {"host": host, "reason": exc.code}}]
+    return []
 
 
 def _issue_key(finding: dict) -> tuple[str, str]:
@@ -489,8 +517,15 @@ def _compute_score(summary: dict, findings: list[dict]) -> dict:
     max_pages = max(1, int(coverage.get("max_pages") or 1))
     crawl_completion = min(1.0, processed_pages / max(1, attempted_pages or processed_pages or max_pages))
     criteria = _build_criteria_results(findings)
-    weighted_score = sum(item["score"] * float(item["weight"]) for item in criteria)
-    total_weight = sum(float(item["weight"]) for item in criteria) or 1.0
+    # Недоступный PageSpeed не равен «метрики хорошие»: критерий не участвует в среднем.
+    psi_unavailable = (summary.get("psi") or {}).get("status") == "unavailable"
+    if psi_unavailable:
+        for item in criteria:
+            if item["key"] == "performance":
+                item["status"] = "unavailable"
+    scored = [item for item in criteria if not (psi_unavailable and item["key"] == "performance")]
+    weighted_score = sum(item["score"] * float(item["weight"]) for item in scored)
+    total_weight = sum(float(item["weight"]) for item in scored) or 1.0
     coverage_penalty = 0.0
     if attempted_pages > 0 and processed_pages < attempted_pages:
         coverage_penalty = min(15.0, (1.0 - crawl_completion) * 15.0)
@@ -520,7 +555,18 @@ def _compute_score(summary: dict, findings: list[dict]) -> dict:
     }
 
 
+def _finding_target(finding: dict) -> str:
+    details = finding.get("details") or {}
+    return str(details.get("url") or details.get("root_url") or details.get("host") or "")
+
+
 def select_top_findings(findings: list, limit: int = 5) -> list[dict]:
+    """До `limit` самых важных подтверждённых проблем, по одной на тип (code).
+
+    Порядок: severity, затем confidence, затем порядок во входном списке (он детерминирован,
+    см. `_stable_order`). Информационные записи и пояснение к оценке не попадают в выборку.
+    У представителя группы `affected_count` — сколько объектов затронуто этой проблемой.
+    """
     if limit <= 0:
         return []
 
@@ -545,7 +591,20 @@ def select_top_findings(findings: list, limit: int = 5) -> list[dict]:
         )
 
     ranked.sort(key=lambda item: item[:3])
-    return [finding for _, _, _, finding in ranked[:limit]]
+    groups: dict[str, dict] = {}
+    for _, _, _, finding in ranked:
+        code = str(finding.get("code") or "")
+        if code in groups:
+            groups[code]["affected_count"] += 1
+        else:
+            finding["affected_count"] = 1
+            groups[code] = finding
+    return list(groups.values())[:limit]
+
+
+def _stable_order(findings: list[dict]) -> list[dict]:
+    """Фиксирует порядок findings независимо от порядка завершения сетевых задач."""
+    return sorted(findings, key=lambda f: (str(f.get("code") or ""), _finding_target(f)))
 
 
 def _build_score_explanation_finding(summary: dict) -> dict:
@@ -588,52 +647,146 @@ async def _load_audit_row(audit_id: str, row_cls: Type[PublicAuditResult] | Type
     return row
 
 
-async def _run_audit_pipeline(
-    audit_id: str,
+_PAGE_CHECK_CODES = {
+    "meta": ("title_", "description_"),
+    "h1": ("h1_",),
+    "canonical": ("canonical_",),
+    "structured_data": ("jsonld_",),
+}
+
+
+def _page_check_status(findings: list[dict], prefixes: tuple[str, ...], pages_processed: int) -> str:
+    if pages_processed == 0:
+        return "skipped"
+    for finding in findings:
+        code = str(finding.get("code") or "")
+        if code.startswith(prefixes) and str(finding.get("severity") or "info").lower() != "info":
+            return "failed"
+    return "passed"
+
+
+async def _report(on_progress: Optional[ProgressCallback], stage: str, **counters) -> None:
+    if on_progress is not None:
+        await on_progress(stage, **counters)
+
+
+def _finish_early(root_url, mode, project_id, summary, findings, outcome, pages=None) -> dict:
+    findings = [_decorate_finding(f) for f in _stable_order(findings)]
+    summary.update(_compute_score(summary, findings))
+    findings.append(_build_score_explanation_finding(summary))
+    return {
+        "project_id": project_id,
+        "mode": mode,
+        "root_url": root_url,
+        "outcome": outcome,
+        "summary": summary,
+        "findings": findings,
+        "top_findings": select_top_findings(findings),
+        "pages": pages or [],
+    }
+
+
+async def run_audit_core(
     *,
-    row_cls: Type[PublicAuditResult] | Type[CrawlResult],
-    include_external_data: bool,
+    root_url: str,
+    mode: str,
+    project_id: str | None,
+    options: dict,
+    fetcher: AuditFetcher,
+    include_external_data: bool = False,
+    on_progress: Optional[ProgressCallback] = None,
 ) -> dict:
-    row = await _load_audit_row(audit_id, row_cls)
-    root_url = row.root_url
-    options = row.options or {}
+    """Выполняет аудит. Не обращается к БД; все сетевые запросы идут через `fetcher`.
 
-    findings = []
-    precheck_findings = _precheck_url(root_url)
-    findings.extend(precheck_findings)
-    if any(finding["code"] in ("invalid_url", "unsafe_target") for finding in precheck_findings):
-        summary = {
-            "coverage": {"attempted": 0, "processed": 0, "max_pages": int(options.get("max_pages", 10))},
-            "precheck_failed": True,
-        }
-        findings = [_decorate_finding(finding) for finding in findings]
-        summary.update(_compute_score(summary, findings))
-        findings.append(_build_score_explanation_finding(summary))
-        return {"root_url": root_url, "summary": summary, "findings": findings, "top_findings": select_top_findings(findings), "pages": []}
-
-    max_pages = int(options.get("max_pages", 10 if row.mode == "public" else 1000))
-    max_depth = int(options.get("max_depth", 2 if row.mode == "public" else 4))
-    if row.mode == "public":
-        max_depth = min(max_depth, 2)
-    js_render = bool(options.get("js_render", False))
-    respect_robots = bool(options.get("respect_robots", True))
+    Возвращает словарь с `outcome`: completed | partial | failed. Публичный режим всегда
+    использует жёсткий профиль лимитов, значения из `options` могут их только уменьшить.
+    """
+    public = mode == "public"
+    if public:
+        options = public_options(options)
+    max_pages = int(options.get("max_pages", 10 if public else 1000))
+    max_depth = int(options.get("max_depth", 2 if public else 4))
+    js_render = False if public else bool(options.get("js_render", False))
+    respect_robots = True if public else bool(options.get("respect_robots", True))
     timeout = float(options.get("timeout", settings.default_timeout_s))
 
-    robots = await check_robots(root_url=root_url)
-    sitemap = await check_sitemap(root_url=root_url)
-    summary = {"robots": robots, "sitemap": sitemap}
+    findings: list[dict] = []
+    checks: dict[str, dict] = {}
+    partial_reasons: list[str] = []
+    summary: dict = {"checks": checks, "mode": mode}
+    if project_id:
+        summary["project_id"] = project_id
 
-    if not sitemap.get("available"):
-        findings.append({"code": "sitemap_missing", "severity": "medium", "confidence": "high", "details": sitemap})
+    await _report(on_progress, "precheck")
+    precheck_findings = await _precheck_url(root_url, fetcher)
+    if precheck_findings:
+        findings.extend(precheck_findings)
+        summary.update(
+            coverage={"attempted": 0, "processed": 0, "max_pages": max_pages},
+            precheck_failed=True,
+            error_code=precheck_findings[0]["code"],
+        )
+        checks["precheck"] = {"status": "failed", "code": precheck_findings[0]["code"]}
+        return _finish_early(root_url, mode, project_id, summary, findings, "failed")
+    checks["precheck"] = {"status": "passed"}
 
-    if respect_robots and robots.get("blocked_root", False):
-        findings.append({"code": "blocked_by_robots", "severity": "medium", "confidence": "high", "details": robots})
-        summary.update({"coverage": {"attempted": 0, "processed": 0, "max_pages": max_pages, "max_depth": max_depth}, "blocked_pages_count": 0, "precheck_failed": False})
-        findings = [_decorate_finding(finding) for finding in findings]
-        summary.update(_compute_score(summary, findings))
-        findings.append(_build_score_explanation_finding(summary))
-        return {"root_url": root_url, "summary": summary, "findings": findings, "top_findings": select_top_findings(findings), "pages": []}
+    # --- robots.txt ---
+    await _report(on_progress, "robots")
+    robots = None
+    try:
+        robots = await fetch_robots(root_url, fetcher)
+    except BudgetExhausted as exc:
+        partial_reasons.append(exc.reason)
+    if robots is not None:
+        summary["robots"] = robots.to_summary()
+        checks["robots"] = {"status": {"ok": "passed", "missing": "passed", "unreachable": "unavailable"}[robots.state],
+                            "state": robots.state}
+        if robots.state == "unreachable":
+            findings.append({"code": "robots_unreachable", "severity": "medium", "confidence": "high",
+                             "details": {"url": robots.robots_url, "reason": robots.error}})
+    else:
+        checks["robots"] = {"status": "unavailable", "state": "budget_exhausted"}
 
+    # --- sitemap ---
+    await _report(on_progress, "sitemap")
+    sitemap: dict | None = None
+    try:
+        sitemap = await check_sitemap(root_url, fetcher, extra_urls=(robots.sitemaps if robots else None))
+    except BudgetExhausted as exc:
+        partial_reasons.append(exc.reason)
+    if sitemap is not None:
+        summary["sitemap"] = sitemap
+        checks["sitemap"] = {"status": "passed" if sitemap["state"] == "ok" else
+                             ("failed" if sitemap["state"] in ("missing", "invalid") else "unavailable"),
+                             "state": sitemap["state"], "url_count": sitemap.get("url_count", 0)}
+        if sitemap["state"] == "missing":
+            findings.append({"code": "sitemap_missing", "severity": "medium", "confidence": "high",
+                             "details": {"url": sitemap["sitemap_url"], "status_code": sitemap.get("status_code")}})
+        elif sitemap["state"] == "invalid":
+            findings.append({"code": "sitemap_invalid", "severity": "medium", "confidence": "high",
+                             "details": {"url": sitemap["sitemap_url"], "reason": sitemap.get("error")}})
+        if sitemap.get("truncated"):
+            partial_reasons.append("sitemap_truncated")
+    else:
+        checks["sitemap"] = {"status": "unavailable", "state": "budget_exhausted"}
+
+    blocked = robots is not None and respect_robots and robots.disallow_all
+    if blocked:
+        if robots.state == "ok":
+            findings.append({"code": "blocked_by_robots", "severity": "medium", "confidence": "high",
+                             "details": {"url": robots.robots_url}})
+            partial_reasons.append("robots_blocked")
+        else:
+            partial_reasons.append("robots_unreachable")
+        summary.update(coverage={"attempted": 0, "processed": 0, "max_pages": max_pages, "max_depth": max_depth},
+                       blocked_pages_count=0, precheck_failed=False, partial_reasons=partial_reasons)
+        for name in ("meta", "h1", "canonical", "structured_data", "links"):
+            checks[name] = {"status": "skipped"}
+        checks["psi"] = {"status": "skipped"}
+        return _finish_early(root_url, mode, project_id, summary, findings, "partial")
+
+    # --- обход ---
+    await _report(on_progress, "crawl", pages_done=0, pages_max=max_pages)
     crawled = await crawl_public(
         root_url=root_url,
         max_pages=max_pages,
@@ -641,47 +794,73 @@ async def _run_audit_pipeline(
         js_render=js_render,
         timeout_s=timeout,
         respect_robots=respect_robots,
+        fetcher=fetcher,
+        robots=robots,
+        on_progress=on_progress,
     )
     pages = crawled["pages"]
     summary.update(crawled["summary"])
+    if summary.get("truncated_reason"):
+        partial_reasons.append(summary["truncated_reason"])
     findings.extend(_build_page_level_findings(pages))
 
+    await _report(on_progress, "analyze", pages_done=len(pages), pages_max=max_pages)
     for page in pages:
-        findings.extend(check_meta(page.get("url"), page.get("title"), page.get("description"), page.get("h1")))
+        findings.extend(check_meta(page.get("url"), page.get("title"), page.get("description"), page.get("h1"), page.get("h1_count")))
 
         html = page.get("html")
         if html:
             findings.extend(check_canonical(page.get("url"), html))
             findings.extend(validate_jsonld(page.get("url"), html))
 
-    link_findings, links_checked = await check_links_404(root_url=root_url, pages=pages)
+    processed = len([p for p in pages if not p.get("error")])
+    for name, prefixes in _PAGE_CHECK_CODES.items():
+        checks[name] = {"status": _page_check_status(findings, prefixes, processed)}
+
+    # --- ссылки ---
+    await _report(on_progress, "links", pages_done=len(pages), pages_max=max_pages)
+    try:
+        link_findings, links_checked = await check_links_404(root_url, pages, fetcher, limit=PUBLIC_MAX_LINK_PROBES if public else None)
+    except BudgetExhausted as exc:
+        link_findings, links_checked = [], 0
+        partial_reasons.append(exc.reason)
     findings.extend(link_findings)
     summary["links_checked"] = links_checked
+    link_problem = any(f["code"].startswith("broken_link") for f in link_findings)
+    checks["links"] = {"status": "failed" if link_problem else ("skipped" if not processed else "passed"), "checked": links_checked}
 
-    cwv = await analyze_cwv(root_url=root_url)
+    # --- PageSpeed ---
+    await _report(on_progress, "psi")
+    psi_timeout = max(1.0, min(15.0, fetcher.budget.remaining() - 1.0))
+    if fetcher.budget.time_exhausted:
+        cwv, psi_reason = None, "deadline"
+    else:
+        cwv, psi_reason = await analyze_cwv_detailed(root_url, timeout=psi_timeout)
     if cwv:
         summary["cwv"] = cwv.get("summary", {})
+        summary["psi"] = {"status": "ok", "source": cwv["summary"].get("source"),
+                          "field_data_available": cwv["summary"].get("field_data_available", False)}
+        checks["psi"] = {"status": "passed" if not cwv.get("findings") else "failed",
+                         "field_data_available": cwv["summary"].get("field_data_available", False)}
         findings.extend(cwv.get("findings", []))
     else:
-        findings.append({
-            "code": "cwv_unavailable",
-            "severity": "info",
-            "confidence": "high",
-            "details": {"reason": "pagespeed_unavailable_or_quota_limited"},
-        })
+        summary["psi"] = {"status": "unavailable", "reason": psi_reason}
+        checks["psi"] = {"status": "unavailable", "reason": psi_reason}
+        findings.append({"code": "cwv_unavailable", "severity": "info", "confidence": "high",
+                         "details": {"reason": psi_reason or "unavailable"}})
 
     if include_external_data:
         try:
             from services.audit_service.integrations.gsc_link_analyzer import analyze_links
 
-            backlink_summary = await asyncio.to_thread(analyze_links, row.project_id, root_url)
+            backlink_summary = await asyncio.to_thread(analyze_links, project_id, root_url)
             summary["backlinks"] = backlink_summary
         except Exception as exc:
             findings.append({
                 "code": "backlinks_unavailable",
                 "severity": "info",
                 "confidence": "medium",
-                "details": {"reason": str(exc)},
+                "details": {"reason": type(exc).__name__},
             })
 
     if summary.get("spa_detected") and not js_render:
@@ -700,21 +879,24 @@ async def _run_audit_pipeline(
             "details": {"hint": "reduce_concurrency_or_use_js_render"},
         })
 
-    deduped = {}
-    for finding in findings:
+    deduped: dict[tuple[str, str], dict] = {}
+    for finding in _stable_order(findings):
         deduped[_issue_key(finding)] = finding
 
     findings = [_decorate_finding(finding) for finding in deduped.values()]
-    summary["mode"] = row.mode
-    if row.project_id:
-        summary["project_id"] = row.project_id
+    summary["partial_reasons"] = sorted(set(partial_reasons))
     summary.update(_compute_score(summary, findings))
     findings.append(_build_score_explanation_finding(summary))
 
+    if public:
+        # Сырой HTML в результат публичного аудита не попадает.
+        pages = [{k: v for k, v in page.items() if k not in ("html", "links")} for page in pages]
+
     return {
-        "project_id": row.project_id,
-        "mode": row.mode,
+        "project_id": project_id,
+        "mode": mode,
         "root_url": root_url,
+        "outcome": "partial" if partial_reasons else "completed",
         "summary": summary,
         "findings": findings,
         "top_findings": select_top_findings(findings),
@@ -722,18 +904,47 @@ async def _run_audit_pipeline(
     }
 
 
-async def run_public_audit_pipeline(audit_id: str) -> dict:
+async def _run_audit_pipeline(
+    audit_id: str,
+    *,
+    row_cls: Type[PublicAuditResult] | Type[CrawlResult],
+    include_external_data: bool,
+    on_progress: Optional[ProgressCallback] = None,
+    fetcher: Optional[AuditFetcher] = None,
+) -> dict:
+    row = await _load_audit_row(audit_id, row_cls)
+    public = row.mode == "public"
+    if fetcher is None:
+        budget = Budget(deadline_s=PUBLIC_JOB_DEADLINE_S - PUBLIC_FINALIZE_MARGIN_S) if public else Budget(
+            deadline_s=None, max_page_requests=100_000, max_aux_requests=100_000
+        )
+        fetcher = AuditFetcher.create(budget=budget)
+    return await run_audit_core(
+        root_url=row.root_url,
+        mode=row.mode,
+        project_id=row.project_id,
+        options=row.options or {},
+        fetcher=fetcher,
+        include_external_data=include_external_data,
+        on_progress=on_progress,
+    )
+
+
+async def run_public_audit_pipeline(audit_id: str, *, on_progress: Optional[ProgressCallback] = None, fetcher: Optional[AuditFetcher] = None) -> dict:
     return await _run_audit_pipeline(
         audit_id,
         row_cls=PublicAuditResult,
         include_external_data=False,
+        on_progress=on_progress,
+        fetcher=fetcher,
     )
 
 
-async def run_full_audit_pipeline(audit_id: str) -> dict:
+async def run_full_audit_pipeline(audit_id: str, *, on_progress: Optional[ProgressCallback] = None, fetcher: Optional[AuditFetcher] = None) -> dict:
     return await _run_audit_pipeline(
         audit_id,
         row_cls=CrawlResult,
         include_external_data=True,
+        on_progress=on_progress,
+        fetcher=fetcher,
     )
-

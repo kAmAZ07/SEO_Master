@@ -1,11 +1,14 @@
 import asyncio
+import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Type
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
+
+from config.logging_config import get_logger
 
 from services.audit_service.config import settings
 from services.audit_service.db.session import get_session, init_db
@@ -25,14 +28,66 @@ from services.audit_service.crawler.technical_audit import (
 )
 from services.audit_service.events.crawl_completed import publish_crawl_completed
 from services.audit_service.events.task_created_handler import maybe_start_task_created_consumer
+from services.audit_service.public_policy import (
+    FINAL_STATUSES,
+    PUBLIC_JOB_DEADLINE_S,
+    PUBLIC_MAX_CONCURRENT_JOBS,
+    PUBLIC_RETENTION,
+    public_options,
+)
+from services.audit_service.public_view import build_public_view, is_expired
+
+logger = get_logger(__name__)
 
 app = FastAPI(title="Audit Service", version="0.1.0")
+
+# Ссылки на фоновые задания: без них сборщик мусора может прервать задачу, а отмена не найдёт её.
+_JOBS: dict[str, asyncio.Task] = {}
+_SLOTS: dict[int, asyncio.Semaphore] = {}
+_ORPHAN_AFTER = timedelta(seconds=PUBLIC_JOB_DEADLINE_S + 30)
+_PROGRESS_MIN_INTERVAL_S = 0.5
+
+
+def _public_slots() -> asyncio.Semaphore:
+    loop_id = id(asyncio.get_running_loop())
+    if loop_id not in _SLOTS:
+        _SLOTS[loop_id] = asyncio.Semaphore(PUBLIC_MAX_CONCURRENT_JOBS)
+    return _SLOTS[loop_id]
+
+
+def active_job_count() -> int:
+    """Число заданий, выполняющихся или ожидающих слот в этом процессе (для проверки утечек)."""
+    return len([task for task in _JOBS.values() if not task.done()])
 
 
 @app.on_event("startup")
 async def _startup() -> None:
     await init_db()
+    await purge_expired_public_audits()
+    await recover_orphaned_public_audits()
     asyncio.create_task(maybe_start_task_created_consumer())
+
+
+async def purge_expired_public_audits() -> int:
+    """Удаляет публичные результаты старше срока хранения. Возвращает число удалённых строк."""
+    cutoff = datetime.now(timezone.utc) - PUBLIC_RETENTION
+    async with get_session() as session:
+        result = await session.execute(delete(PublicAuditResult).where(PublicAuditResult.created_at < cutoff))
+        await session.commit()
+    return result.rowcount or 0
+
+
+async def recover_orphaned_public_audits() -> int:
+    """Задания, у которых давно нет обновлений (процесс перезапущен), получают конечное состояние."""
+    cutoff = datetime.now(timezone.utc) - _ORPHAN_AFTER
+    async with get_session() as session:
+        result = await session.execute(
+            update(PublicAuditResult)
+            .where(PublicAuditResult.status.in_(("queued", "running")), PublicAuditResult.updated_at < cutoff)
+            .values(status="failed", summary={"error_code": "interrupted"}, updated_at=datetime.now(timezone.utc))
+        )
+        await session.commit()
+    return result.rowcount or 0
 
 
 @app.get("/health")
@@ -94,6 +149,9 @@ async def _enqueue_audit(
 ) -> AuditQueuedResponse:
     audit_id = audit_id or str(uuid.uuid4())
     row_options = payload.options.model_dump()
+    if mode == "public":
+        # Лимиты публичного режима задаются здесь, а не клиентом: прямой вызов сервиса их не обходит.
+        row_options = public_options(row_options)
     if extra_options:
         row_options.update(extra_options)
     now = datetime.now(timezone.utc)
@@ -121,7 +179,9 @@ async def _enqueue_audit(
         session.add(row)
         await session.commit()
 
-    asyncio.create_task(_run_audit_background(audit_id=audit_id, row_cls=row_cls, runner=runner))
+    task = asyncio.create_task(_run_audit_background(audit_id=audit_id, row_cls=row_cls, runner=runner))
+    _JOBS[audit_id] = task
+    task.add_done_callback(lambda _t, key=audit_id: _JOBS.pop(key, None))
     return AuditQueuedResponse(audit_id=audit_id, status="queued", mode=mode, project_id=payload.project_id)
 
 
@@ -153,56 +213,103 @@ async def start_full_audit(payload: FullAuditRequest) -> FullAuditResponse:
     )
 
 
+async def _update_row(audit_id: str, row_cls, **values) -> bool:
+    async with get_session() as session:
+        res = await session.execute(select(row_cls).where(row_cls.audit_id == audit_id))
+        row = res.scalar_one_or_none()
+        if row is None:
+            return False
+        for name, value in values.items():
+            setattr(row, name, value)
+        row.updated_at = datetime.now(timezone.utc)
+        await session.commit()
+    return True
+
+
+def _progress_writer(audit_id: str, row_cls):
+    """Запись этапа и счётчиков в строку задания. Частые обновления одного этапа прореживаются."""
+    state = {"stage": None, "at": 0.0}
+
+    async def _write(stage: str, **counters) -> None:
+        now = time.monotonic()
+        if stage == state["stage"] and now - state["at"] < _PROGRESS_MIN_INTERVAL_S:
+            return
+        state.update(stage=stage, at=now)
+        async with get_session() as session:
+            res = await session.execute(select(row_cls).where(row_cls.audit_id == audit_id))
+            row = res.scalar_one_or_none()
+            if row is None or row.status != "running":
+                return
+            row.summary = {**(row.summary or {}), "progress": {"stage": stage, **counters}}
+            row.updated_at = datetime.now(timezone.utc)
+            await session.commit()
+
+    return _write
+
+
+async def _finalize(audit_id: str, row_cls, status: str, summary: dict, **extra) -> None:
+    await _update_row(audit_id, row_cls, status=status, summary=summary, **extra)
+
+
 async def _run_audit_background(
     *,
     audit_id: str,
     row_cls: Type[PublicAuditResult] | Type[CrawlResult],
     runner,
 ) -> None:
-    async with get_session() as session:
-        res = await session.execute(select(row_cls).where(row_cls.audit_id == audit_id))
-        row = res.scalar_one_or_none()
-        if row is None:
-            return
-        row.status = "running"
-        row.updated_at = datetime.now(timezone.utc)
-        await session.commit()
-
+    public = row_cls is PublicAuditResult
+    result: dict | None = None
     try:
-        result = await runner(audit_id=audit_id)
-        async with get_session() as session:
-            res = await session.execute(select(row_cls).where(row_cls.audit_id == audit_id))
-            row = res.scalar_one_or_none()
-            if row is None:
+        slot = _public_slots() if public else None
+        if slot is not None:
+            await slot.acquire()
+        try:
+            if not await _update_row(audit_id, row_cls, status="running"):
                 return
-            row.status = "completed"
-            row.summary = result["summary"]
-            row.findings = result["findings"]
-            row.pages = result["pages"]
-            if hasattr(row, "crawled_at"):
-                row.crawled_at = datetime.now(timezone.utc)
-            row.updated_at = datetime.now(timezone.utc)
-            await session.commit()
-
-        await publish_crawl_completed(
-            audit_id=audit_id,
-            project_id=result.get("project_id"),
-            root_url=result["root_url"],
-            mode=result.get("mode", "public"),
-            summary=result["summary"],
-            pages=_compact_pages(result["pages"]),
-            content_text=_build_content_snapshot(result),
-        )
+            writer = _progress_writer(audit_id, row_cls)
+            await writer("starting")
+            job = runner(audit_id=audit_id, on_progress=writer)
+            # Жёсткая граница времени публичного задания; бюджет внутри пайплайна заканчивается раньше.
+            result = await (asyncio.wait_for(job, PUBLIC_JOB_DEADLINE_S) if public else job)
+        finally:
+            if slot is not None:
+                slot.release()
+    except asyncio.CancelledError:
+        await _finalize(audit_id, row_cls, "cancelled", {"error_code": "cancelled"})
+        return
+    except asyncio.TimeoutError:
+        await _finalize(audit_id, row_cls, "failed", {"error_code": "deadline_exceeded"})
+        return
     except Exception as e:
-        async with get_session() as session:
-            res = await session.execute(select(row_cls).where(row_cls.audit_id == audit_id))
-            row = res.scalar_one_or_none()
-            if row is None:
-                return
-            row.status = "failed"
-            row.summary = {"error": str(e)}
-            row.updated_at = datetime.now(timezone.utc)
-            await session.commit()
+        logger.exception("Audit failed", extra={"audit_id": audit_id})
+        # Текст исключения может содержать внутренние адреса и пути: наружу идёт только код.
+        summary = {"error_code": "internal_error"} if public else {"error": str(e)}
+        await _finalize(audit_id, row_cls, "failed", summary)
+        return
+
+    outcome = result.get("outcome", "completed")
+    if outcome not in FINAL_STATUSES:
+        outcome = "completed"
+    extra = {"crawled_at": datetime.now(timezone.utc)} if row_cls is CrawlResult else {}
+    summary = {**result["summary"], "progress": {"stage": "done"}}
+    await _finalize(
+        audit_id, row_cls, outcome, summary,
+        findings=result["findings"], pages=result["pages"], **extra,
+    )
+
+    if outcome in ("completed", "partial"):
+        try:
+            await publish_crawl_completed(
+                audit_id=audit_id,
+                project_id=result.get("project_id"),
+                root_url=result["root_url"],
+                mode=result.get("mode", "public"),
+                summary=result["summary"],
+                pages=_compact_pages(result["pages"]),
+                content_text=_build_content_snapshot(result),
+            )
+        except Exception:
+            logger.exception("Publishing crawl_completed failed", extra={"audit_id": audit_id})
 
 
 async def _get_audit_row(audit_id: str) -> PublicAuditResult | CrawlResult | None:
@@ -255,6 +362,44 @@ async def queue_full_audit_for_task_created(
             "correlation_id": correlation_id,
         },
     )
+
+
+async def _get_public_row(audit_id: str) -> PublicAuditResult:
+    async with get_session() as session:
+        res = await session.execute(select(PublicAuditResult).where(PublicAuditResult.audit_id == audit_id))
+        row = res.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="audit_not_found")
+    if is_expired(row.created_at):
+        raise HTTPException(status_code=410, detail="audit_expired")
+    return row
+
+
+@app.get("/public/audit/{audit_id}")
+async def get_public_audit(audit_id: str) -> dict:
+    """Безопасный статус и отчёт публичного аудита. Полные аудиты через этот путь недоступны."""
+    return build_public_view(await _get_public_row(audit_id))
+
+
+@app.post("/public/audit/{audit_id}/cancel")
+async def cancel_public_audit(audit_id: str) -> dict:
+    row = await _get_public_row(audit_id)
+    if row.status in FINAL_STATUSES:
+        return build_public_view(row)
+    task = _JOBS.get(audit_id)
+    if task is not None and not task.done():
+        task.cancel()
+        try:
+            await task
+        except BaseException:  # noqa: BLE001 - отмена завершает задачу исключением
+            pass
+        # Задача, отменённая до первого запуска, не успевает записать конечное состояние сама.
+        if (await _get_public_row(audit_id)).status not in FINAL_STATUSES:
+            await _finalize(audit_id, PublicAuditResult, "cancelled", {"error_code": "cancelled"})
+    else:
+        # Задание не принадлежит этому процессу (перезапуск, другая реплика): закрываем запись.
+        await _finalize(audit_id, PublicAuditResult, "cancelled", {"error_code": "cancelled"})
+    return build_public_view(await _get_public_row(audit_id))
 
 
 @app.get("/audit/{audit_id}", response_model=AuditStatusResponse)

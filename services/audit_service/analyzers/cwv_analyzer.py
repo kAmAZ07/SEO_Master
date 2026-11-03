@@ -1,4 +1,4 @@
-from services.audit_service.integrations.psi_api import fetch_pagespeed_insights
+from services.audit_service.integrations.psi_api import fetch_pagespeed_result
 
 
 def _classify(value: float | None, metric: str) -> str:
@@ -19,37 +19,44 @@ def _classify(value: float | None, metric: str) -> str:
     return "unknown"
 
 
-async def analyze_cwv(root_url: str) -> dict | None:
-    data = await fetch_pagespeed_insights(url=root_url, strategy="mobile")
+async def analyze_cwv_detailed(root_url: str, timeout: float = 15.0) -> tuple[dict | None, str | None]:
+    """Возвращает (результат, причина недоступности). Недоступность PSI — отдельное состояние, не оценка."""
+    data, reason = await fetch_pagespeed_result(url=root_url, strategy="mobile", timeout=timeout)
     if not data:
-        return None
+        return None, reason or "unavailable"
 
     metrics = data.get("metrics", {})
     lcp = metrics.get("LCP")
     inp = metrics.get("INP")
     fid = metrics.get("FID")
-    interaction = inp if inp is not None else fid
     cls = metrics.get("CLS")
 
     summary = {
+        "source": data.get("source", "pagespeed_insights_lighthouse_lab"),
+        "field_data_available": bool(data.get("field_data_available")),
         "LCP_ms": lcp,
-        "INP_ms": interaction,
+        "INP_ms": inp,
         "FID_ms": fid,
         "CLS": cls,
         "LCP_grade": _classify(lcp, "LCP"),
-        "INP_grade": _classify(interaction, "INP"),
-        "FID_grade": _classify(fid if fid is not None else interaction, "FID"),
+        "INP_grade": _classify(inp, "INP"),
+        "FID_grade": _classify(fid, "FID"),
         "CLS_grade": _classify(cls, "CLS"),
     }
 
     findings = []
     if summary["LCP_grade"] == "poor":
-        findings.append({"code": "cwv_lcp_poor", "severity": "high", "confidence": "high", "details": {"value_ms": lcp}})
+        findings.append({"code": "cwv_lcp_poor", "severity": "high", "confidence": "high", "details": {"value_ms": lcp, "source": summary["source"]}})
     if summary["INP_grade"] == "poor":
-        findings.append({"code": "cwv_inp_poor", "severity": "high", "confidence": "high", "details": {"value_ms": inp}})
+        findings.append({"code": "cwv_inp_poor", "severity": "high", "confidence": "high", "details": {"value_ms": inp, "source": summary["source"]}})
     if fid is not None and summary["FID_grade"] == "poor":
-        findings.append({"code": "cwv_fid_poor", "severity": "high", "confidence": "high", "details": {"value_ms": fid}})
+        findings.append({"code": "cwv_fid_poor", "severity": "high", "confidence": "high", "details": {"value_ms": fid, "source": summary["source"]}})
     if summary["CLS_grade"] == "poor":
-        findings.append({"code": "cwv_cls_poor", "severity": "high", "confidence": "high", "details": {"value": cls}})
+        findings.append({"code": "cwv_cls_poor", "severity": "high", "confidence": "high", "details": {"value": cls, "source": summary["source"]}})
 
-    return {"summary": summary, "findings": findings, "raw": data.get("raw", {})}
+    return {"summary": summary, "findings": findings, "raw": data.get("raw", {})}, None
+
+
+async def analyze_cwv(root_url: str) -> dict | None:
+    result, _ = await analyze_cwv_detailed(root_url)
+    return result

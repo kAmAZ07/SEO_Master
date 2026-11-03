@@ -1,49 +1,83 @@
-import asyncio
-from urllib.parse import urlparse
+"""Проверка внутренних ссылок: HEAD с ограниченным GET-фолбэком, различие 404 / запрет / сбой сети."""
+from __future__ import annotations
 
-import httpx
+from urllib.parse import urlsplit
+
+from shared.netpolicy import NetPolicyError
+
 from services.audit_service.config import settings
+from services.audit_service.netio import AuditFetcher, BudgetExhausted
+from services.audit_service.public_policy import PUBLIC_MAX_LINK_PROBES
+
+_HEAD_UNSUPPORTED = frozenset({405, 501})
+_GET_FALLBACK_BODY_LIMIT = 256 * 1024
 
 
 def _is_internal(root_url: str, candidate: str) -> bool:
-    r = urlparse(root_url)
-    c = urlparse(candidate)
-    return (r.scheme, r.netloc) == (c.scheme, c.netloc)
+    r = urlsplit(root_url)
+    c = urlsplit(candidate)
+    return (r.scheme, r.netloc.lower()) == (c.scheme, c.netloc.lower())
 
 
-async def check_links_404(root_url: str, pages: list[dict]) -> tuple[list[dict], int]:
-    findings = []
-    internal_links: set[str] = set()
+def _classify(url: str, status: int) -> dict | None:
+    if status in (404, 410):
+        return {"code": "broken_link_404", "severity": "medium", "confidence": "high", "details": {"url": url, "status": status}}
+    if 500 <= status <= 599:
+        return {"code": "broken_link_server_error", "severity": "low", "confidence": "medium", "details": {"url": url, "status": status}}
+    if status in (401, 403, 429):
+        return {"code": "link_check_blocked", "severity": "info", "confidence": "high", "details": {"url": url, "status": status}}
+    return None
 
-    for p in pages:
-        for l in p.get("links", []) or []:
-            if _is_internal(root_url, l):
-                internal_links.add(l)
-            if len(internal_links) >= settings.max_internal_link_checks:
+
+async def check_links_404(
+    root_url: str,
+    pages: list[dict],
+    fetcher: AuditFetcher | None = None,
+    limit: int | None = None,
+) -> tuple[list[dict], int]:
+    """Возвращает (findings, число проверенных ссылок). Порядок ссылок и findings детерминирован."""
+    fetcher = fetcher or AuditFetcher.create()
+    limit = min(limit or settings.max_internal_link_checks, PUBLIC_MAX_LINK_PROBES)
+
+    crawled_status = {page.get("url"): page.get("status_code") for page in pages}
+    findings: list[dict] = []
+    # Уже обойденные страницы: их статус известен без дополнительного запроса.
+    for url, status in crawled_status.items():
+        if isinstance(status, int) and (finding := _classify(url, status)) and finding["code"] == "broken_link_404":
+            findings.append(finding)
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for page in pages:
+        for link in page.get("links") or []:
+            if link in seen or link in crawled_status or not _is_internal(root_url, link):
+                continue
+            seen.add(link)
+            candidates.append(link)
+            if len(candidates) >= limit:
                 break
-        if len(internal_links) >= settings.max_internal_link_checks:
+        if len(candidates) >= limit:
             break
 
-    links = list(internal_links)
     checked = 0
-
-    async with httpx.AsyncClient(follow_redirects=True, headers={"User-Agent": settings.user_agent}, timeout=settings.default_timeout_s) as client:
-        sem = asyncio.Semaphore(10)
-
-        async def _probe(u: str):
-            nonlocal checked
-            async with sem:
-                try:
-                    r = await client.head(u)
-                    checked += 1
-                    if r.status_code == 404:
-                        findings.append({"code": "broken_link_404", "severity": "medium", "confidence": "high", "details": {"url": u}})
-                    if r.status_code in (403, 429):
-                        findings.append({"code": "link_check_blocked", "severity": "info", "confidence": "high", "details": {"url": u, "status": r.status_code}})
-                except httpx.HTTPError as e:
-                    checked += 1
-                    findings.append({"code": "link_check_error", "severity": "info", "confidence": "medium", "details": {"url": u, "error": str(e)}})
-
-        await asyncio.gather(*[_probe(u) for u in links])
+    for url in candidates:
+        try:
+            response = await fetcher.fetch(url, method="HEAD", kind="aux")
+            if response.status in _HEAD_UNSUPPORTED:
+                response = await fetcher.fetch(url, method="GET", kind="aux", max_body_bytes=_GET_FALLBACK_BODY_LIMIT)
+        except BudgetExhausted:
+            break
+        except NetPolicyError as exc:
+            if exc.code == "response_too_large":  # страница ответила, тело нам не нужно
+                checked += 1
+                continue
+            checked += 1
+            findings.append({"code": "link_check_error", "severity": "info", "confidence": "medium",
+                             "details": {"url": url, "reason": exc.code}})
+            continue
+        checked += 1
+        finding = _classify(url, response.status)
+        if finding:
+            findings.append(finding)
 
     return findings, checked

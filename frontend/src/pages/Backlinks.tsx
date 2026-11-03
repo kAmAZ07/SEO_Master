@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import api from '../api/axiosConfig'
 import { getApiErrorMessage } from '../api/authAPI'
@@ -26,7 +26,7 @@ const Backlinks = () => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const loadBacklinks = async () => {
+  const loadBacklinks = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
@@ -37,11 +37,11 @@ const Backlinks = () => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [projectId])
 
   useEffect(() => {
     void loadBacklinks()
-  }, [projectId])
+  }, [loadBacklinks])
 
   const handleAnalyze = async (event: React.FormEvent) => {
     event.preventDefault()

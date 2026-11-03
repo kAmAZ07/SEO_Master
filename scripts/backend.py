@@ -65,6 +65,10 @@ PROFILES = (
     Profile("semantic", "services/semantic_service/requirements.txt", (
         "tests/unit/test_eeat_analyzer.py",
         "tests/unit/test_ff_score_calculator.py",
+        "tests/unit/test_llm_policy.py",
+        "tests/unit/test_semantic_proposals.py",
+        "tests/unit/test_semantic_proposals_extra.py",
+        "tests/unit/test_semantic_scoring_api.py",
     )),
     Profile("reporting", "services/reporting_service/requirements.txt", (
         "tests/unit/test_csv_exporter.py",

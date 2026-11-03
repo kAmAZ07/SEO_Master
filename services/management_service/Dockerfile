@@ -15,8 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY services/management_service/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY locks/management.txt ./requirements.lock
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.lock
 
 
 FROM base as application

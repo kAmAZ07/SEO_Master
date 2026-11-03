@@ -38,8 +38,10 @@ class Settings(BaseSettings):
     PUBLIC_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=3600, env="PUBLIC_RATE_LIMIT_WINDOW_SECONDS")
     
     PUBLIC_AUDIT_MAX_PAGES: int = Field(default=10, env="PUBLIC_AUDIT_MAX_PAGES")
-    PUBLIC_AUDIT_TIMEOUT_SECONDS: int = Field(default=60, env="PUBLIC_AUDIT_TIMEOUT_SECONDS")
+    PUBLIC_AUDIT_TIMEOUT_SECONDS: int = Field(default=120, env="PUBLIC_AUDIT_TIMEOUT_SECONDS")
     PUBLIC_AUDIT_RETENTION_DAYS: int = Field(default=7, env="PUBLIC_AUDIT_RETENTION_DAYS")
+    # Прокси, которым доверяется X-Forwarded-For / X-Real-IP (CIDR списком через запятую). Заголовки от других адресов игнорируются.
+    PUBLIC_TRUSTED_PROXIES: str = Field(default="127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7", env="PUBLIC_TRUSTED_PROXIES")
     
     AUDIT_SERVICE_URL: str = Field(default="http://localhost:8001", env="AUDIT_SERVICE_URL")
     MANAGEMENT_SERVICE_URL: str = Field(default="http://localhost:8004", env="MANAGEMENT_SERVICE_URL")

@@ -1,14 +1,26 @@
-import asyncio
+"""Обход сайта для аудита.
+
+Основной (не-JS) путь работает только через `AuditFetcher` / `SafeHttpClient`: адреса
+проверяются при соединении, редиректы, размеры и время ограничены, бюджет задания общий.
+Обход ограничен одним хостом (`www.` считается тем же узлом), robots.txt применяется
+к каждому URL. JS-рендеринг (Playwright) доступен только полному аудиту, публичный его
+не использует.
+"""
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass
-from urllib.parse import urljoin, urldefrag, urlparse
+from typing import Awaitable, Callable, Optional
+from urllib.parse import urldefrag, urljoin, urlsplit, urlunsplit
 
-import httpx
 from bs4 import BeautifulSoup
-import tldextract
-from playwright.async_api import async_playwright
+from shared.netpolicy import NetPolicyError
 
 from services.audit_service.config import settings
+from services.audit_service.netio import AuditFetcher, BudgetExhausted
+from services.audit_service.analyzers.robots_checker import RobotsInfo
+
+ProgressCallback = Callable[..., Awaitable[None]]
 
 
 @dataclass
@@ -22,70 +34,98 @@ class CrawledPage:
     h1: str | None
     links: list[str]
     error: str | None
+    h1_count: int = 0
+
+
+def _canonical_url(url: str) -> str | None:
+    """Приводит URL к виду для дедупликации: схема и хост в нижнем регистре, без фрагмента и порта по умолчанию."""
+    url, _ = urldefrag(url.strip())
+    parts = urlsplit(url)
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        return None
+    host = parts.hostname.lower()
+    if ":" in host:
+        host = f"[{host}]"
+    port = parts.port
+    default = 443 if parts.scheme.lower() == "https" else 80
+    netloc = host if port in (None, default) else f"{host}:{port}"
+    return urlunsplit((parts.scheme.lower(), netloc, parts.path or "/", parts.query, ""))
 
 
 def _normalize_url(base: str, href: str) -> str | None:
     if not href:
         return None
     href = href.strip()
-    if href.startswith("mailto:") or href.startswith("tel:") or href.startswith("javascript:"):
+    lowered = href.lower()
+    if lowered.startswith(("mailto:", "tel:", "javascript:", "data:", "#")):
         return None
-    u = urljoin(base, href)
-    u, _ = urldefrag(u)
-    p = urlparse(u)
-    if p.scheme not in ("http", "https"):
+    try:
+        return _canonical_url(urljoin(base, href))
+    except ValueError:
         return None
-    return u
+
+
+def _host_key(url: str) -> str:
+    host = (urlsplit(url).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
 
 
 def _same_site(root: str, candidate: str) -> bool:
-    r = tldextract.extract(root)
-    c = tldextract.extract(candidate)
-    return (r.domain, r.suffix) == (c.domain, c.suffix)
+    """Тот же узел (без учёта `www.`). Совпадение зарегистрированного домена не даёт доступа к поддоменам."""
+    return _host_key(root) == _host_key(candidate)
 
 
-def _extract_basic(html: str) -> tuple[str | None, str | None, str | None, list[str]]:
+def _extract_basic(html: str) -> tuple[str | None, str | None, str | None, list[str], int]:
     soup = BeautifulSoup(html, "lxml")
     title = soup.title.text.strip() if soup.title and soup.title.text else None
     desc = None
     m = soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
     if m and m.get("content"):
         desc = m["content"].strip()
-    h1 = None
-    h = soup.find("h1")
-    if h and h.get_text(strip=True):
-        h1 = h.get_text(strip=True)
-    links = []
-    for a in soup.find_all("a"):
-        href = a.get("href")
-        if href:
-            links.append(href)
-    return title, desc, h1, links
+    h1_nodes = [h for h in soup.find_all("h1") if h.get_text(strip=True)]
+    h1 = h1_nodes[0].get_text(strip=True) if h1_nodes else None
+    links = [a.get("href") for a in soup.find_all("a") if a.get("href")]
+    return title, desc, h1, links, len(h1_nodes)
 
 
-async def fetch_html_httpx(url: str, timeout_s: float, headers: dict[str, str]) -> tuple[int | None, str | None, str | None, str | None]:
-    async with httpx.AsyncClient(follow_redirects=True, headers=headers, timeout=timeout_s) as client:
-        r = await client.get(url)
-        return r.status_code, str(r.url), r.text, None
+def _decode_body(body: bytes, content_type: str) -> str:
+    match = re.search(r"charset=([\w-]+)", content_type or "", re.I)
+    for encoding in ([match.group(1)] if match else []) + ["utf-8"]:
+        try:
+            return body.decode(encoding, errors="replace")
+        except LookupError:
+            continue
+    return body.decode("utf-8", errors="replace")
+
+
+def _is_html(content_type: str) -> bool:
+    lowered = (content_type or "").lower()
+    return not lowered or "html" in lowered
 
 
 async def fetch_html_playwright(url: str, timeout_ms: int, user_agent: str) -> tuple[int | None, str | None, str | None, str | None]:
+    """JS-рендеринг. Только для полного аудита; не используется в публичном режиме."""
+    from playwright.async_api import async_playwright
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent=user_agent)
-        page = await context.new_page()
         try:
-            resp = await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
-            html = await page.content()
-            status = resp.status if resp else None
-            final_url = page.url
-            await context.close()
+            context = await browser.new_context(user_agent=user_agent)
+            try:
+                page = await context.new_page()
+                resp = await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+                return (resp.status if resp else None), page.url, await page.content(), None
+            except Exception as e:  # noqa: BLE001 - любая ошибка браузера превращается в код
+                return None, None, None, type(e).__name__
+            finally:
+                await context.close()
+        finally:
             await browser.close()
-            return status, final_url, html, None
-        except Exception as e:
-            await context.close()
-            await browser.close()
-            return None, None, None, str(e)
+
+
+def _failed_page(url: str, error: str, status: int | None = None, final_url: str | None = None) -> CrawledPage:
+    return CrawledPage(url=url, status_code=status, final_url=final_url, html=None, title=None,
+                       description=None, h1=None, links=[], error=error)
 
 
 async def crawl_public(
@@ -95,79 +135,109 @@ async def crawl_public(
     js_render: bool = False,
     timeout_s: float = 10.0,
     respect_robots: bool = True,
+    *,
+    fetcher: Optional[AuditFetcher] = None,
+    robots: Optional[RobotsInfo] = None,
+    on_progress: Optional[ProgressCallback] = None,
 ) -> dict:
-    headers = {"User-Agent": settings.user_agent}
+    fetcher = fetcher or AuditFetcher.create()
+    root = _canonical_url(root_url) or root_url
     visited: set[str] = set()
-    queue: list[tuple[str, int]] = [(root_url, 0)]
+    queue: list[tuple[str, int]] = [(root, 0)]
     pages: list[CrawledPage] = []
 
-    blocked_pages_count = 0
-    timeout_count = 0
-    redirect_loops_count = 0
-    server_errors_count = 0
-    ssl_errors_count = 0
+    counters = {"timeout": 0, "ssl": 0, "redirect_loop": 0, "server_error": 0, "blocked": 0, "non_html": 0}
     anti_bot_detected = False
     spa_detected = False
     max_depth_reached = 0
+    truncated_reason: str | None = None
 
     while queue and len(pages) < max_pages:
         url, depth = queue.pop(0)
         if url in visited:
             continue
         visited.add(url)
+
+        if respect_robots and robots is not None and not robots.can_fetch(url):
+            counters["blocked"] += 1
+            continue
         max_depth_reached = max(max_depth_reached, depth)
 
+        status = final_url = html = None
+        content_type = ""
+        err: str | None = None
         try:
             if js_render:
-                status, final_url, html, err = await fetch_html_playwright(url, timeout_ms=int(timeout_s * 1000), user_agent=settings.user_agent)
+                status, final_url, html, err = await fetch_html_playwright(
+                    url, timeout_ms=int(timeout_s * 1000), user_agent=settings.user_agent
+                )
             else:
-                status, final_url, html, err = await fetch_html_httpx(url, timeout_s=timeout_s, headers=headers)
-        except httpx.TimeoutException:
-            timeout_count += 1
-            pages.append(CrawledPage(url=url, status_code=None, final_url=None, html=None, title=None, description=None, h1=None, links=[], error="timeout"))
-            continue
-        except httpx.HTTPError as e:
-            s = str(e).lower()
-            if "ssl" in s or "certificate" in s:
-                ssl_errors_count += 1
-            pages.append(CrawledPage(url=url, status_code=None, final_url=None, html=None, title=None, description=None, h1=None, links=[], error=str(e)))
+                response = await fetcher.fetch(url, kind="page")
+                status, final_url = response.status, response.final_url
+                content_type = response.headers.get("content-type", "")
+                if not _is_html(content_type):
+                    counters["non_html"] += 1
+                    if depth == 0:
+                        pages.append(_failed_page(url, "not_html", status, final_url))
+                    continue
+                html = _decode_body(response.body, content_type)
+        except BudgetExhausted as exc:
+            truncated_reason = exc.reason
+            break
+        except NetPolicyError as exc:
+            if exc.code == "timeout":
+                counters["timeout"] += 1
+                code = "timeout"
+            elif exc.code == "tls_error":
+                counters["ssl"] += 1
+                code = "ssl_error"
+            elif exc.code in ("redirect_loop", "redirect_limit"):
+                counters["redirect_loop"] += 1
+                code = "redirect_loop"
+            elif exc.is_policy_block:
+                counters["blocked"] += 1
+                code = f"blocked_{exc.code}"
+            else:
+                code = exc.code
+            pages.append(_failed_page(url, code))
+            if on_progress:
+                await on_progress("crawl", pages_done=len(pages), pages_max=max_pages)
             continue
 
         if err:
-            pages.append(CrawledPage(url=url, status_code=status, final_url=final_url, html=html, title=None, description=None, h1=None, links=[], error=err))
+            pages.append(_failed_page(url, err, status, final_url))
             continue
 
         if status in (403, 429):
             anti_bot_detected = True
-
         if status and 500 <= status <= 599:
-            server_errors_count += 1
+            counters["server_error"] += 1
 
         title = desc = h1 = None
-        raw_links: list[str] = []
-        links: list[str] = []
+        h1_count = 0
+        all_links: list[str] = []
         if html:
-            title, desc, h1, raw_links = _extract_basic(html)
+            title, desc, h1, raw_links, h1_count = _extract_basic(html)
             if title is None and desc is None and h1 is None:
-                soup = BeautifulSoup(html, "lxml")
-                body_text = soup.get_text(" ", strip=True)
+                body_text = BeautifulSoup(html, "lxml").get_text(" ", strip=True)
                 if len(body_text) < 30:
                     spa_detected = True
+            base = final_url or url
+            seen_links: set[str] = set()
+            for href in raw_links:
+                normalized = _normalize_url(base, href)
+                if normalized and normalized not in seen_links and _same_site(root, normalized):
+                    seen_links.add(normalized)
+                    all_links.append(normalized)
 
-            if depth < max_depth:
-                for href in raw_links:
-                    nu = _normalize_url(final_url or url, href)
-                    if nu and _same_site(root_url, nu) and nu not in visited:
-                        links.append(nu)
-        pages.append(CrawledPage(url=url, status_code=status, final_url=final_url, html=html, title=title, description=desc, h1=h1, links=links, error=None))
-
-        for l in links:
-            if len(queue) + len(pages) >= max_pages:
-                break
-            if l not in visited:
-                queue.append((l, depth + 1))
-
-        await asyncio.sleep(0)
+        pages.append(CrawledPage(url=url, status_code=status, final_url=final_url, html=html, title=title,
+                                 description=desc, h1=h1, links=all_links, error=None, h1_count=h1_count))
+        if depth < max_depth:
+            for link in all_links:
+                if link not in visited and len(visited) + len(queue) < 2 * max_pages:
+                    queue.append((link, depth + 1))
+        if on_progress:
+            await on_progress("crawl", pages_done=len(pages), pages_max=max_pages)
 
     coverage = {
         "attempted": len(visited),
@@ -176,21 +246,17 @@ async def crawl_public(
         "max_depth": max_depth,
         "max_depth_reached": max_depth_reached,
     }
-
     summary = {
         "coverage": coverage,
-        "timeout_count": timeout_count,
-        "ssl_errors_count": ssl_errors_count,
-        "redirect_loops_count": redirect_loops_count,
-        "server_errors_count": server_errors_count,
-        "blocked_pages_count": blocked_pages_count,
+        "timeout_count": counters["timeout"],
+        "ssl_errors_count": counters["ssl"],
+        "redirect_loops_count": counters["redirect_loop"],
+        "server_errors_count": counters["server_error"],
+        "blocked_pages_count": counters["blocked"],
+        "non_html_skipped": counters["non_html"],
         "anti_bot_detected": anti_bot_detected,
         "spa_detected": spa_detected,
         "js_render_used": js_render,
+        "truncated_reason": truncated_reason,
     }
-
-    return {
-        "root_url": root_url,
-        "pages": [p.__dict__ for p in pages],
-        "summary": summary,
-    }
+    return {"root_url": root_url, "pages": [p.__dict__ for p in pages], "summary": summary}

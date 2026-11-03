@@ -362,6 +362,11 @@ class SafeHttpClient:
         self._resolver = resolver or default_resolver
         self._inner_backend = network_backend
 
+    @property
+    def resolver(self) -> Resolver:
+        """Распознаватель имён клиента: нужен предварительным проверкам, чтобы они совпадали с политикой."""
+        return self._resolver
+
     async def fetch(
         self,
         url: str,

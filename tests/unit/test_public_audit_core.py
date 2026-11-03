@@ -315,7 +315,7 @@ def test_deadline_gives_partial_result_with_actual_coverage(psi_poor):
     assert 1 <= result["summary"]["coverage"]["processed"] < 10
 
 
-def test_request_budget_is_enforced():
+def test_request_budget_is_enforced(psi_poor):
     site = {"/": Resp(body=html_page(links=[f"/p{i}" for i in range(30)]))}
     client = FixtureClient(site)
     fetcher = AuditFetcher(client=client, budget=Budget(deadline_s=50, max_page_requests=3, max_aux_requests=2), base_policy=build_policy())

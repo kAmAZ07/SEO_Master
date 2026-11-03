@@ -1,6 +1,8 @@
+import type { ReactNode } from 'react';
+
 interface TableProps {
   headers: string[];
-  data: any[][];
+  data: ReactNode[][];
   className?: string;
 }
 

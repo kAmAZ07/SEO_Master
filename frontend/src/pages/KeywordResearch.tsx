@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import api from '../api/axiosConfig'
 import { getApiErrorMessage } from '../api/authAPI'
@@ -32,7 +32,7 @@ const KeywordResearch = () => {
 
   const hasTrackedKeywords = useMemo(() => trackedKeywords.length > 0, [trackedKeywords])
 
-  const loadTrackedKeywords = async () => {
+  const loadTrackedKeywords = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
@@ -43,11 +43,11 @@ const KeywordResearch = () => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [projectId])
 
   useEffect(() => {
     void loadTrackedKeywords()
-  }, [projectId])
+  }, [loadTrackedKeywords])
 
   const handleSearch = async (event: React.FormEvent) => {
     event.preventDefault()

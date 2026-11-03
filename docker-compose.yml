@@ -1,328 +1,263 @@
-name: seo-master
+# ???????????? ????????? ?????????. ?????? ?????? ????? gates ?? docs/PLATFORM.md.
+x-python: &python
+  init: true
+  restart: unless-stopped
+  read_only: true
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  pids_limit: 256
+  mem_limit: 1g
+  cpus: 1.0
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,size=128m,mode=1777
+    - /app/logs:rw,nosuid,nodev,size=32m,uid=10001,gid=10001,mode=0700
+    - /app/reports:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
+  networks: [backend, database]
+
+x-management-environment: &management-environment
+  ENVIRONMENT: production
+  HOST: 0.0.0.0
+  PORT: 8004
+  LOG_LEVEL: INFO
+  DATABASE_URL: postgresql://seo_runtime:${RUNTIME_DATABASE_PASSWORD:?bootstrap required}@postgres:5432/seo_local
+  REDIS_URL: redis://:${REDIS_PASSWORD:?bootstrap required}@redis:6379/0
+  RABBITMQ_HOST: rabbitmq
+  RABBITMQ_PORT: 5672
+  RABBITMQ_USER: seo_local
+  RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?bootstrap required}
+  RABBITMQ_VHOST: /
+  CELERY_BROKER_URL: amqp://seo_local:${RABBITMQ_PASSWORD:?bootstrap required}@rabbitmq:5672//
+  CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?bootstrap required}@redis:6379/1
+  AUDIT_SERVICE_URL: http://audit-service:8001
+  SEMANTIC_SERVICE_URL: http://semantic-service:8002
+  REPORTING_SERVICE_URL: http://reporting-service:8003
+  CLIENT_GATEWAY_URL: http://client-api-gateway:8005
+  INTERNAL_API_KEY: ${INTERNAL_API_KEY:?bootstrap required}
+  CORS_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+  HITL_AUTO_APPROVE_LOW_RISK: 'false'
+
+x-infrastructure-ready: &infrastructure-ready
+  postgres: {condition: service_healthy}
+  redis: {condition: service_healthy}
+  rabbitmq: {condition: service_healthy}
 
 services:
   postgres:
-    image: postgres:15-alpine
-    container_name: seo-postgres
+    image: postgres:15-bookworm@sha256:daeac543477e189e334f159133f4be6dae739b005cec2dfb9d482509fed05465
+    user: postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-seo_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-seo_pass}
-      POSTGRES_DB: ${POSTGRES_DB:-seo_platform}
-      PGDATA: /var/lib/postgresql/data/pgdata
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./database/init_schema.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-    ports:
-      - "5432:5432"
-    networks:
-      - database
+      POSTGRES_USER: seo_local_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?bootstrap required}
+      POSTGRES_DB: seo_local
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    networks: [database]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-seo_user}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+      test: [CMD, pg_isready, -U, seo_local_owner, -d, seo_local]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
 
   redis:
-    image: redis:7-alpine
-    container_name: seo-redis
-    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_pass}
-    ports:
-      - "6379:6379"
-    networks:
-      - backend
+    image: redis:7.4-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f
+    user: redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?bootstrap required}
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?bootstrap required}
+    command:
+      - sh
+      - -ec
+      - 'umask 077; printf "requirepass %s\nappendonly yes\ndir /data\n" "$${REDIS_PASSWORD}" > /tmp/seo-redis.conf; exec redis-server /tmp/seo-redis.conf'
+    volumes: [redis_data:/data]
+    networks: [backend]
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_pass}", "ping"]
-      interval: 10s
+      test: [CMD, redis-cli, ping]
+      interval: 5s
       timeout: 3s
-      retries: 5
-      start_period: 5s
+      retries: 20
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
 
   rabbitmq:
-    image: rabbitmq:3.12-management-alpine
-    container_name: seo-rabbitmq
+    image: rabbitmq:3.13-management-alpine@sha256:606d8c0d6b3c18d1da9afc53bc7cdb2a8d5486df91b5a9830e9e07626c9ae281
+    user: rabbitmq
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-seo_user}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-rabbitmq_pass}
+      RABBITMQ_DEFAULT_USER: seo_local
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?bootstrap required}
       RABBITMQ_DEFAULT_VHOST: /
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    networks:
-      - backend
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+    networks: [backend]
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
     restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
 
   audit-service:
-    build:
-      context: .
-      dockerfile: services/audit_service/Dockerfile
-    container_name: seo-audit-service
+    <<: *python
+    build: {context: ., dockerfile: services/audit_service/Dockerfile}
+    mem_limit: 2g
+    pids_limit: 512
+    shm_size: 256m
     environment:
       AUDIT_PORT: 8001
-      AUDIT_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
-      AUDIT_RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
-      AUDIT_REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
-      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:-}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "8001:8001"
-    networks:
-      - backend
-      - database
-    restart: unless-stopped
+      AUDIT_DATABASE_URL: postgresql+asyncpg://seo_runtime:${RUNTIME_DATABASE_PASSWORD:?bootstrap required}@postgres:5432/seo_local
+      AUDIT_REDIS_URL: redis://:${REDIS_PASSWORD:?bootstrap required}@redis:6379/0
+      AUDIT_RABBITMQ_URL: amqp://seo_local:${RABBITMQ_PASSWORD:?bootstrap required}@rabbitmq:5672//
+      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:?bootstrap required}
+    depends_on: *infrastructure-ready
 
   semantic-service:
-    build:
-      context: .
-      dockerfile: services/semantic_service/Dockerfile
-    container_name: seo-semantic-service
+    <<: *python
+    build: {context: ., dockerfile: services/semantic_service/Dockerfile}
     environment:
       SEMANTIC_PORT: 8002
-      SEMANTIC_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
-      SEMANTIC_RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
-      SEMANTIC_REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "8002:8002"
-    networks:
-      - backend
-      - database
-    restart: unless-stopped
+      SEMANTIC_DATABASE_URL: postgresql+asyncpg://seo_runtime:${RUNTIME_DATABASE_PASSWORD:?bootstrap required}@postgres:5432/seo_local
+      SEMANTIC_AUTO_CREATE_TABLES: 'false'
+      SEMANTIC_REDIS_URL: redis://:${REDIS_PASSWORD:?bootstrap required}@redis:6379/0
+      SEMANTIC_RABBITMQ_URL: amqp://seo_local:${RABBITMQ_PASSWORD:?bootstrap required}@rabbitmq:5672//
+    depends_on: *infrastructure-ready
 
   reporting-service:
-    build:
-      context: .
-      dockerfile: services/reporting_service/Dockerfile
-    container_name: seo-reporting-service
+    <<: *python
+    build: {context: ., dockerfile: services/reporting_service/Dockerfile}
     environment:
       REPORTING_PORT: 8003
-      REPORTING_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
-      REPORTING_RABBITMQ_URL: amqp://${RABBITMQ_USER:-seo_user}:${RABBITMQ_PASSWORD:-rabbitmq_pass}@rabbitmq:5672//
-      REPORTING_REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
-      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:-}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "8003:8003"
-    networks:
-      - backend
-      - database
-    restart: unless-stopped
+      REPORTING_DATABASE_URL: postgresql+asyncpg://seo_runtime:${RUNTIME_DATABASE_PASSWORD:?bootstrap required}@postgres:5432/seo_local
+      REPORTING_AUTO_CREATE_TABLES: 'false'
+      REPORTING_REDIS_URL: redis://:${REDIS_PASSWORD:?bootstrap required}@redis:6379/0
+      REPORTING_RABBITMQ_URL: amqp://seo_local:${RABBITMQ_PASSWORD:?bootstrap required}@rabbitmq:5672//
+      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:?bootstrap required}
+    depends_on: *infrastructure-ready
 
   tilda-adapter:
-    build:
-      context: .
-      dockerfile: adapters/tilda-adapter/Dockerfile
-    container_name: seo-tilda-adapter
+    <<: *python
+    build: {context: ., dockerfile: adapters/tilda-adapter/Dockerfile}
+    networks: [backend]
     environment:
       TILDA_PORT: 8010
-      TILDA_PUBLIC_KEY: ${TILDA_PUBLIC_KEY:-}
-      TILDA_SECRET_KEY: ${TILDA_SECRET_KEY:-}
-      TILDA_INTERNAL_API_KEY: ${TILDA_INTERNAL_API_KEY:-change-me}
-      TILDA_WEBHOOK_SECRET: ${TILDA_WEBHOOK_SECRET:-}
-      TILDA_WEBHOOK_FORWARD_URL: ${TILDA_WEBHOOK_FORWARD_URL:-http://client-api-gateway:8005/internal/tilda/webhook/published}
-      TILDA_WEBHOOK_FORWARD_API_KEY: ${TILDA_WEBHOOK_FORWARD_API_KEY:-change-me}
-    ports:
-      - "8010:8010"
-    networks:
-      - backend
-    restart: unless-stopped
+      TILDA_INTERNAL_API_KEY: ${TILDA_INTERNAL_API_KEY:?bootstrap required}
+      TILDA_WEBHOOK_SECRET: ${TILDA_WEBHOOK_SECRET:?bootstrap required}
+      TILDA_WEBHOOK_FORWARD_URL: http://client-api-gateway:8005/internal/tilda/webhook/published
+      TILDA_WEBHOOK_FORWARD_API_KEY: ${INTERNAL_API_KEY:?bootstrap required}
+
+  client-api-gateway:
+    <<: *python
+    build: {context: ., dockerfile: services/client_api_gateway/Dockerfile}
+    environment:
+      SERVICE_PORT: 8005
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql://seo_runtime:${RUNTIME_DATABASE_PASSWORD:?bootstrap required}@postgres:5432/seo_local
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?bootstrap required}
+      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:?bootstrap required}
+      MANAGEMENT_SERVICE_URL: http://management-web:8004
+      TILDA_ADAPTER_URL: http://tilda-adapter:8010
+      TILDA_INTERNAL_API_KEY: ${TILDA_INTERNAL_API_KEY:?bootstrap required}
+      CLIENT_API_TRUST_PROXY_HEADERS: 'false'
+      CORS_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+      CORS_ALLOW_CREDENTIALS: 'false'
+    depends_on:
+      postgres: {condition: service_healthy}
+      tilda-adapter: {condition: service_healthy}
 
   management-web:
+    <<: *python
     build: &management-build
       context: .
       dockerfile: services/management_service/Dockerfile
-    container_name: seo-management-web
-    command: ["uvicorn", "services.management_service.main:app", "--host", "0.0.0.0", "--port", "8004"]
-    environment: &management-env
-      HOST: 0.0.0.0
-      PORT: 8004
-      DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
-      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: ${RABBITMQ_USER:-seo_user}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-rabbitmq_pass}
-      RABBITMQ_VHOST: /
-      AUDIT_SERVICE_URL: http://audit-service:8001
-      SEMANTIC_SERVICE_URL: http://semantic-service:8002
-      REPORTING_SERVICE_URL: http://reporting-service:8003
-      CLIENT_GATEWAY_URL: http://client-api-gateway:8005
-      CLIENT_API_HMAC_KEYS_JSON: ${CLIENT_API_HMAC_KEYS_JSON:-}
-      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-change-me}
-    depends_on: &management-depends
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      audit-service:
-        condition: service_started
-      semantic-service:
-        condition: service_started
-      reporting-service:
-        condition: service_started
-      client-api-gateway:
-        condition: service_started
-    ports:
-      - "8004:8004"
+    environment: *management-environment
+    depends_on:
+      <<: *infrastructure-ready
+      audit-service: {condition: service_healthy}
+      semantic-service: {condition: service_healthy}
+      reporting-service: {condition: service_healthy}
+      client-api-gateway: {condition: service_healthy}
     networks:
-      backend:
-        aliases:
-          - management-service
+      backend: {aliases: [management-service]}
       database: {}
-    restart: unless-stopped
 
   management-worker:
+    <<: *python
     build: *management-build
-    container_name: seo-management-worker
-    command:
-      [
-        "celery",
-        "-A",
-        "services.management_service.tasks.celery_app:celery_app",
-        "worker",
-        "--loglevel=INFO",
-        "--queues=management,management_periodic",
-        "--hostname=management-worker@%h"
-      ]
-    environment: *management-env
-    depends_on: *management-depends
+    environment: *management-environment
+    command: [celery, -A, 'services.management_service.tasks.celery_app:celery_app', worker, --loglevel=INFO, '--queues=management,management_periodic', '--hostname=management-worker@%h', --concurrency=2]
+    depends_on:
+      management-web: {condition: service_healthy}
     healthcheck:
-      disable: true
-    networks:
-      - backend
-      - database
-    restart: unless-stopped
+      test: [CMD-SHELL, 'celery -A services.management_service.tasks.celery_app:celery_app inspect ping --destination="management-worker@$$HOSTNAME" --timeout=5 > /dev/null']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   management-beat:
+    <<: *python
     build: *management-build
-    container_name: seo-management-beat
-    command:
-      [
-        "celery",
-        "-A",
-        "services.management_service.tasks.celery_app:celery_app",
-        "beat",
-        "--loglevel=INFO",
-        "--schedule=/tmp/management-celerybeat-schedule"
-      ]
-    environment: *management-env
+    environment: *management-environment
+    command: [celery, -A, 'services.management_service.tasks.celery_app:celery_app', beat, --loglevel=INFO, --schedule=/tmp/management-celerybeat-schedule, --pidfile=/tmp/management-celerybeat.pid]
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      management-worker:
-        condition: service_started
+      management-worker: {condition: service_healthy}
     healthcheck:
-      disable: true
-    networks:
-      - backend
-      - database
-    restart: unless-stopped
+      test: [CMD, celery, -A, 'services.management_service.tasks.celery_app:celery_app', status, --timeout=5]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   api-gateway:
-    build:
-      context: .
-      dockerfile: services/api_gateway/Dockerfile
-    container_name: seo-api-gateway
+    <<: *python
+    build: {context: ., dockerfile: services/api_gateway/Dockerfile}
     environment:
-      API_GATEWAY_PORT: 8000
-      DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
-      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-32-chars-minimum}
+      SERVICE_PORT: 8000
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql://seo_runtime:${RUNTIME_DATABASE_PASSWORD:?bootstrap required}@postgres:5432/seo_local
+      REDIS_URL: redis://:${REDIS_PASSWORD:?bootstrap required}@redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?bootstrap required}
+      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:?bootstrap required}
       AUDIT_SERVICE_URL: http://audit-service:8001
       MANAGEMENT_SERVICE_URL: http://management-web:8004
       SEMANTIC_SERVICE_URL: http://semantic-service:8002
       REPORTING_SERVICE_URL: http://reporting-service:8003
-      ENVIRONMENT: ${ENVIRONMENT:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:-}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: seo_local
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?bootstrap required}
+      CORS_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+      CORS_ALLOW_CREDENTIALS: 'false'
+      PUBLIC_TRUSTED_PROXIES: ''
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      audit-service:
-        condition: service_started
-      management-web:
-        condition: service_started
-    ports:
-      - "8000:8000"
-    networks:
-      - backend
-      - database
-    restart: unless-stopped
+      <<: *infrastructure-ready
+      management-web: {condition: service_healthy}
 
-  client-api-gateway:
-    build:
-      context: .
-      dockerfile: services/client_api_gateway/Dockerfile
-    container_name: seo-client-api-gateway
-    environment:
-      SERVICE_PORT: 8005
-      DATABASE_URL: postgresql://${POSTGRES_USER:-seo_user}:${POSTGRES_PASSWORD:-seo_pass}@postgres:5432/${POSTGRES_DB:-seo_platform}
-      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-change-me}
-      ENVIRONMENT: ${ENVIRONMENT:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:-}
-      WORDPRESS_BASE_URL: ${WORDPRESS_BASE_URL:-}
-      WORDPRESS_HMAC_SECRET: ${WORDPRESS_HMAC_SECRET:-}
-      CLIENT_API_HMAC_KEYS_JSON: ${CLIENT_API_HMAC_KEYS_JSON:-}
-      CLIENT_API_RATE_LIMIT_PER_PROJECT: ${CLIENT_API_RATE_LIMIT_PER_PROJECT:-100}
-      CLIENT_API_RATE_LIMIT_WINDOW_SECONDS: ${CLIENT_API_RATE_LIMIT_WINDOW_SECONDS:-3600}
-      CLIENT_API_IP_WHITELIST: ${CLIENT_API_IP_WHITELIST:-}
-      CLIENT_API_TRUST_PROXY_HEADERS: ${CLIENT_API_TRUST_PROXY_HEADERS:-false}
-      TILDA_ADAPTER_URL: ${TILDA_ADAPTER_URL:-http://tilda-adapter:8010}
-      TILDA_INTERNAL_API_KEY: ${TILDA_INTERNAL_API_KEY:-change-me}
-      MANAGEMENT_SERVICE_URL: ${MANAGEMENT_SERVICE_URL:-http://management-web:8004}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      tilda-adapter:
-        condition: service_started
-    ports:
-      - "8005:8005"
-    networks:
-      - backend
-      - database
+  frontend:
+    build: {context: ., dockerfile: docker/frontend.Dockerfile}
+    init: true
     restart: unless-stopped
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    tmpfs: ['/tmp:rw,nosuid,nodev,size=32m,mode=1777']
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.5
+    ports: ['127.0.0.1:8080:8080']
+    networks: [backend]
+    depends_on:
+      api-gateway: {condition: service_healthy}
 
 volumes:
-  postgres_data:
-    driver: local
+  postgres_data: {}
+  redis_data: {}
+  rabbitmq_data: {}
 
 networks:
-  backend:
-    driver: bridge
+  backend: {}
   database:
-    driver: bridge
+    internal: true

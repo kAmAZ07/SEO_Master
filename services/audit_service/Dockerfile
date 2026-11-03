@@ -1,18 +1,15 @@
-FROM mcr.microsoft.com/playwright/python:v1.49.0-jammy
+FROM python:3.11-slim-bookworm@sha256:94a8fee35252d06ab75856f15f12c7bae67b10e8a6da93c7fded82b2610926cd
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+COPY locks/audit.txt ./requirements.lock
+RUN python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.lock
 
-COPY services/audit_service/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
-
-RUN python -m playwright install chromium
+RUN python -m playwright install --with-deps chromium && rm -rf /var/lib/apt/lists/*
 
 COPY config/ ./config/
 COPY database/ ./database/
@@ -22,5 +19,14 @@ COPY services/project_integrations /app/services/project_integrations
 COPY services/event_resilience.py ./services/event_resilience.py
 
 ENV PYTHONPATH=/app
+RUN groupadd --gid 10001 appuser && useradd --uid 10001 --gid appuser --no-create-home appuser && \
+    mkdir -p /app/logs /home/appuser && chown appuser:appuser /app/logs /home/appuser
+
+ENV HOME=/home/appuser
+USER appuser
+EXPOSE 8001
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).close()"]
 
 CMD ["uvicorn", "services.audit_service.main:app", "--host", "0.0.0.0", "--port", "8001"]

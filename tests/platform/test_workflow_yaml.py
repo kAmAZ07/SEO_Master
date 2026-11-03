@@ -13,6 +13,43 @@ INSTALL_COMMAND = (
 
 
 class WorkflowYamlTests(unittest.TestCase):
+    def test_migration_adapter_has_mandatory_native_and_real_dependency_type_gates(self) -> None:
+        workflow: object = yaml.safe_load(
+            (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
+        )
+        if not isinstance(workflow, dict):
+            self.fail("Workflow must be a mapping")
+        jobs: object = workflow.get("jobs")
+        if not isinstance(jobs, dict):
+            self.fail("Workflow must declare jobs")
+        job: object = jobs.get("migration-adapter")
+        if not isinstance(job, dict):
+            self.fail("Native migration adapter job is mandatory")
+        self.assertNotIn("if", job)
+        self.assertFalse(job.get("continue-on-error", False))
+        steps: object = job.get("steps")
+        if not isinstance(steps, list):
+            self.fail("Native migration adapter job must declare steps")
+        commands: list[str] = []
+        for step in steps:
+            if not isinstance(step, dict):
+                self.fail("Migration adapter step must be a mapping")
+            self.assertNotIn("if", step)
+            self.assertFalse(step.get("continue-on-error", False))
+            command: object = step.get("run")
+            if command is not None:
+                if not isinstance(command, str):
+                    self.fail("Migration adapter command must be a string")
+                commands.append(command)
+        expected = [
+            "python -m pip install --require-hashes --only-binary=:all: -r locks/management-test.txt",
+            "python -B -m tests.platform.test_migration_context --native-alembic",
+            "python -B -m mypy --strict --explicit-package-bases "
+            "scripts/migration_policy.py scripts/migration_context.py database/migrations/env.py "
+            "tests/platform/test_migration_policy.py tests/platform/test_migration_context.py",
+        ]
+        self.assertEqual(commands, expected)
+
     def test_every_workflow_parses_and_run_commands_remain_strings(self) -> None:
         paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
         self.assertTrue(paths)

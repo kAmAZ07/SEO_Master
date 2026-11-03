@@ -283,7 +283,7 @@ def real_version():
     return _REAL_VERSION
 
 
-def test_row_roundtrip_preserves_the_version():
+async def test_row_roundtrip_preserves_the_version():
     version = real_version()
     row = row_from_version(version)
     assert (row.version_id, row.recommendation_id, row.version, row.project_id) == (version.version_id, version.recommendation_id, 1, PROJECT)
@@ -293,7 +293,7 @@ def test_row_roundtrip_preserves_the_version():
     assert version_from_row(row) == version
 
 
-def test_tampered_rows_are_reported_as_corrupted():
+async def test_tampered_rows_are_reported_as_corrupted():
     version = real_version()
     row = row_from_version(version)
     row.payload = {**row.payload, "changes": [{**row.payload["changes"][0], "after": "Подмена заголовка страницы"}]}
@@ -371,7 +371,7 @@ async def test_successful_append_commits_without_rollback():
     assert not session.rolled_back and session.added[0].__class__.__name__ == "RecommendationVersionRow"
 
 
-def test_violated_constraint_extraction():
+async def test_violated_constraint_extraction():
     assert repository._violated_constraint(integrity("x", "diag")) == "x"
     assert repository._violated_constraint(IntegrityError("s", {}, Exception("plain"))) is None
     assert repository._violated_constraint(IntegrityError("s", {}, None)) is None

@@ -17,8 +17,8 @@
 
     python -m pip install --require-hashes --only-binary=:all: -r locks/tooling.txt
     python -m unittest discover -s tests/platform -v
-    python -m mypy --strict --explicit-package-bases scripts/backend.py scripts/pytest_required.py scripts/project.py tests/platform tests/wordpress/run.py
-    python -m ruff check scripts/backend.py scripts/pytest_required.py scripts/project.py tests/platform tests/wordpress/run.py
+    python -m mypy --strict --explicit-package-bases scripts/backend.py scripts/pytest_required.py scripts/project.py scripts/image_checks.py tests/platform tests/wordpress/run.py
+    python -m ruff check scripts/backend.py scripts/pytest_required.py scripts/project.py scripts/image_checks.py tests/platform tests/wordpress/run.py
 
 Platform-тесты не импортируют приложения, не открывают рабочий `.env`, не запускают Docker и не обращаются к БД. Регрессии pytest-policy запускают дочерний pytest с искусственными тестами, поэтому стандартной библиотеки для полного platform-набора теперь недостаточно. Статические Docker-тесты проверяют правила конфигурации, а не фактический tar context/runtime образа.
 
@@ -35,7 +35,20 @@ Frontend проверяется без изменения исходников:
 
 Если существующий frontend lint или тест не проходит, gate должен остаться красным. Правка в зоне Александры передаётся ей на согласование; отключать проверку или ставить `continue-on-error` нельзя.
 
-CI ещё не включает service builds, миграции и реальный WordPress E2E. Отдельный `WordPress isolated contracts (not E2E)` выполняет PHP syntax/contracts и общие Python/PHP vectors; это не запуск WordPress/MySQL. Успех новых unit-gates не означает готовность HITL/публикации и не заменяет негативные и конкурентные тесты следующих AR-задач.
+CI задаёт отдельные Linux image builds, но их фактический запуск ещё нужно подтвердить; миграции и реальный WordPress E2E не включены. Отдельный `WordPress isolated contracts (not E2E)` выполняет PHP syntax/contracts и общие Python/PHP vectors; это не запуск WordPress/MySQL. Успех новых unit-gates не означает готовность HITL/публикации и не заменяет негативные и конкурентные тесты следующих AR-задач.
+
+### Linux-сборка и проверка UID без запуска стека
+Job `Linux image builds and UID (not stack E2E)` на Ubuntu 24.04 создаёт одноразовую dev-конфигурацию через общий `bootstrap`, проверяет `config --quiet` и выполняет общий `build`. PostgreSQL, Redis, RabbitMQ, приложения и миграции при этом не запускаются. Нет deploy-секретов, push образов, host mounts или автоматического schema/seed. Установка пакетов и Chromium внутри build всё ещё требует сети.
+
+Внутренний helper `python -m scripts.image_checks` проверяет восемь разных Dockerfile outputs (management worker/beat используют тот же Dockerfile). По документированному правилу Compose теги — `project-service:latest`; project берётся только из собственной закрытой dev-конфигурации после проверки локального Linux daemon. Он не принимает чужое имя стека или произвольные Docker-флаги.
+
+Probe переопределяет application entrypoint: Python запускается с `-I -S -B` и импортирует только `os` для `geteuid()`, frontend выполняет BusyBox `id -u`. Ожидается фактический UID 10001 либо 101, без `--user`, который мог бы скрыть ошибку образа. Сеть отключена, filesystem read-only, capabilities удалены, healthcheck отключён, заданы CPU/memory/pids limits; ключи приложения, порты и host mounts не передаются.
+
+После `docker create` сохраняется только проверенный новый 64-hex container ID; `start --attach` ограничен тайм-аутом. `finally` удаляет только этот созданный probe-контейнер и его новые anonymous image volumes. Named volumes не подключаются и не удаляются; shared cleanup/prune, Compose down и удаление чужих ресурсов отсутствуют. Ошибка создания/UID/timeout/cleanup даёт красный gate без вывода сырых Docker diagnostics.
+
+Если `docker create` завершился тайм-аутом до получения подтверждённого ID, результат создания неизвестен: helper не угадывает контейнер по имени и не делает общий cleanup. Возможный orphan остаётся до уничтожения одноразовой hosted VM; поэтому этот CI-helper не предназначен для автоматической уборки на постоянном/shared daemon.
+
+Локальные fake-subprocess регрессии проверяют команды, error paths и ownership cleanup, но **не доказывают сборку или запуск образа**. Недоступный локальный daemon остаётся блокером; только завершённый Linux CI run может подтвердить build/UID. Даже зелёный UID probe не проверяет application startup, readonly/tmpfs-поведение сервиса, readiness, browser egress, миграции или E2E. Источник правила tagging: `https://docs.docker.com/reference/cli/docker/compose/build/`.
 
 ## Locks и изолированные backend-тесты
 Генератор — ровно uv 0.11.3, установленный через `locks/tooling.txt`, цель — Python 3.11. Источник runtime-зависимостей — исходный `requirements.txt` соответствующего сервиса. Management требует `httpx~=0.26.0`, client gateway — `httpx==0.27.0`: объединять их нельзя. Существующие manifests не изменяются; management manifest уже содержит dev/test-пакеты, поэтому первый faithful runtime-lock сохраняет их. Разделение runtime/dev — отдельная работа.

@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm@sha256:94a8fee35252d06ab75856f15f12c7bae67b10e8a6da93c7fded82b2610926cd
 
 WORKDIR /app
 
@@ -8,24 +8,22 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/app:/app/services
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    build-essential \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
 
-COPY services/client_api_gateway/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY locks/client.txt ./requirements.lock
+RUN python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.lock
 
 COPY config/ ./config/
 COPY services/client_api_gateway/ ./services/client_api_gateway/
 COPY services/project_integrations/ ./services/project_integrations/
 
-RUN mkdir -p /app/logs && chmod 777 /app/logs
+RUN groupadd --gid 10001 appuser && useradd --uid 10001 --gid appuser --no-create-home appuser && \
+    mkdir -p /app/logs && chown appuser:appuser /app/logs
+
+USER appuser
 
 EXPOSE 8005
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8005/health || exit 1
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/health', timeout=3).close()"]
 
 CMD ["python", "-m", "uvicorn", "services.client_api_gateway.main:app", "--host", "0.0.0.0", "--port", "8005"]

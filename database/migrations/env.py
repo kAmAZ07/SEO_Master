@@ -1,190 +1,86 @@
-import os
+"""Явный Alembic adapter; startup DDL и секретные провайдеры здесь запрещены."""
+from __future__ import annotations
+
+from collections.abc import Iterator, Mapping
+from contextlib import AbstractContextManager, ExitStack, contextmanager
+from pathlib import Path
 import sys
-from logging.config import fileConfig
-from sqlalchemy import engine_from_config, pool, text
+from typing import TYPE_CHECKING, cast
 from alembic import context
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Connection
+    from scripts.migration_policy import OwnershipFilters
 
-ROOT_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
 
-from config.database_config import Base
-from config.secrets_manager import get_api_credentials
-import database.models  # noqa: F401
+class AlembicEnvironment:
+    def configure_dialect(self) -> None:
+        context.configure(dialect_name="postgresql", target_metadata=None)
 
-config = context.config
-
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
-
-target_metadata = Base.metadata
-
-def get_url():
-    credentials = get_api_credentials()
-    return credentials.get_database_url()
-
-def create_schemas(connection):
-    connection.execute(text("CREATE SCHEMA IF NOT EXISTS audit_schema"))
-    connection.execute(text("CREATE SCHEMA IF NOT EXISTS semantic_schema"))
-    connection.execute(text("CREATE SCHEMA IF NOT EXISTS reporting_schema"))
-    connection.commit()
-
-def create_extensions(connection):
-    connection.execute(text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"'))
-    connection.execute(text('CREATE EXTENSION IF NOT EXISTS "pg_trgm"'))
-    connection.execute(text('CREATE EXTENSION IF NOT EXISTS "btree_gin"'))
-    connection.execute(text('CREATE EXTENSION IF NOT EXISTS "btree_gist"'))
-    connection.commit()
-
-def create_partitions(connection):
-    range_partitions = [
-        ("reporting_schema.gsc_data", [
-            ("gsc_data_2024", "2024-01-01", "2025-01-01"),
-            ("gsc_data_2025", "2025-01-01", "2026-01-01"),
-            ("gsc_data_2026", "2026-01-01", "2027-01-01"),
-            ("gsc_data_2027", "2027-01-01", "2028-01-01"),
-        ]),
-        ("reporting_schema.ga4_data", [
-            ("ga4_data_2024", "2024-01-01", "2025-01-01"),
-            ("ga4_data_2025", "2025-01-01", "2026-01-01"),
-            ("ga4_data_2026", "2026-01-01", "2027-01-01"),
-            ("ga4_data_2027", "2027-01-01", "2028-01-01"),
-        ]),
-        ("reporting_schema.yandex_webmaster_data", [
-            ("yandex_webmaster_data_2024", "2024-01-01", "2025-01-01"),
-            ("yandex_webmaster_data_2025", "2025-01-01", "2026-01-01"),
-            ("yandex_webmaster_data_2026", "2026-01-01", "2027-01-01"),
-            ("yandex_webmaster_data_2027", "2027-01-01", "2028-01-01"),
-        ]),
-    ]
-
-    for parent_table, partition_configs in range_partitions:
-        # После отката до пустой БД родительской таблицы нет: партиции создавать не к чему.
-        if not connection.execute(text("SELECT to_regclass(:name) IS NOT NULL"), {"name": parent_table}).scalar():
-            continue
-        for partition_name, start_date, end_date in partition_configs:
-            check_sql = text(f"""
-                SELECT EXISTS (
-                    SELECT 1 FROM pg_tables 
-                    WHERE schemaname = 'reporting_schema' 
-                    AND tablename = '{partition_name}'
-                )
-            """)
-            
-            result = connection.execute(check_sql).scalar()
-            
-            if not result:
-                create_sql = text(f"""
-                    CREATE TABLE IF NOT EXISTS reporting_schema.{partition_name}
-                    PARTITION OF {parent_table}
-                    FOR VALUES FROM ('{start_date}') TO ('{end_date}')
-                """)
-                connection.execute(create_sql)
-
-    hash_partitions = [
-        ("audit_schema", "crawl_results", 8),
-    ]
-    for schema_name, parent_table, modulus in hash_partitions:
-        is_partitioned = connection.execute(
-            text(
-                """
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM pg_partitioned_table pt
-                    JOIN pg_class c ON c.oid = pt.partrelid
-                    JOIN pg_namespace n ON n.oid = c.relnamespace
-                    WHERE n.nspname = :schema_name AND c.relname = :parent_table
-                )
-                """
-            ),
-            {"schema_name": schema_name, "parent_table": parent_table},
-        ).scalar()
-        if not is_partitioned:
-            continue
-
-        for remainder in range(modulus):
-            partition_name = f"{parent_table}_p{remainder}"
-            result = connection.execute(
-                text(
-                    """
-                    SELECT EXISTS (
-                        SELECT 1 FROM pg_tables
-                        WHERE schemaname = :schema_name
-                            AND tablename = :partition_name
-                    )
-                    """
-                ),
-                {"schema_name": schema_name, "partition_name": partition_name},
-            ).scalar()
-            if not result:
-                connection.execute(
-                    text(
-                        f"""
-                        CREATE TABLE IF NOT EXISTS {schema_name}.{partition_name}
-                        PARTITION OF {schema_name}.{parent_table}
-                        FOR VALUES WITH (MODULUS {modulus}, REMAINDER {remainder})
-                        """
-                    )
-                )
-
-    connection.commit()
-
-def run_migrations_offline():
-    url = config.get_main_option("sqlalchemy.url") or get_url()
-    
-    context.configure(
-        url=url,
-        target_metadata=target_metadata,
-        literal_binds=True,
-        dialect_opts={"paramstyle": "named"},
-        version_table_schema="public",
-        include_schemas=True,
-        compare_type=True,
-        compare_server_default=True,
-    )
-
-    with context.begin_transaction():
-        context.run_migrations()
-
-def run_migrations_online():
-    configuration = config.get_section(config.config_ini_section)
-    configuration["sqlalchemy.url"] = get_url()
-    
-    connectable = engine_from_config(
-        configuration,
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
-
-    with connectable.connect() as connection:
-        create_extensions(connection)
-        create_schemas(connection)
-        
+    def configure_migrations(
+        self, filters: OwnershipFilters, *, url: str | None = None,
+        connection: object | None = None, offline: bool = False,
+    ) -> None:
         context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            version_table_schema="public",
-            include_schemas=True,
-            compare_type=True,
-            compare_server_default=True,
-            include_object=include_object_filter,
+            # Core stays stdlib-only; real connections enter through the outer adapter.
+            connection=cast("Connection | None", connection),
+            url=url, literal_binds=offline,
+            dialect_opts={"paramstyle": "named"} if offline else None,
+            target_metadata=None, version_table_schema="public",
+            include_schemas=True, compare_type=True, compare_server_default=True,
+            include_name=lambda name, type_, parents: filters.include_name(
+                name, type_, {str(key): value for key, value in parents.items()},
+            ),
+            include_object=filters.include_object,
         )
 
-        with context.begin_transaction():
-            context.run_migrations()
-        
-        create_partitions(connection)
+    def configured_options(self) -> Mapping[str, object]:
+        return cast(Mapping[str, object], context.get_context().opts)
 
-def include_object_filter(object, name, type_, reflected, compare_to):
-    if type_ == "table":
-        if name.endswith(('_2024', '_2025', '_2026', '_2027')):
-            return False
-        if name.startswith("crawl_results_p") and name.removeprefix("crawl_results_p").isdigit():
-            return False
+    def begin_transaction(self) -> AbstractContextManager[object]:
+        return context.begin_transaction()
 
-    return True
+    def run_migrations(self) -> None:
+        context.run_migrations()
 
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
+
+@contextmanager
+def open_connection(url: str) -> Iterator[object]:
+    from sqlalchemy import create_engine, pool
+    from scripts.migration_policy import MigrationPolicyError
+
+    with ExitStack() as resources:
+        try:
+            engine = create_engine(
+                url, poolclass=pool.NullPool, echo=False, hide_parameters=True,
+            )
+            resources.callback(engine.dispose)
+            connection = resources.enter_context(engine.connect())
+        except Exception:
+            # Driver/URL setup errors may contain the explicit credential-bearing DSN.
+            raise MigrationPolicyError("MIGRATION_CONNECTION_FAILED") from None
+        yield connection
+
+
+def run_environment() -> None:
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from scripts.migration_context import run_migration_environment
+    from scripts.migration_policy import MigrationPolicyError
+
+    configuration = context.config
+    try:
+        url = configuration.get_main_option("sqlalchemy.url")
+    except Exception:
+        # ConfigParser interpolation errors can expose fragments of the configured DSN.
+        raise MigrationPolicyError("MIGRATION_DSN_INVALID") from None
+    run_migration_environment(
+        AlembicEnvironment(),
+        url=url,
+        connection=configuration.attributes.get("connection"),
+        offline=context.is_offline_mode(),
+        connect=open_connection,
+    )
+
+
+run_environment()

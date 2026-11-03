@@ -1,0 +1,3 @@
+/database/migrations/env.py text eol=crlf
+/services/management_service/db/models.py text eol=crlf
+/services/client_api_gateway/db/models.py text eol=crlf

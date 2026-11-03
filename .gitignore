@@ -33,6 +33,7 @@ ENV/
 .venv
 
 # Environment variables & secrets
+.seo-local/
 .env
 .env.*
 !.env.example
@@ -67,7 +68,6 @@ celerybeat.pid
 
 # Docker
 docker-compose.override.yml
-.dockerignore
 *.tar
 
 # IDE

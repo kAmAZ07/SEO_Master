@@ -1,241 +1,109 @@
-﻿<?php
-if (!defined('ABSPATH')) {
-    exit;
-}
+<?php
+if (!defined('ABSPATH')) { exit; }
 
-/**
- * Register REST routes used by SEO Master platform.
- */
+function seo_master_upgrade_required() {
+    return new WP_Error('upgrade_required', 'Legacy mutations are disabled; a trusted v2 gateway is required.', array('status' => 426));
+}
+function seo_master_v2_response(array $result) {
+    $response = new WP_REST_Response($result, 200);
+    $response->header('Cache-Control', 'no-store, private');
+    return $response;
+}
+function seo_master_handle_meta_patch($request) { return seo_master_upgrade_required(); }
+function seo_master_handle_schema_patch($request) { return seo_master_upgrade_required(); }
+function seo_master_handle_interlinks_patch($request) { return seo_master_upgrade_required(); }
+function seo_master_handle_patch_request($request, $change_type) { return seo_master_upgrade_required(); }
+function seo_master_apply_changes($post_id, $change_type, $operations) { return seo_master_upgrade_required(); }
+function seo_master_apply_meta_change($post_id, $op, $path, $value) { return seo_master_upgrade_required(); }
+function seo_master_apply_schema_change($post_id, $op, $path, $value) { return seo_master_upgrade_required(); }
+function seo_master_apply_interlinks_change($post_id, $op, $path, $value) { return seo_master_upgrade_required(); }
+
 function seo_master_register_routes() {
-    register_rest_route('seo-master/v1', '/health', array(
-        'methods' => 'GET',
-        'callback' => 'seo_master_health',
-        'permission_callback' => '__return_true',
-    ));
-
-    register_rest_route('seo-master/v1', '/meta', array(
-        'methods' => 'PATCH',
-        'callback' => 'seo_master_handle_meta_patch',
-        'permission_callback' => '__return_true',
-    ));
-
-    register_rest_route('seo-master/v1', '/schema', array(
-        'methods' => 'PATCH',
-        'callback' => 'seo_master_handle_schema_patch',
-        'permission_callback' => '__return_true',
-    ));
-
-    register_rest_route('seo-master/v1', '/interlinks', array(
-        'methods' => 'PATCH',
-        'callback' => 'seo_master_handle_interlinks_patch',
-        'permission_callback' => '__return_true',
+    register_rest_route('seo-master/v1', '/health', array('methods' => 'GET', 'callback' => 'seo_master_health', 'permission_callback' => '__return_true'));
+    foreach (array('meta', 'schema', 'interlinks') as $route) {
+        register_rest_route('seo-master/v1', '/' . $route, array('methods' => 'PATCH', 'callback' => 'seo_master_upgrade_required', 'permission_callback' => '__return_true'));
+    }
+    register_rest_route('seo-master/v2', '/capabilities', array('methods' => 'GET', 'callback' => 'seo_master_capabilities', 'permission_callback' => '__return_true'));
+    foreach (array('challenge', 'snapshot', 'dry-run', 'apply', 'rollback', 'rollback/dry-run') as $route) {
+        register_rest_route('seo-master/v2', '/' . $route, array('methods' => 'POST', 'callback' => 'seo_master_v2_request', 'permission_callback' => 'seo_master_v2_permission'));
+    }
+    register_rest_route('seo-master/v2', '/operations/(?P<operation_id>[0-9a-f-]{36})', array(
+        'methods' => 'GET', 'callback' => 'seo_master_v2_request', 'permission_callback' => 'seo_master_v2_permission',
     ));
 }
-
 function seo_master_health() {
+    return array('status' => 'discovery_only', 'plugin' => 'seo-master-connector', 'version' => SEO_MASTER_CONNECTOR_VERSION, 'protocol' => 'seo-master/v2');
+}
+function seo_master_v2_config() {
+    return new SM_V2_Config(
+        (string) get_option('seo_master_project_id', ''), (string) get_option('seo_master_site_id', ''),
+        seo_master_get_env_value(array('SEO_MASTER_KEY_ID')), seo_master_get_env_value(array('SEO_MASTER_HMAC_SECRET')),
+        seo_master_get_env_value(array('SEO_MASTER_RECEIPT_SECRET')),
+        seo_master_get_env_value(array('SEO_MASTER_TRUSTED_GATEWAY')) === '1',
+        !seo_master_has_supported_seo_plugin()
+    );
+}
+function seo_master_v2_store() {
+    global $wpdb;
+    if (!($wpdb instanceof wpdb) || !($wpdb->dbh instanceof mysqli)) { throw new SM_V2_Error('unsupported_storage', 503); }
+    return new SM_V2_WPDB_Store(new SM_V2_Mysqli($wpdb, $wpdb->dbh), static function (int $entity_id): void {
+        wp_cache_delete($entity_id, 'post_meta');
+    });
+}
+function seo_master_capabilities() {
+    global $wp_version;
+    $paired = false;
+    $storage = false;
+    $gateway = false;
+    try {
+        $config = seo_master_v2_config();
+        $paired = true;
+        $gateway = $config->can_publish();
+        seo_master_v2_store()->check_storage();
+        $storage = true;
+    } catch (SM_V2_Error $error) {
+        // Public discovery exposes only availability, never SQL, secrets or project/site identity.
+    }
     return array(
-        'status' => 'ok',
-        'plugin' => 'seo-master-connector',
-        'version' => SEO_MASTER_CONNECTOR_VERSION,
+        'protocol' => 'seo-master/v2', 'plugin_version' => SEO_MASTER_CONNECTOR_VERSION, 'wordpress_version' => (string) $wp_version,
+        'php_version' => PHP_VERSION, 'paired' => $paired, 'storage_ready' => $storage,
+        'apply_enabled' => $paired && $storage && $gateway, 'hitl_authority' => 'trusted_gateway_required',
+        'rollback_enabled' => $paired && $storage && $gateway, 'rollback_model' => 'per_original_single_use_guard_v2',
+        'manual_target_aba_detection' => false,
+        'targets' => array('published_unprotected_post', 'published_unprotected_page'),
+        'managed_fields' => seo_master_has_supported_seo_plugin() ? array('title', 'description') : array('title', 'description', 'jsonld'),
+        'operations' => array('set', 'remove'),
+        'unsupported_manual' => array('post_title', 'h1', 'content', 'html', 'internal_links'),
+        'storage_model' => 'innodb_atomic_meta_and_ledger_v2', 'snapshot_digest' => 'canonical_json_sha256_v2',
+        'runtime_validation' => 'pending_real_wordpress_innodb_matrix',
+        'yoast' => 'unverified_title_description_filters_jsonld_manual', 'rank_math' => 'unverified_title_description_filters_jsonld_manual',
+        'limitations' => array('theme_head_duplicates_require_verification', 'no_global_hook_exactly_once', 'release_package_not_verified'),
+        'limits' => array('body_bytes' => 16384, 'changes' => 3, 'title_bytes' => 512, 'description_bytes' => 2000, 'jsonld_bytes' => 8192, 'clock_skew_seconds' => 300),
     );
 }
 
-function seo_master_handle_meta_patch($request) {
-    return seo_master_handle_patch_request($request, 'meta');
-}
-
-function seo_master_handle_schema_patch($request) {
-    return seo_master_handle_patch_request($request, 'schema');
-}
-
-function seo_master_handle_interlinks_patch($request) {
-    return seo_master_handle_patch_request($request, 'interlinks');
-}
-
-/**
- * Handle incoming signed patch payload.
- */
-function seo_master_handle_patch_request($request, $change_type) {
-    $body = $request->get_body();
-    $path = wp_parse_url((string) $_SERVER['REQUEST_URI'], PHP_URL_PATH);
-    $auth = seo_master_validate_hmac($body, 'PATCH', $path);
-
-    if (is_wp_error($auth)) {
-        return $auth;
+function seo_master_v2_permission($request) {
+    // HMAC authorization is performed once in the callback against the untouched bytes, not cookies or a user id in JSON.
+    if (strlen($request->get_body()) > 16384) { return new WP_Error('request_too_large', 'Request too large.', array('status' => 413)); }
+    $query = $request->get_query_params();
+    unset($query['rest_route']);
+    if ($query !== array() || ($request->get_method() === 'POST' && strtolower(trim(explode(';', $request->get_header('content-type'))[0])) !== 'application/json')) {
+        return new WP_Error('invalid_request', 'Only the exact JSON contract is accepted.', array('status' => 400));
     }
-
-    $payload = json_decode($body, true);
-    if (!is_array($payload)) {
-        return new WP_Error('seo_master_payload', 'Invalid JSON payload', array('status' => 400));
-    }
-
-    $project_id = isset($payload['project_id']) ? sanitize_text_field((string) $payload['project_id']) : '';
-    $entity_id = isset($payload['entity_id']) ? (string) $payload['entity_id'] : '';
-    $changes = isset($payload['changes']) && is_array($payload['changes']) ? $payload['changes'] : array();
-
-    if ($project_id === '' || $entity_id === '' || empty($changes)) {
-        return new WP_Error('seo_master_payload', 'project_id, entity_id, and changes are required', array('status' => 400));
-    }
-
-    $post_id = seo_master_resolve_post_id($entity_id);
-    if ($post_id <= 0) {
-        return new WP_Error('seo_master_entity', 'Unable to resolve target post from entity_id', array('status' => 404));
-    }
-
-    $result = seo_master_apply_changes($post_id, $change_type, $changes);
-    if (is_wp_error($result)) {
-        return $result;
-    }
-
-    return array(
-        'status' => 'applied',
-        'project_id' => $project_id,
-        'post_id' => $post_id,
-        'change_type' => $change_type,
-        'applied_operations' => (int) $result['applied'],
-        'skipped_operations' => (int) $result['skipped'],
-    );
-}
-
-/**
- * Resolve a WordPress post by numeric ID or URL.
- */
-function seo_master_resolve_post_id($entity_id) {
-    if (is_numeric($entity_id)) {
-        return (int) $entity_id;
-    }
-
-    $post_id = url_to_postid($entity_id);
-    if ($post_id > 0) {
-        return (int) $post_id;
-    }
-
-    return 0;
-}
-
-/**
- * Apply JSON patch operations to post content/meta.
- */
-function seo_master_apply_changes($post_id, $change_type, $operations) {
-    $applied = 0;
-    $skipped = 0;
-
-    foreach ($operations as $operation) {
-        if (!is_array($operation)) {
-            $skipped++;
-            continue;
-        }
-
-        $op = isset($operation['op']) ? strtolower((string) $operation['op']) : '';
-        $path = isset($operation['path']) ? strtolower((string) $operation['path']) : '';
-        $value = isset($operation['value']) ? $operation['value'] : null;
-
-        if (!in_array($op, array('add', 'replace', 'remove'), true)) {
-            $skipped++;
-            continue;
-        }
-
-        if ($change_type === 'meta') {
-            $updated = seo_master_apply_meta_change($post_id, $op, $path, $value);
-        } elseif ($change_type === 'schema') {
-            $updated = seo_master_apply_schema_change($post_id, $op, $path, $value);
-        } elseif ($change_type === 'interlinks') {
-            $updated = seo_master_apply_interlinks_change($post_id, $op, $path, $value);
-        } else {
-            return new WP_Error('seo_master_change_type', 'Unsupported change type', array('status' => 400));
-        }
-
-        if ($updated) {
-            $applied++;
-        } else {
-            $skipped++;
-        }
-    }
-
-    return array('applied' => $applied, 'skipped' => $skipped);
-}
-
-function seo_master_apply_meta_change($post_id, $op, $path, $value) {
-    $is_remove = ($op === 'remove');
-
-    if ($path === '/title' || $path === '/meta_title') {
-        if ($is_remove) {
-            delete_post_meta($post_id, '_seo_master_meta_title');
-            return true;
-        }
-
-        $new_title = sanitize_text_field((string) $value);
-        update_post_meta($post_id, '_seo_master_meta_title', $new_title);
-
-        if ($path === '/title') {
-            wp_update_post(array('ID' => $post_id, 'post_title' => $new_title));
-        }
-
-        return true;
-    }
-
-    if ($path === '/description' || $path === '/meta_description') {
-        if ($is_remove) {
-            delete_post_meta($post_id, '_seo_master_meta_description');
-        } else {
-            update_post_meta($post_id, '_seo_master_meta_description', wp_kses_post((string) $value));
-        }
-        return true;
-    }
-
-    if ($path === '/h1') {
-        if ($is_remove) {
-            delete_post_meta($post_id, '_seo_master_h1');
-        } else {
-            update_post_meta($post_id, '_seo_master_h1', sanitize_text_field((string) $value));
-        }
-        return true;
-    }
-
-    return false;
-}
-
-function seo_master_apply_schema_change($post_id, $op, $path, $value) {
-    if ($path !== '/schema' && $path !== '/schema_org' && $path !== '/jsonld') {
-        return false;
-    }
-
-    if ($op === 'remove') {
-        delete_post_meta($post_id, '_seo_master_schema_jsonld');
-        return true;
-    }
-
-    $schema = is_string($value) ? trim($value) : wp_json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    if (empty($schema)) {
-        return false;
-    }
-
-    json_decode($schema, true);
-    if (json_last_error() !== JSON_ERROR_NONE) {
-        return false;
-    }
-
-    update_post_meta($post_id, '_seo_master_schema_jsonld', $schema);
     return true;
 }
-
-function seo_master_apply_interlinks_change($post_id, $op, $path, $value) {
-    if (strpos($path, '/internal_links') === false) {
-        return false;
+function seo_master_v2_request($request) {
+    try {
+        $headers = array();
+        foreach (array('project-id', 'site-id', 'key-id', 'timestamp', 'nonce', 'operation-id', 'signature') as $name) {
+            $headers['x-seo-' . $name] = $request->get_header('x-seo-' . $name);
+        }
+        $service = new SM_V2_Service(seo_master_v2_config(), seo_master_v2_store(), SEO_MASTER_CONNECTOR_VERSION);
+        $result = $service->handle($request->get_method(), $request->get_route(), $request->get_body(), $headers, time());
+        return seo_master_v2_response($result);
+    } catch (SM_V2_Error $error) {
+        return new WP_Error($error->error_code, 'SEO Master request rejected: ' . $error->error_code, array('status' => $error->http_status));
+    } catch (Throwable $error) {
+        return new WP_Error('internal_failure', 'SEO Master request failed closed; reconcile the same operation id.', array('status' => 503));
     }
-
-    if ($op === 'remove') {
-        delete_post_meta($post_id, '_seo_master_interlinks');
-        return true;
-    }
-
-    $links = array();
-    if (is_array($value)) {
-        $links = $value;
-    } elseif (is_object($value)) {
-        $links = array((array) $value);
-    }
-
-    update_post_meta($post_id, '_seo_master_interlinks', wp_json_encode($links));
-    return true;
 }

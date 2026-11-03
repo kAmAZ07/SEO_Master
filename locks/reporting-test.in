@@ -1,0 +1,2 @@
+-r ../services/reporting_service/requirements.txt
+-r pytest8.in

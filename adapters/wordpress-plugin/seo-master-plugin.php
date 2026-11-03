@@ -1,8 +1,8 @@
-﻿<?php
+<?php
 /**
  * Plugin Name: SEO Master Connector
  * Description: Secure connector that applies SEO updates received from SEO Master platform.
- * Version: 0.2.0
+ * Version: 0.3.0-dev
  * Author: SEO Master Team
  * Requires at least: 6.7
  * Requires PHP: 8.0
@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('SEO_MASTER_CONNECTOR_VERSION', '0.2.0');
+define('SEO_MASTER_CONNECTOR_VERSION', '0.3.0-dev');
 define('SEO_MASTER_CONNECTOR_PATH', plugin_dir_path(__FILE__));
 define('SEO_MASTER_CONNECTOR_URL', plugin_dir_url(__FILE__));
 
@@ -26,6 +26,10 @@ if (!seo_master_is_compatible()) {
 
 require_once SEO_MASTER_CONNECTOR_PATH . 'includes/signature-verifier.php';
 require_once SEO_MASTER_CONNECTOR_PATH . 'includes/hmac-validator.php';
+require_once SEO_MASTER_CONNECTOR_PATH . 'includes/v2-protocol.php';
+require_once SEO_MASTER_CONNECTOR_PATH . 'includes/v2-service.php';
+require_once SEO_MASTER_CONNECTOR_PATH . 'includes/v2-sql.php';
+require_once SEO_MASTER_CONNECTOR_PATH . 'includes/v2-store.php';
 require_once SEO_MASTER_CONNECTOR_PATH . 'includes/api-handler.php';
 require_once SEO_MASTER_CONNECTOR_PATH . 'includes/meta-filter.php';
 require_once SEO_MASTER_CONNECTOR_PATH . 'admin/settings.php';
@@ -34,18 +38,19 @@ require_once SEO_MASTER_CONNECTOR_PATH . 'admin/settings.php';
  * Initialize default options.
  */
 function seo_master_activate_plugin() {
+    if (!current_user_can('activate_plugins') || !current_user_can('manage_options')) {
+        wp_die(esc_html__('Administrator permission required.', 'seo-master-connector'));
+    }
     if (!seo_master_verify_current_plugin_signature()) {
         wp_die(
             esc_html__('SEO Master Connector signature verification failed. Check SEO_MASTER_PLUGIN_SIGNATURE before activation.', 'seo-master-connector')
         );
     }
 
-    if (get_option('seo_master_max_drift') === false) {
-        add_option('seo_master_max_drift', 300);
-    }
-
-    if (get_option('seo_master_project_id') === false) {
-        add_option('seo_master_project_id', '');
+    // No implicit DDL on activation/update. A separately approved isolated installation must explicitly opt in.
+    if (seo_master_get_env_value(array('SEO_MASTER_INSTALL_V2_SCHEMA')) === '1') {
+        try { seo_master_v2_store()->install_schema(); }
+        catch (SM_V2_Error $error) { wp_die(esc_html__('V2 storage preflight failed; publication remains disabled.', 'seo-master-connector')); }
     }
 
     delete_option('seo_master_hmac_secret');
@@ -62,13 +67,10 @@ function seo_master_bootstrap() {
     add_action('wp_head', 'seo_master_output_meta_tags', 5);
     add_filter('pre_get_document_title', 'seo_master_filter_document_title', 99);
     add_filter('document_title_parts', 'seo_master_filter_document_title_parts', 99);
-    add_filter('the_title', 'seo_master_filter_h1_title', 99, 2);
     add_filter('wpseo_title', 'seo_master_filter_seo_title', 99);
     add_filter('wpseo_metadesc', 'seo_master_filter_seo_description', 99);
-    add_filter('wpseo_schema_graph', 'seo_master_filter_yoast_schema_graph', 99);
     add_filter('rank_math/frontend/title', 'seo_master_filter_seo_title', 99);
     add_filter('rank_math/frontend/description', 'seo_master_filter_seo_description', 99);
-    add_filter('rank_math/json_ld', 'seo_master_filter_rank_math_schema', 99);
     add_filter('upgrader_source_selection', 'seo_master_verify_plugin_update_signature', 10, 4);
 }
 add_action('plugins_loaded', 'seo_master_bootstrap');

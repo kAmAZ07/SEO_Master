@@ -1,0 +1,2 @@
+-r ../adapters/tilda-adapter/requirements.txt
+-r pytest7.in

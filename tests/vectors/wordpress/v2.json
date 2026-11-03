@@ -1,0 +1,75 @@
+{
+  "protocol": "seo-master/v2",
+  "headers": {
+    "x-seo-timestamp": "1793715600",
+    "x-seo-nonce": "abcdefghABCDEFGH0123456789_nonce_test",
+    "x-seo-key-id": "vector-key",
+    "x-seo-project-id": "11111111-1111-4111-8111-111111111111",
+    "x-seo-site-id": "22222222-2222-4222-8222-222222222222",
+    "x-seo-operation-id": "33333333-3333-4333-8333-333333333333"
+  },
+  "signing": [
+    {"name": "empty-body", "method": "GET", "route": "/seo-master/v2/operations/33333333-3333-4333-8333-333333333333", "body": ""},
+    {"name": "empty-object", "method": "POST", "route": "/seo-master/v2/snapshot", "body": "{}"},
+    {"name": "literal-unicode", "method": "POST", "route": "/seo-master/v2/apply", "body": "{\"title\":\"Точный 😀 café\"}"},
+    {"name": "escaped-unicode", "method": "POST", "route": "/seo-master/v2/apply", "body": "{\"title\":\"\\u0422очный \\ud83d\\ude00 caf\\u00e9\"}"},
+    {"name": "combining-unicode", "method": "POST", "route": "/seo-master/v2/apply", "body": "{\"title\":\"café\"}"},
+    {"name": "quotes-slashes", "method": "POST", "route": "/seo-master/v2/apply", "body": "{\"title\":\"quote \\\" and \\\\ and /\"}"},
+    {"name": "whitespace", "method": "POST", "route": "/seo-master/v2/apply", "body": "{ \"title\": \"café\" }\n"},
+    {"name": "line-separators", "method": "POST", "route": "/seo-master/v2/dry-run", "body": "{\"title\":\"line\u2028separator\u2029\"}"}
+  ],
+  "documents": [
+    {"name": "real-list", "body": "{\"changes\":[{\"op\":\"set\",\"field\":\"title\",\"value\":\"Allowed\"}]}", "valid": true},
+    {"name": "numeric-object", "body": "{\"changes\":{\"0\":{\"op\":\"set\",\"field\":\"title\",\"value\":\"Allowed\"}}}", "valid": false},
+    {"name": "reordered-numeric-object", "body": "{\"changes\":{\"1\":{\"op\":\"remove\",\"field\":\"description\"},\"0\":{\"op\":\"set\",\"field\":\"title\",\"value\":\"Allowed\"}}}", "valid": false},
+    {"name": "operation-is-array", "body": "{\"changes\":[[\"set\",\"title\",\"Allowed\"]]}", "valid": false}
+  ],
+  "snapshots": [
+    {"entity_id": 7, "post_type": "post", "post_status": "publish", "fields": {"title": {"state": "missing"}, "description": {"state": "value", "value": ""}, "jsonld": {"state": "missing"}}},
+    {"fields": {"jsonld": {"state": "value", "value": "{\"name\":\"Текст \\\\ 😀\"}"}, "description": {"value": "café\u2028line\u2029end", "state": "value"}, "title": {"value": "  Exact \"quotes\" / \\  ", "state": "value"}}, "post_status": "publish", "post_type": "page", "entity_id": 2147483647}
+  ],
+  "rollback": [
+    {
+      "original": {
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "site_id": "22222222-2222-4222-8222-222222222222",
+        "entity_id": 7,
+        "operation_id": "33333333-3333-4333-8333-333333333333",
+        "receipt_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "request_hash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "command": {
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "site_id": "22222222-2222-4222-8222-222222222222",
+        "entity_id": 7,
+        "operation_id": "77777777-7777-4777-8777-777777777777",
+        "task_id": "88888888-8888-4888-8888-888888888888",
+        "proposal_version": "99999999-9999-4999-8999-999999999999",
+        "approval_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "reason": "Точное восстановление 😀 \\ \"quotes\"",
+        "original_operation_id": "33333333-3333-4333-8333-333333333333",
+        "original_receipt_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "original_request_hash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        "original_proposal_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "before_digest": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        "expected_after_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    }
+  ],
+  "changes": [
+    {"name": "valid-unicode", "value": [{"op": "set", "field": "title", "value": "Точный 😀"}], "valid": true},
+    {"name": "exact-remove", "value": [{"op": "remove", "field": "description"}], "valid": true},
+    {"name": "basic-jsonld", "value": [{"op": "set", "field": "jsonld", "value": "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"name\":\"Текст\"}"}], "valid": true},
+    {"name": "unknown-op", "value": [{"op": "append", "field": "title", "value": "X"}], "valid": false},
+    {"name": "unknown-field", "value": [{"op": "set", "field": "h1", "value": "X"}], "valid": false},
+    {"name": "empty-value", "value": [{"op": "set", "field": "title", "value": ""}], "valid": false},
+    {"name": "missing-value", "value": [{"op": "set", "field": "title"}], "valid": false},
+    {"name": "null-value", "value": [{"op": "set", "field": "title", "value": null}], "valid": false},
+    {"name": "remove-extra", "value": [{"op": "remove", "field": "title", "value": ""}], "valid": false},
+    {"name": "nul-value", "value": [{"op": "set", "field": "title", "value": "bad\u0000value"}], "valid": false},
+    {"name": "xss-value", "value": [{"op": "set", "field": "title", "value": "<img onerror=alert(1)>"}], "valid": false},
+    {"name": "script-close", "value": [{"op": "set", "field": "jsonld", "value": "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"name\":\"\\u003c/script\\u003e\"}"}], "valid": false},
+    {"name": "extra-key", "value": [{"op": "set", "field": "title", "value": "X", "extra": true}], "valid": false},
+    {"name": "serialized-object", "value": [{"op": "set", "field": "title", "value": "O:8:\"Injected\":0:{}"}], "valid": false}
+  ]
+}

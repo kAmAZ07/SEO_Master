@@ -1,30 +1,32 @@
-FROM python:3.11-slim
-
-WORKDIR /app
+FROM python:3.11-slim-bookworm@sha256:94a8fee35252d06ab75856f15f12c7bae67b10e8a6da93c7fded82b2610926cd
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH=/app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    build-essential \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-COPY models.py database_config.py redis_config.py celery_config.py secrets_manager.py logging_config.py ./
-COPY audit_service/ ./audit_service/
-COPY semantic_service/ ./semantic_service/
-COPY reporting_service/ ./reporting_service/
-COPY management_service/ ./management_service/
-COPY client_api_gateway/ ./client_api_gateway/
-COPY migrations/ ./migrations/
-COPY alembic.ini .
+COPY locks/management.txt ./requirements.lock
+RUN python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.lock
 
-RUN mkdir -p /app/logs /app/reports && chmod 777 /app/logs /app/reports
+COPY config/ ./config/
+COPY database/ ./database/
+COPY shared/ ./shared/
+COPY services/management_service/ ./services/management_service/
+COPY services/project_integrations/ ./services/project_integrations/
+COPY services/event_resilience.py ./services/event_resilience.py
 
-CMD ["celery", "-A", "celery_config", "worker", "--loglevel=info"]
+RUN groupadd --gid 10001 appuser && useradd --uid 10001 --gid appuser --no-create-home appuser && \
+    mkdir -p /app/logs /app/reports && chown appuser:appuser /app/logs /app/reports
+
+USER appuser
+
+EXPOSE 8004
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8004/health/ready', timeout=3).close()"]
+
+CMD ["uvicorn", "services.management_service.main:app", "--host", "0.0.0.0", "--port", "8004"]

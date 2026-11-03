@@ -310,13 +310,18 @@ class FFScore(Base, TimestampMixin):
         Index("idx_ff_score_project_id", "project_id"),
         Index("idx_ff_score_created_at", "created_at"),
         Index("idx_ff_score_root_url", "root_url"),
+        CheckConstraint("(status = 'insufficient_data') = (ff_score IS NULL)", name="ck_ff_scores_null_iff_insufficient"),
+        CheckConstraint("ff_score IS NULL OR (ff_score >= 0 AND ff_score <= 100)", name="ck_ff_scores_range"),
+        CheckConstraint("status IN ('complete', 'insufficient_data', 'legacy_estimated')", name="ck_ff_scores_status"),
         {"schema": "semantic_schema"}
     )
 
     score_id = Column(String(64), primary_key=True)
     project_id = Column(String(128), nullable=True)
     root_url = Column(String(2048), nullable=False)
-    ff_score = Column(Float, nullable=False)
+    ff_score = Column(Float, nullable=True)
+    status = Column(String(32), nullable=False)
+    formula_version = Column(String(32), nullable=False)
     components = Column(JSONB, nullable=False, default=dict)
     inputs = Column(JSONB, nullable=False, default=dict)
     thresholds = Column(JSONB, nullable=False, default=dict)
@@ -329,15 +334,59 @@ class EEATScore(Base, TimestampMixin):
         Index("idx_eeat_score_project_id", "project_id"),
         Index("idx_eeat_score_created_at", "created_at"),
         Index("idx_eeat_root_url", "root_url"),
+        CheckConstraint("(status = 'insufficient_data') = (score IS NULL)", name="ck_eeat_scores_null_iff_insufficient"),
+        CheckConstraint("score IS NULL OR (score >= 0 AND score <= 100)", name="ck_eeat_scores_range"),
+        CheckConstraint("status IN ('complete', 'insufficient_data', 'legacy_estimated')", name="ck_eeat_scores_status"),
         {"schema": "semantic_schema"}
     )
 
     score_id = Column(String(64), primary_key=True)
     project_id = Column(String(128), nullable=True)
     root_url = Column(String(2048), nullable=False)
-    score = Column(Float, nullable=False)
+    score = Column(Float, nullable=True)
+    status = Column(String(32), nullable=False)
+    formula_version = Column(String(32), nullable=False)
     breakdown = Column(JSONB, nullable=False, default=dict)
     signals = Column(JSONB, nullable=False, default=dict)
+
+
+class RecommendationVersionRecord(Base):
+    """Неизменяемая версия предложения (AL-5). Только добавление: UPDATE запрещён триггером БД."""
+    __tablename__ = "recommendation_versions"
+    __table_args__ = (
+        UniqueConstraint("recommendation_id", "version", name="uq_recommendation_versions_version"),
+        CheckConstraint("version >= 1", name="ck_recommendation_versions_version"),
+        CheckConstraint("(version = 1) = (previous_version_id IS NULL)", name="ck_recommendation_versions_lineage"),
+        CheckConstraint(
+            "operation_type IN ('title', 'description', 'h1', 'schema_jsonld', 'content_edit', 'internal_link')",
+            name="ck_recommendation_versions_operation",
+        ),
+        CheckConstraint("execution_mode IN ('managed', 'manual')", name="ck_recommendation_versions_mode"),
+        CheckConstraint("length(content_hash) = 64", name="ck_recommendation_versions_hash"),
+        Index("idx_recommendation_versions_latest", "project_id", "target_url", "operation_type", "version"),
+        Index("idx_recommendation_versions_project_created", "project_id", "created_at"),
+        Index("idx_recommendation_versions_hash", "content_hash"),
+        Index(
+            "uq_recommendation_versions_first", "project_id", "target_url", "operation_type",
+            unique=True, postgresql_where=text("version = 1"),
+        ),
+        {"schema": "semantic_schema"}
+    )
+
+    version_id = Column(String(36), primary_key=True)
+    recommendation_id = Column(String(36), nullable=False)
+    version = Column(Integer, nullable=False)
+    previous_version_id = Column(String(36), nullable=True)
+    project_id = Column(String(36), nullable=False)
+    task_id = Column(String(128), nullable=True)
+    target_url = Column(String(2048), nullable=False)
+    target_origin = Column(String(300), nullable=False)
+    operation_type = Column(String(32), nullable=False)
+    execution_mode = Column(String(16), nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    schema_version = Column(String(40), nullable=False)
+    payload = Column(JSONB, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class ContentDraft(Base, TimestampMixin):

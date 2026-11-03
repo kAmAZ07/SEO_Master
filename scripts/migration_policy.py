@@ -51,7 +51,7 @@ CORE_TABLES = frozenset(
         )),
         ("semantic_schema", (
             "ff_scores", "eeat_scores", "content_drafts", "semantic_analysis",
-            "content_gaps", "llm_generations", "semantic_events",
+            "content_gaps", "llm_generations", "semantic_events", "recommendation_versions",
         )),
         ("reporting_schema", (
             "gsc_data", "ga4_data", "yandex_webmaster_data", "reports",

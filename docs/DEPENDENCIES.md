@@ -7,10 +7,10 @@
 - `client`: `services/client_api_gateway/requirements.txt`, 1 unit-файл.
 - `api`: `services/api_gateway/requirements.txt`, 13 unit-файлов, включая shared projects/netpolicy и project integrations.
 - `audit`: `services/audit_service/requirements.txt`, 8 unit-файлов.
-- `semantic`: `services/semantic_service/requirements.txt`, 2 unit-файла.
+- `semantic`: `services/semantic_service/requirements.txt`, 6 unit-файлов.
 - `reporting`: `services/reporting_service/requirements.txt`, 2 unit-файла.
 - `tilda`: `adapters/tilda-adapter/requirements.txt`, 1 unit-файл.
-Все 30 существующих `tests/unit/test_*.py` распределены. Неизвестный unit-файл или изменение обнаруженного набора сервиса останавливает проверку до pytest; нельзя просто добавить тест и оставить его за пределами обязательного gate.
+Все 36 существующих `tests/unit/test_*.py` распределены. Неизвестный unit-файл или изменение обнаруженного набора сервиса останавливает проверку до pytest; нельзя просто добавить тест и оставить его за пределами обязательного gate.
 ## Почему locks раздельны
 Management требует httpx 0.26, client — 0.27, audit/reporting используют другие версии FastAPI, SQLAlchemy и pytest. Объединение manifests подменило бы реальные контейнерные зависимости.
 `locks/pytest7.in` закрепляет pytest 7.4.4 / pytest-asyncio 0.23.8, `locks/pytest8.in` — pytest 8.3.3 / pytest-asyncio 0.24.0. Audit и reporting получают второй набор; остальные новые профили — первый. API test-lock добавляет respx 0.21.1, уже объявленный в audit manifest: без него целый файл public-gateway тестов превращался бы в module-level skip. Исходный httpx API при этом остаётся 0.26.0.

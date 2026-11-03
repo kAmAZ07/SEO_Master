@@ -30,6 +30,10 @@
 /tests/unit/test_cwv_analyzer.py @sshpv
 /tests/unit/test_eeat_analyzer.py @sshpv
 /tests/unit/test_ff_score_calculator.py @sshpv
+/tests/unit/test_llm_policy.py @sshpv
+/tests/unit/test_semantic_proposals.py @sshpv
+/tests/unit/test_semantic_proposals_extra.py @sshpv
+/tests/unit/test_semantic_scoring_api.py @sshpv
 /tests/unit/test_meta_checker.py @sshpv
 /tests/unit/test_metrics_calculator.py @sshpv
 /tests/unit/test_netpolicy.py @sshpv
@@ -47,6 +51,7 @@
 /tests/unit/test_projects_gateway.py @sshpv
 /tests/unit/test_public_audit_claim_token.py @sshpv
 /tests/integration/test_migrations_postgres.py @sshpv
+/tests/integration/test_semantic_postgres.py @sshpv
 
 # Арсений: согласование, CMS и платформа.
 /.github/ @kAmAZ07

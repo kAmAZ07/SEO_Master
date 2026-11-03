@@ -43,7 +43,10 @@ def setup_error_handlers(app: FastAPI) -> None:
                     "request_id": request_id,
                     "timestamp": datetime.utcnow().isoformat()
                 }
-            }
+            },
+            # Retry-After, WWW-Authenticate и заголовки лимитов, заданные при выбросе исключения,
+            # должны дойти до клиента (ТЗ §3.4).
+            headers=getattr(exc, "headers", None),
         )
     
     @app.exception_handler(RequestValidationError)

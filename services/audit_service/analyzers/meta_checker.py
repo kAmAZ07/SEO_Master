@@ -64,7 +64,7 @@ def check_canonical(url: str | None, html: str) -> list[dict]:
     return findings
 
 
-def check_meta(url: str | None, title: str | None, description: str | None, h1: str | None) -> list[dict]:
+def check_meta(url: str | None, title: str | None, description: str | None, h1: str | None, h1_count: int | None = None) -> list[dict]:
     findings = []
     u = url or ""
 
@@ -92,5 +92,7 @@ def check_meta(url: str | None, title: str | None, description: str | None, h1: 
         hl = len(h1.strip())
         if hl < 5:
             findings.append({"code": "h1_too_short", "severity": "low", "confidence": "high", "details": {"url": u, "len": hl}})
+        if h1_count is not None and h1_count > 1:
+            findings.append({"code": "h1_multiple", "severity": "low", "confidence": "high", "details": {"url": u, "count": h1_count}})
 
     return findings

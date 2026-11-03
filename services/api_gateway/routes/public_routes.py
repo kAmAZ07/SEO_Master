@@ -1,9 +1,13 @@
-from datetime import datetime
+import ipaddress
+import re
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+
 import httpx
 import redis
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, validator
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field, field_validator
+from shared.netpolicy import NetPolicy, NetPolicyError, is_public_ip, parse_target
 
 from config.logging_config import get_logger
 from services.api_gateway.config import settings, get_redis_config
@@ -11,6 +15,7 @@ from services.api_gateway.config import settings, get_redis_config
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/public", tags=["Public"])
 
+# Окно фиксированное: отсчёт от первого принятого запуска, шестой запуск получает 429.
 RATE_LIMIT_SCRIPT = """
 local current = redis.call('INCR', KEYS[1])
 if current == 1 then
@@ -23,6 +28,42 @@ if ttl < 0 then
 end
 return {current, ttl}
 """
+
+_UID_PATTERN = re.compile(r"^[0-9a-fA-F-]{8,64}$")
+_UNAVAILABLE_RETRY_AFTER = "30"
+
+# Этап -> доля выполненной работы. Внутри `crawl` доля растёт по числу обработанных страниц.
+_STAGE_PROGRESS = {
+    "queued": 0,
+    "starting": 3,
+    "precheck": 6,
+    "robots": 10,
+    "sitemap": 15,
+    "crawl": 20,
+    "analyze": 72,
+    "links": 80,
+    "psi": 90,
+    "done": 100,
+}
+_CRAWL_RANGE = (20, 70)
+_STAGE_MESSAGES = {
+    "queued": "Аудит поставлен в очередь",
+    "starting": "Подготовка к проверке",
+    "precheck": "Проверка адреса",
+    "robots": "Чтение robots.txt",
+    "sitemap": "Проверка sitemap.xml",
+    "crawl": "Обход страниц",
+    "analyze": "Анализ метаданных и разметки",
+    "links": "Проверка внутренних ссылок",
+    "psi": "Запрос PageSpeed Insights",
+}
+_FINAL_MESSAGES = {
+    "completed": "Аудит завершён",
+    "partial": "Аудит завершён частично: покрытие ограничено, причины указаны в отчёте",
+    "failed": "Аудит не выполнен",
+    "cancelled": "Аудит отменён",
+    "expired": "Срок хранения результата истёк",
+}
 
 
 def _build_redis_client() -> Optional[redis.Redis]:
@@ -62,6 +103,7 @@ def _rate_limit_unavailable(exc: Exception | None = None) -> HTTPException:
             "error": "rate_limit_unavailable",
             "message": "Public audit rate limiting is temporarily unavailable. Please try again later.",
         },
+        headers={"Retry-After": _UNAVAILABLE_RETRY_AFTER},
     )
 
 
@@ -74,13 +116,57 @@ def _get_redis_client() -> redis.Redis:
     return redis_client
 
 
+def _trusted_networks() -> list:
+    networks = []
+    for item in (settings.PUBLIC_TRUSTED_PROXIES or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            logger.error("Invalid PUBLIC_TRUSTED_PROXIES entry ignored", extra={"entry": item})
+    return networks
+
+
+def _parse_ip(value: str):
+    try:
+        return ipaddress.ip_address(value.strip().split("%", 1)[0])
+    except ValueError:
+        return None
+
+
+def _client_ip(request: Request) -> str:
+    """Адрес клиента для ограничения частоты.
+
+    Заголовки X-Forwarded-For / X-Real-IP учитываются только если соединение пришло от
+    доверенного прокси. Цепочка разбирается справа налево: первый недоверенный адрес — клиент,
+    всё левее может быть подделано отправителем и игнорируется.
+    """
+    peer_raw = request.client.host if request.client else ""
+    peer = _parse_ip(peer_raw)
+    if peer is None:
+        return peer_raw or "unknown"
+    trusted = _trusted_networks()
+    if not any(peer in network for network in trusted):
+        return str(peer)
+
+    for candidate in reversed([part for part in request.headers.get("x-forwarded-for", "").split(",") if part.strip()]):
+        ip = _parse_ip(candidate)
+        if ip is not None and not any(ip in network for network in trusted):
+            return str(ip)
+    real_ip = _parse_ip(request.headers.get("x-real-ip", ""))
+    if real_ip is not None and not any(real_ip in network for network in trusted):
+        return str(real_ip)
+    return str(peer)
+
+
 def _rate_limit_key(request: Request) -> str:
-    forwarded_for = request.headers.get("x-forwarded-for", "")
-    real_ip = request.headers.get("x-real-ip", "")
-    client_ip = forwarded_for.split(",", 1)[0].strip() or real_ip.strip()
-    if not client_ip:
-        client_ip = request.client.host if request.client else "unknown"
-    return f"rate_limit:public_audit:{client_ip}"
+    ip = _parse_ip(_client_ip(request))
+    if ip is not None and ip.version == 6:
+        # Один пользователь IPv6 обычно владеет целой подсетью /64: считаем её одним клиентом.
+        ip = ipaddress.ip_network(f"{ip}/64", strict=False).network_address
+    return f"rate_limit:public_audit:{ip if ip is not None else _client_ip(request)}"
 
 
 def _rate_limit_headers(limit: int, remaining: int, reset_in_seconds: int) -> Dict[str, str]:
@@ -96,16 +182,18 @@ class QuickAuditRequest(BaseModel):
     url: str = Field(..., description="Website URL to audit")
     email: Optional[str] = Field(None, description="Optional email for notifications")
 
-    @validator("url")
+    @field_validator("url")
+    @classmethod
     def validate_url(cls, v: str) -> str:
-        v = v.strip().lower()
-        if not v.startswith(("http://", "https://")):
-            raise ValueError("URL must start with http:// or https://")
-
-        blocked = ("localhost", "127.0.0.1", "192.168.", "10.", "172.16.", "172.31.")
-        if any(token in v for token in blocked):
-            raise ValueError("Local and private network URLs are not allowed")
-
+        """Синтаксическая проверка по единой сетевой политике. Адреса проверяются ещё раз в audit-service."""
+        v = v.strip()
+        try:
+            target = parse_target(v, NetPolicy())
+        except NetPolicyError as exc:
+            raise ValueError(f"URL is not allowed ({exc.code})") from exc
+        # Адреса-литералы можно отклонить сразу, без DNS; имена проверяются в audit-service при соединении.
+        if _parse_ip(target.host) is not None and not is_public_ip(target.host):
+            raise ValueError("URL is not allowed (address_blocked)")
         return v
 
 
@@ -115,33 +203,35 @@ class AuditStatusResponse(BaseModel):
     root_url: Optional[str] = None
     url: Optional[str] = None
     status: str
+    stage: Optional[str] = None
     progress: int = 0
+    counters: Dict[str, int] = Field(default_factory=dict)
     message: str = ""
     results: Optional[Dict[str, Any]] = None
     created_at: str
     completed_at: Optional[str] = None
+    expires_at: Optional[str] = None
 
 
-def _status_to_progress(status: str) -> int:
-    if status == "completed":
+def _progress_percent(status: str, stage: Optional[str], counters: Dict[str, Any]) -> int:
+    """Доля выполнения по реальному этапу и счётчикам, а не по одному статусу."""
+    if status in ("completed", "partial", "failed", "cancelled", "expired"):
         return 100
-    if status == "running":
-        return 60
+    if status == "queued" or not stage:
+        return 0
+    if stage == "crawl":
+        done, total = int(counters.get("pages_done") or 0), int(counters.get("pages_max") or 0)
+        low, high = _CRAWL_RANGE
+        return low + (round((high - low) * min(done, total) / total) if total > 0 else 0)
+    return _STAGE_PROGRESS.get(stage, 0)
+
+
+def _status_message(status: str, stage: Optional[str]) -> str:
+    if status in _FINAL_MESSAGES:
+        return _FINAL_MESSAGES[status]
     if status == "queued":
-        return 10
-    if status == "failed":
-        return 100
-    return 0
-
-
-def _status_to_message(status: str) -> str:
-    messages = {
-        "queued": "Audit queued",
-        "running": "Audit in progress",
-        "completed": "Audit completed",
-        "failed": "Audit failed",
-    }
-    return messages.get(status, "Audit status unknown")
+        return _STAGE_MESSAGES["queued"]
+    return _STAGE_MESSAGES.get(stage or "", "Аудит выполняется")
 
 
 async def check_rate_limit(request: Request) -> Dict[str, int]:
@@ -183,29 +273,24 @@ async def check_rate_limit(request: Request) -> Dict[str, int]:
     }
 
 
-@router.post("/quick-audit", response_model=Dict[str, Any])
-async def create_quick_audit(
-    audit_request: QuickAuditRequest,
-    rate_limit: Dict[str, int] = Depends(check_rate_limit),
-):
+def _refund_rate_limit(request: Request) -> None:
+    """Запуск не принят из-за сбоя нашей стороны: возвращаем единицу лимита (best effort)."""
     try:
-        payload = {
-            "root_url": audit_request.url,
-            "site_type_hint": "unknown",
-            "platform": "generic",
-            "options": {
-                "max_pages": settings.PUBLIC_AUDIT_MAX_PAGES,
-                "max_depth": 2,
-                "js_render": False,
-                "timeout": float(settings.PUBLIC_AUDIT_TIMEOUT_SECONDS),
-            },
-        }
+        _get_redis_client().decr(_rate_limit_key(request))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Rate-limit refund failed", extra={"error_type": type(exc).__name__})
+
+
+@router.post("/quick-audit", response_model=Dict[str, Any])
+async def create_quick_audit(audit_request: QuickAuditRequest, request: Request):
+    # Лимит списывается только для запросов, прошедших проверку тела: невалидный URL запуском не считается.
+    rate_limit = await check_rate_limit(request)
+    try:
+        # Лимиты страниц и глубины заданы audit-service; клиентские опции не передаются.
+        payload = {"root_url": audit_request.url, "site_type_hint": "unknown", "platform": "generic"}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{settings.AUDIT_SERVICE_URL}/audit/public",
-                json=payload,
-            )
+            response = await client.post(f"{settings.AUDIT_SERVICE_URL}/audit/public", json=payload)
             response.raise_for_status()
             result = response.json()
 
@@ -217,65 +302,106 @@ async def create_quick_audit(
             "success": True,
             "uid": audit_uid,
             "audit_id": audit_uid,
-            "status": "processing",
-            "message": "Audit started",
+            "status": "queued",
+            "message": _STAGE_MESSAGES["queued"],
+            "status_url": f"/api/public/audit-status/{audit_uid}",
             "estimated_time_seconds": settings.PUBLIC_AUDIT_TIMEOUT_SECONDS,
+            "expires_in_days": settings.PUBLIC_AUDIT_RETENTION_DAYS,
             "rate_limit": rate_limit,
         }
 
+    except HTTPException:
+        _refund_rate_limit(request)
+        raise
     except httpx.HTTPStatusError as exc:
-        logger.error("Audit service error", extra={"status_code": exc.response.status_code, "body": exc.response.text[:500]})
-        raise HTTPException(status_code=exc.response.status_code, detail="Failed to start audit") from exc
+        _refund_rate_limit(request)
+        logger.error("Audit service error", extra={"status_code": exc.response.status_code})
+        status_code = 400 if exc.response.status_code in (400, 422) else 502
+        raise HTTPException(status_code=status_code, detail="Failed to start audit") from exc
     except httpx.RequestError as exc:
-        logger.error(f"Failed to connect to Audit Service: {exc}")
-        raise HTTPException(status_code=503, detail="Audit service temporarily unavailable") from exc
+        _refund_rate_limit(request)
+        logger.error("Failed to connect to Audit Service", extra={"error_type": type(exc).__name__})
+        raise HTTPException(status_code=503, detail="Audit service temporarily unavailable", headers={"Retry-After": _UNAVAILABLE_RETRY_AFTER}) from exc
+
+
+def _check_uid(uid: str) -> None:
+    if not _UID_PATTERN.match(uid or ""):
+        raise HTTPException(status_code=404, detail="Audit not found or expired")
+
+
+def _map_audit_service_error(response: httpx.Response) -> None:
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail="Audit not found or expired")
+    if response.status_code == 410:
+        raise HTTPException(status_code=410, detail={"error": "audit_expired", "message": "Audit result is no longer stored"})
+    response.raise_for_status()
+
+
+def _to_status_response(uid: str, view: Dict[str, Any]) -> AuditStatusResponse:
+    status_value = view.get("status", "unknown")
+    stage = view.get("stage")
+    counters = {k: int(v) for k, v in (view.get("progress") or {}).items() if isinstance(v, (int, float))}
+    final = status_value in ("completed", "partial", "failed", "cancelled", "expired")
+    created_at = view.get("created_at") or datetime.now(timezone.utc).isoformat()
+    top_findings = view.get("top_findings") or []
+    summary = view.get("summary") or {}
+    results = None
+    if final or status_value in ("completed", "partial"):
+        results = {
+            "summary": summary,
+            "findings": top_findings,
+            "top_findings": top_findings,
+            "findings_count": int(view.get("findings_count") or 0),
+            "pages": view.get("pages") or [],
+            "checks": summary.get("checks", {}),
+            "partial_reasons": summary.get("partial_reasons", []),
+            "error_code": summary.get("error_code"),
+        }
+    return AuditStatusResponse(
+        uid=uid,
+        audit_id=uid,
+        root_url=view.get("root_url"),
+        url=view.get("root_url"),
+        status=status_value,
+        stage=stage,
+        progress=_progress_percent(status_value, stage, counters),
+        counters=counters,
+        message=_status_message(status_value, stage),
+        results=results,
+        created_at=created_at,
+        completed_at=view.get("updated_at") if final else None,
+        expires_at=view.get("expires_at"),
+    )
 
 
 @router.get("/audit-status/{uid}", response_model=AuditStatusResponse)
 async def get_audit_status(uid: str):
+    _check_uid(uid)
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{settings.AUDIT_SERVICE_URL}/audit/{uid}")
-
-        if response.status_code == 404:
-            raise HTTPException(status_code=404, detail="Audit not found or expired")
-
-        response.raise_for_status()
-        result = response.json()
-
-        if result.get("mode") != "public":
-            raise HTTPException(status_code=404, detail="Audit not found or expired")
-
-        status_value = result.get("status", "unknown")
-        created_at = result.get("created_at") or datetime.utcnow().isoformat()
-        completed_at = result.get("updated_at") if status_value in {"completed", "failed"} else None
-        all_findings = result.get("findings", [])
-        top_findings = result.get("top_findings")
-        if not isinstance(top_findings, list):
-            top_findings = all_findings[:5] if isinstance(all_findings, list) else []
-
-        return AuditStatusResponse(
-            uid=uid,
-            audit_id=uid,
-            root_url=result.get("root_url"),
-            url=result.get("root_url"),
-            status=status_value,
-            progress=_status_to_progress(status_value),
-            message=_status_to_message(status_value),
-            results={
-                "summary": result.get("summary", {}),
-                "findings": top_findings,
-                "top_findings": top_findings,
-                "findings_count": len(all_findings) if isinstance(all_findings, list) else 0,
-                "pages": result.get("pages", []),
-            },
-            created_at=created_at,
-            completed_at=completed_at,
-        )
-
+            response = await client.get(f"{settings.AUDIT_SERVICE_URL}/public/audit/{uid}")
+        _map_audit_service_error(response)
+        return _to_status_response(uid, response.json())
+    except httpx.HTTPStatusError as exc:
+        logger.error("Audit service error", extra={"status_code": exc.response.status_code})
+        raise HTTPException(status_code=502, detail="Audit service error") from exc
     except httpx.RequestError as exc:
-        logger.error(f"Failed to connect to Audit Service: {exc}")
-        raise HTTPException(status_code=503, detail="Audit service temporarily unavailable") from exc
+        logger.error("Failed to connect to Audit Service", extra={"error_type": type(exc).__name__})
+        raise HTTPException(status_code=503, detail="Audit service temporarily unavailable", headers={"Retry-After": "5"}) from exc
+
+
+@router.post("/audit/{uid}/cancel", response_model=AuditStatusResponse)
+async def cancel_audit(uid: str):
+    _check_uid(uid)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(f"{settings.AUDIT_SERVICE_URL}/public/audit/{uid}/cancel")
+        _map_audit_service_error(response)
+        return _to_status_response(uid, response.json())
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail="Audit service error") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail="Audit service temporarily unavailable", headers={"Retry-After": "5"}) from exc
 
 
 @router.get("/rate-limit-info")

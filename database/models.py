@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, JSON, Float, Date, ForeignKey, Index, BigInteger, Boolean, DateTime, Computed
+from sqlalchemy import Column, Integer, String, Text, JSON, Float, Date, ForeignKey, Index, BigInteger, Boolean, DateTime, Computed, CheckConstraint, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -37,16 +37,126 @@ class AuditResultMixin:
     options = Column(JSONB, nullable=False, default=dict)
 
 
-class Project(Base, TimestampMixin, UUIDMixin):
-    __tablename__ = "projects"
-    __table_args__ = {"schema": "audit_schema"}
-    
+class Workspace(Base, TimestampMixin, UUIDMixin):
+    """Рабочее пространство. Для RC у каждого пользователя ровно одно личное (kind='personal')."""
+    __tablename__ = "workspaces"
+    __table_args__ = (
+        CheckConstraint("kind IN ('personal', 'team')", name="ck_workspaces_kind"),
+        Index(
+            "uq_workspaces_one_personal_per_owner",
+            "owner_id",
+            unique=True,
+            postgresql_where=text("kind = 'personal'"),
+            sqlite_where=text("kind = 'personal'"),
+        ),
+        {"schema": "audit_schema"},
+    )
+
     name = Column(String(255), nullable=False)
-    url = Column(String(2048), nullable=False, unique=True)
+    kind = Column(String(16), nullable=False, default="personal")
+    owner_id = Column(String(36), nullable=False)
+
+
+class WorkspaceMember(Base, TimestampMixin):
+    __tablename__ = "workspace_members"
+    __table_args__ = (
+        CheckConstraint("role IN ('owner', 'admin', 'reviewer', 'deployer', 'viewer')", name="ck_workspace_members_role"),
+        Index("idx_workspace_members_user_id", "user_id"),
+        {"schema": "audit_schema"},
+    )
+
+    workspace_id = Column(String(36), ForeignKey("audit_schema.workspaces.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(String(36), primary_key=True)
+    role = Column(String(16), nullable=False)
+
+
+class Project(Base, TimestampMixin, UUIDMixin):
+    """Канонический проект. `url` хранится как ввёл пользователь, область задают origin и path_prefix.
+
+    origin/path_prefix пусты только у унаследованных строк, чей адрес нельзя разобрать или
+    совпал с другим проектом того же workspace (status='scope_review'): такие проекты читаются,
+    но не допускаются к операциям, зависящим от области.
+    """
+    __tablename__ = "projects"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "origin", "path_prefix", name="uq_projects_workspace_scope"),
+        Index("idx_projects_workspace_id", "workspace_id"),
+        {"schema": "audit_schema"},
+    )
+
+    name = Column(String(255), nullable=False)
+    url = Column(String(2048), nullable=False)
+    description = Column(Text, nullable=True)
     status = Column(String(50), default="active")
     owner_id = Column(String(36), nullable=False)
-    
+    workspace_id = Column(String(36), ForeignKey("audit_schema.workspaces.id"), nullable=False)
+    origin = Column(String(2048), nullable=True)
+    path_prefix = Column(String(1024), nullable=True)
+
     crawls = relationship("Crawl", back_populates="project", cascade="all, delete-orphan")
+    authorizations = relationship("DomainAuthorization", back_populates="project", cascade="all, delete-orphan")
+
+
+class DomainAuthorization(Base, TimestampMixin, UUIDMixin):
+    """Подтверждение прав на область проекта (ТЗ §3.3, §5.2). Состояния: shared/projects/authorization_state.py."""
+    __tablename__ = "domain_authorizations"
+    __table_args__ = (
+        CheckConstraint("method IN ('http_challenge')", name="ck_domain_authorizations_method"),
+        CheckConstraint(
+            "status IN ('pending', 'verified', 'superseded', 'expired', 'failed', 'revoked')",
+            name="ck_domain_authorizations_status",
+        ),
+        # Не более одного выданного и одного действующего подтверждения на проект: параллельные
+        # запросы упираются в ограничение БД, а не в проверку в коде.
+        Index(
+            "uq_domain_authorizations_open",
+            "project_id",
+            "status",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'verified')"),
+            sqlite_where=text("status IN ('pending', 'verified')"),
+        ),
+        Index("idx_domain_authorizations_project", "project_id"),
+        {"schema": "audit_schema"},
+    )
+
+    project_id = Column(String(36), ForeignKey("audit_schema.projects.id", ondelete="CASCADE"), nullable=False)
+    workspace_id = Column(String(36), ForeignKey("audit_schema.workspaces.id"), nullable=False)
+    method = Column(String(32), nullable=False, default="http_challenge")
+    status = Column(String(16), nullable=False, default="pending")
+    scope_origin = Column(String(2048), nullable=False)
+    scope_path_prefix = Column(String(1024), nullable=False)
+    challenge_hash = Column(String(64), nullable=False)
+    subject_user_id = Column(String(36), nullable=False)
+    issued_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    last_checked_at = Column(DateTime(timezone=True), nullable=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    last_error_code = Column(String(64), nullable=True)
+    evidence = Column(JSONB, nullable=False, default=dict)
+
+    project = relationship("Project", back_populates="authorizations")
+
+
+class LegacyProjectIdMap(Base):
+    """Соответствие идентификаторов проектов из других сервисов каноническому (ТЗ §3.2)."""
+    __tablename__ = "legacy_project_id_map"
+    __table_args__ = (
+        UniqueConstraint("source", "legacy_id", name="uq_legacy_project_id_map_source_id"),
+        CheckConstraint("status IN ('matched', 'unmatched', 'ambiguous')", name="ck_legacy_project_id_map_status"),
+        Index("idx_legacy_project_id_map_project", "project_id"),
+        {"schema": "audit_schema"},
+    )
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    source = Column(String(64), nullable=False)
+    legacy_id = Column(String(64), nullable=False)
+    project_id = Column(String(36), ForeignKey("audit_schema.projects.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String(16), nullable=False)
+    reason = Column(String(255), nullable=False, default="")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class Crawl(Base, TimestampMixin, UUIDMixin):
@@ -174,6 +284,9 @@ class PublicAuditResult(Base, TimestampMixin, AuditResultMixin):
     )
 
     audit_id = Column(String(64), primary_key=True)
+    # SHA-256 одноразового токена, который получает только создатель аудита (см. AL-4):
+    # по одному audit_id публичный аудит присоединить к проекту нельзя.
+    claim_token_hash = Column(String(64), nullable=True)
 
 
 class CrawlEvent(Base, TimestampMixin, UUIDMixin):

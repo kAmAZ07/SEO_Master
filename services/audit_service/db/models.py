@@ -48,3 +48,6 @@ class PublicAuditResult(AuditResultFields, Base):
         Index("ix_public_audit_results_mode_status", "mode", "status"),
         {"schema": "audit_schema"},
     )
+
+    # SHA-256 одноразового токена присоединения к проекту (см. shared/projects/claims.py).
+    claim_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

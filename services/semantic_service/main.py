@@ -1,8 +1,9 @@
 import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
@@ -12,18 +13,28 @@ from services.semantic_service.db.models import FFScoreRow, EEATScoreRow, Conten
 from services.semantic_service.schemas.ff_score import FFScoreRequest, FFScoreResponse
 from services.semantic_service.schemas.analysis import SemanticAnalysisRequest, SemanticAnalysisResponse
 from services.semantic_service.schemas.eeat import EEATRequest, EEATResponse
+from services.semantic_service.scoring.assemble import StoredAnalysis, build_ff_readings, eeat_signals_from_request
 from services.semantic_service.scoring.ff_score_calculator import calculate_ff_score
 from services.semantic_service.scoring.eeat_analyzer import analyze_eeat
-from services.semantic_service.llm.llm_client import generate_drafts
+from services.semantic_service.scoring.persistence import eeat_row_fields, eeat_view, ff_row_fields, ff_view
+from services.semantic_service.scoring.readings import ReadingError
+from services.semantic_service.llm.llm_client import LlmRuntime, open_runtime
 from services.semantic_service.events.ff_score_recalculated import publish_ffscore_recalculated
 from services.semantic_service.events.crawl_completed_handler import maybe_start_crawl_completed_consumer
 from services.semantic_service.events.task_created_handler import maybe_start_task_created_consumer
 from services.semantic_service.analysis.pipeline import create_semantic_analysis
+from services.semantic_service.proposals.facts import ProposalRequest
+from services.semantic_service.proposals.generator import generate_proposals
+from services.semantic_service.proposals.model import recommendation_version_json_schema
+from services.semantic_service.proposals.repository import CorruptedVersion, SqlProposalStore
+from services.semantic_service.proposals.store import ProposalStore, VersionConflict
+from services.semantic_service.proposals.validators import ProposalRejected
 
-app = FastAPI(title="Semantic Service", version="0.1.0")
+logger = logging.getLogger(__name__)
 
+app = FastAPI(title="Semantic Service", version="0.2.0")
 
-_CWV_RANK = {"poor": 0, "needs_improvement": 1, "good": 2, "unknown": 3}
+_runtime: LlmRuntime | None = None
 
 
 @app.on_event("startup")
@@ -33,160 +44,51 @@ async def _startup() -> None:
     asyncio.create_task(maybe_start_task_created_consumer())
 
 
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    if _runtime is not None:
+        await _runtime.aclose()
+
+
+def get_runtime() -> LlmRuntime:
+    """Один LLM-слой на процесс: провайдеры из настроек и общий кэш. Подменяется в тестах."""
+    global _runtime
+    if _runtime is None:
+        _runtime = open_runtime()
+    return _runtime
+
+
+def get_store() -> ProposalStore:
+    return SqlProposalStore(get_session)
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "service": "semantic_service", "ts": datetime.now(timezone.utc).isoformat()}
 
 
-def _worst_cwv_grade(summary: dict | None) -> str | None:
-    if not isinstance(summary, dict):
+async def _latest_analysis(project_id: str | None) -> StoredAnalysis | None:
+    if not project_id:
         return None
-    cwv = summary.get("cwv")
-    if not isinstance(cwv, dict):
-        return None
-
-    grades = [
-        str(cwv.get("LCP_grade") or "unknown").lower(),
-        str(cwv.get("FID_grade") or "unknown").lower(),
-        str(cwv.get("CLS_grade") or "unknown").lower(),
-    ]
-    grades = [grade for grade in grades if grade in _CWV_RANK]
-    if not grades:
-        return None
-    return min(grades, key=lambda grade: _CWV_RANK.get(grade, 99))
-
-
-def _count_findings(findings: list[dict], *, prefixes: tuple[str, ...] = (), codes: set[str] | None = None) -> int:
-    total = 0
-    for finding in findings:
-        if not isinstance(finding, dict):
-            continue
-        code = str(finding.get("code") or "")
-        if codes and code in codes:
-            total += 1
-            continue
-        if prefixes and any(code.startswith(prefix) for prefix in prefixes):
-            total += 1
-    return total
-
-
-async def _resolve_ffscore_inputs(payload: FFScoreRequest) -> dict:
-    sources: dict[str, str] = {}
-    unavailable: list[str] = []
-    input_sources = payload.input_sources if isinstance(payload.input_sources, dict) else {}
-
-    latest_analysis = None
-    if payload.project_id:
-        async with get_session() as session:
-            analysis_res = await session.execute(
-                select(SemanticAnalysisRow)
-                .where(SemanticAnalysisRow.project_id == payload.project_id)
-                .order_by(SemanticAnalysisRow.created_at.desc())
-                .limit(1)
-            )
-            latest_analysis = analysis_res.scalar_one_or_none()
-
-    findings = [item for item in payload.audit_findings if isinstance(item, dict)]
-    summary = payload.audit_summary if isinstance(payload.audit_summary, dict) else {}
-
-    semantic_distance = payload.semantic_distance
-    if semantic_distance is None and latest_analysis and isinstance(latest_analysis.semantic_distance, dict):
-        semantic_distance = latest_analysis.semantic_distance.get("semantic_distance")
-        if semantic_distance is not None:
-            sources["semantic_distance"] = "semantic_analysis"
-    elif semantic_distance is not None:
-        sources["semantic_distance"] = str(input_sources.get("semantic_distance") or "request")
-    else:
-        semantic_distance = 50.0
-        sources["semantic_distance"] = "estimate"
-        unavailable.append("semantic_distance")
-
-    keyword_coverage = payload.keyword_coverage
-    if keyword_coverage is None and latest_analysis and isinstance(latest_analysis.keyword_coverage, dict):
-        keyword_coverage = latest_analysis.keyword_coverage.get("coverage")
-        if keyword_coverage is not None:
-            sources["keyword_coverage"] = "semantic_analysis"
-    elif keyword_coverage is not None:
-        sources["keyword_coverage"] = str(input_sources.get("keyword_coverage") or "request")
-    else:
-        keyword_coverage = 50.0
-        sources["keyword_coverage"] = "estimate"
-        unavailable.append("keyword_coverage")
-
-    freshness_days_since_update = payload.freshness_days_since_update
-    if freshness_days_since_update is None:
-        freshness_days_since_update = 30
-        sources["freshness_days_since_update"] = "estimate"
-        unavailable.append("freshness_days_since_update")
-    else:
-        sources["freshness_days_since_update"] = str(input_sources.get("freshness_days_since_update") or "request")
-
-    serp_shift = payload.serp_shift
-    if serp_shift is None:
-        serp_shift = 0.0
-        sources["serp_shift"] = "estimate"
-        unavailable.append("serp_shift")
-    else:
-        sources["serp_shift"] = str(input_sources.get("serp_shift") or "request")
-
-    link_velocity = payload.link_velocity
-    if link_velocity is None:
-        link_velocity = 0.0
-        sources["link_velocity"] = "estimate"
-        unavailable.append("link_velocity")
-    else:
-        sources["link_velocity"] = str(input_sources.get("link_velocity") or "request")
-
-    cwv_grade = payload.cwv_grade
-    if cwv_grade:
-        sources["cwv_grade"] = str(input_sources.get("cwv_grade") or "request")
-    else:
-        cwv_grade = _worst_cwv_grade(summary) or "unknown"
-        sources["cwv_grade"] = "audit_summary" if cwv_grade != "unknown" else "estimate"
-        if cwv_grade == "unknown":
-            unavailable.append("cwv_grade")
-
-    broken_links_count = payload.broken_links_count
-    if broken_links_count is None:
-        broken_links_count = _count_findings(findings, codes={"broken_link_404"})
-        sources["broken_links_count"] = "audit_findings" if findings else "estimate"
-        if not findings:
-            unavailable.append("broken_links_count")
-    else:
-        sources["broken_links_count"] = str(input_sources.get("broken_links_count") or "request")
-
-    schema_errors_count = payload.schema_errors_count
-    if schema_errors_count is None:
-        schema_errors_count = _count_findings(
-            findings,
-            prefixes=("jsonld_",),
-            codes={"jsonld_missing", "jsonld_empty", "jsonld_invalid_json", "jsonld_invalid_structure", "jsonld_missing_context", "jsonld_missing_type"},
+    async with get_session() as session:
+        result = await session.execute(
+            select(SemanticAnalysisRow)
+            .where(SemanticAnalysisRow.project_id == project_id)
+            .order_by(SemanticAnalysisRow.created_at.desc())
+            .limit(1)
         )
-        sources["schema_errors_count"] = "audit_findings" if findings else "estimate"
-        if not findings:
-            unavailable.append("schema_errors_count")
-    else:
-        sources["schema_errors_count"] = str(input_sources.get("schema_errors_count") or "request")
-
-    return {
-        "freshness_days_since_update": int(freshness_days_since_update),
-        "serp_shift": float(serp_shift),
-        "link_velocity": float(link_velocity),
-        "semantic_distance": float(semantic_distance),
-        "keyword_coverage": float(keyword_coverage),
-        "cwv_grade": str(cwv_grade),
-        "broken_links_count": int(broken_links_count),
-        "schema_errors_count": int(schema_errors_count),
-        "sources": sources,
-        "unavailable": sorted(set(unavailable)),
-    }
+        row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    return StoredAnalysis(
+        semantic_distance=row.semantic_distance if isinstance(row.semantic_distance, dict) else None,
+        keyword_coverage=row.keyword_coverage if isinstance(row.keyword_coverage, dict) else None,
+        observed_at=row.created_at.isoformat() if row.created_at else None,
+    )
 
 
-@app.post("/semantic/eeat", response_model=EEATResponse)
-async def eeat(payload: EEATRequest) -> EEATResponse:
-    res = analyze_eeat(
-        text=payload.text,
-        root_url=str(payload.root_url),
+def _eeat_kwargs(payload) -> dict:
+    return dict(
         backlinks_count=payload.backlinks_count,
         has_https=payload.has_https,
         has_privacy_policy=payload.has_privacy_policy,
@@ -195,6 +97,11 @@ async def eeat(payload: EEATRequest) -> EEATResponse:
         authoritative_outbound_links=payload.authoritative_outbound_links,
         brand_mentions=payload.brand_mentions,
     )
+
+
+@app.post("/semantic/eeat", response_model=EEATResponse)
+async def eeat(payload: EEATRequest) -> EEATResponse:
+    res = analyze_eeat(text=payload.text, root_url=str(payload.root_url), **_eeat_kwargs(payload))
     score_id = str(uuid.uuid4())
     async with get_session() as session:
         session.add(
@@ -203,13 +110,21 @@ async def eeat(payload: EEATRequest) -> EEATResponse:
                 project_id=payload.project_id,
                 root_url=str(payload.root_url),
                 created_at=datetime.now(timezone.utc),
-                breakdown=res["breakdown"],
-                score=res["score"],
-                signals=res["signals"],
+                **eeat_row_fields(res),
             )
         )
         await session.commit()
-    return EEATResponse(score_id=score_id, score=res["score"], breakdown=res["breakdown"], signals=res["signals"])
+    return EEATResponse(
+        score_id=score_id,
+        formula_version=res["formula_version"],
+        status=res["status"],
+        score=res["score"],
+        breakdown=res["breakdown"],
+        partial=res["partial"],
+        missing_inputs=res["missing_inputs"],
+        heuristic=res["heuristic"],
+        signals=res["signals"],
+    )
 
 
 @app.post("/semantic/analyze", response_model=SemanticAnalysisResponse)
@@ -230,106 +145,169 @@ async def analyze_semantic(payload: SemanticAnalysisRequest) -> SemanticAnalysis
 
 @app.post("/semantic/ff-score", response_model=FFScoreResponse)
 async def ff_score(payload: FFScoreRequest) -> FFScoreResponse:
-    resolved_inputs = await _resolve_ffscore_inputs(payload)
+    """Считает FF-Score `ff_score_v1`. Полный балл равен `null` со статусом `insufficient_data`, если
+    хотя бы одному компоненту не хватает измеренных данных; частичный балл возвращается отдельно."""
+    root_url = str(payload.root_url)
+    values = payload.model_dump()
+    sources = payload.input_sources if isinstance(payload.input_sources, dict) else {}
     eeat_res = analyze_eeat(
         text=payload.content_text,
-        root_url=str(payload.root_url),
-        backlinks_count=payload.backlinks_count,
-        has_https=payload.has_https,
-        has_privacy_policy=payload.has_privacy_policy,
-        has_contacts=payload.has_contacts,
-        has_author_schema=payload.has_author_schema,
-        authoritative_outbound_links=payload.authoritative_outbound_links,
-        brand_mentions=payload.brand_mentions,
+        root_url=root_url,
+        **eeat_signals_from_request(values, sources),
     )
-    ff = calculate_ff_score(
-        freshness_days_since_update=resolved_inputs["freshness_days_since_update"],
-        serp_shift=resolved_inputs["serp_shift"],
-        link_velocity=resolved_inputs["link_velocity"],
-        semantic_distance=resolved_inputs["semantic_distance"],
-        keyword_coverage=resolved_inputs["keyword_coverage"],
-        eeat_score=eeat_res["score"],
-        cwv_grade=resolved_inputs["cwv_grade"],
-        broken_links_count=resolved_inputs["broken_links_count"],
-        schema_errors_count=resolved_inputs["schema_errors_count"],
-    )
-    ff["inputs"]["sources"] = resolved_inputs["sources"]
-    ff["inputs"]["unavailable"] = resolved_inputs["unavailable"]
+    analysis = await _latest_analysis(payload.project_id)
+    try:
+        readings = build_ff_readings(
+            values=values,
+            sources=sources,
+            availability=payload.input_availability,
+            audit_summary=payload.audit_summary,
+            audit_findings=payload.audit_findings,
+            analysis=analysis,
+            eeat_result=eeat_res,
+        )
+    except ReadingError as exc:
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
+    ff = calculate_ff_score(readings)
 
     ff_id = str(uuid.uuid4())
     eeat_id = str(uuid.uuid4())
-
+    created_at = datetime.now(timezone.utc)
     async with get_session() as session:
         session.add(
-            EEATScoreRow(
-                score_id=eeat_id,
-                project_id=payload.project_id,
-                root_url=str(payload.root_url),
-                created_at=datetime.now(timezone.utc),
-                breakdown=eeat_res["breakdown"],
-                score=eeat_res["score"],
-                signals=eeat_res["signals"],
-            )
+            EEATScoreRow(score_id=eeat_id, project_id=payload.project_id, root_url=root_url, created_at=created_at, **eeat_row_fields(eeat_res))
         )
         session.add(
             FFScoreRow(
                 score_id=ff_id,
                 project_id=payload.project_id,
-                root_url=str(payload.root_url),
-                created_at=datetime.now(timezone.utc),
-                ff_score=ff["ff_score"],
-                components=ff["components"],
-                inputs=ff["inputs"],
-                thresholds=ff["thresholds"],
+                root_url=root_url,
+                created_at=created_at,
                 eeat_score_id=eeat_id,
+                **ff_row_fields(ff),
             )
         )
         await session.commit()
 
+    eeat_details = {
+        "score_id": eeat_id,
+        "formula_version": eeat_res["formula_version"],
+        "status": eeat_res["status"],
+        "score": eeat_res["score"],
+        "breakdown": eeat_res["breakdown"],
+        "partial": eeat_res["partial"],
+        "missing_inputs": eeat_res["missing_inputs"],
+        "heuristic": eeat_res["heuristic"],
+    }
     await publish_ffscore_recalculated(
         project_id=payload.project_id,
-        root_url=str(payload.root_url),
+        root_url=root_url,
         ff_score_id=ff_id,
         ff_score=ff["ff_score"],
         components=ff["components"],
+        status=ff["status"],
+        formula_version=ff["formula_version"],
         inputs=ff["inputs"],
-        eeat={"score": eeat_res["score"], "breakdown": eeat_res["breakdown"]},
+        eeat_details=eeat_details,
     )
 
     return FFScoreResponse(
         ff_score_id=ff_id,
         eeat_score_id=eeat_id,
+        formula_version=ff["formula_version"],
+        status=ff["status"],
         ff_score=ff["ff_score"],
         components=ff["components"],
+        weights=ff["weights"],
+        thresholds=ff["thresholds"],
+        mode=ff["mode"],
+        coverage=ff["coverage"],
+        partial=ff["partial"],
+        heuristic=ff["heuristic"],
+        note=ff["note"],
         inputs=ff["inputs"],
-        eeat={"score": eeat_res["score"], "breakdown": eeat_res["breakdown"]},
+        eeat=eeat_details,
     )
 
 
-@app.post("/semantic/drafts")
-async def drafts(payload: dict) -> dict:
-    root_url = payload.get("root_url")
-    content = payload.get("content", "")
-    project_id = payload.get("project_id")
-    if not root_url or not isinstance(root_url, str):
-        raise HTTPException(status_code=400, detail="root_url_required")
-    if not isinstance(content, str):
-        raise HTTPException(status_code=400, detail="content_must_be_string")
+# --- типизированные предложения (RecommendationVersion) ------------------------------------------------------------
 
-    drafts_res = await generate_drafts(root_url=root_url, content=content)
-    draft_id = str(uuid.uuid4())
-    async with get_session() as session:
-        session.add(
-            ContentDraftRow(
-                draft_id=draft_id,
-                project_id=project_id,
-                root_url=root_url,
-                created_at=datetime.now(timezone.utc),
-                drafts=drafts_res,
-            )
+@app.get("/semantic/schemas/recommendation-version")
+async def recommendation_version_schema() -> dict:
+    """Единственная опубликованная схема предложения. Источник — модель в коде semantic_service."""
+    return recommendation_version_json_schema()
+
+
+@app.post("/semantic/proposals")
+async def create_proposals(
+    payload: ProposalRequest,
+    runtime: LlmRuntime = Depends(get_runtime),
+    store: ProposalStore = Depends(get_store),
+) -> dict:
+    """Создаёт предложения для запрошенных типов. По каждому типу статус: `created`, `existing`
+    (то же содержимое уже последняя версия), `no_change` или `needs_input` (не хватает фактов)."""
+    try:
+        result = await generate_proposals(
+            payload,
+            runtime=runtime,
+            store=store,
+            now=lambda: datetime.now(timezone.utc),
+            new_id=lambda: str(uuid.uuid4()),
         )
-        await session.commit()
-    return {"draft_id": draft_id, "drafts": drafts_res}
+    except ProposalRejected as exc:
+        raise HTTPException(status_code=422, detail={"code": "proposal_rejected", "issues": [i.as_dict() for i in exc.issues]}) from exc
+    except VersionConflict as exc:
+        raise HTTPException(status_code=409, detail={"code": "version_conflict", "message": "concurrent regeneration, retry"}) from exc
+    return {"project_id": payload.project_id, "target_url": payload.target_url, "items": [item.as_dict() for item in result.items]}
+
+
+@app.get("/semantic/proposals/{version_id}")
+async def get_proposal(version_id: str, store: ProposalStore = Depends(get_store)) -> dict:
+    try:
+        version = await store.get(version_id)
+    except CorruptedVersion as exc:
+        raise HTTPException(status_code=500, detail={"code": "stored_version_corrupted", "version_id": version_id}) from exc
+    if version is None:
+        raise HTTPException(status_code=404, detail={"code": "version_not_found"})
+    return version.model_dump(mode="json")
+
+
+@app.get("/semantic/recommendations/{recommendation_id}/versions")
+async def recommendation_history(recommendation_id: str, store: ProposalStore = Depends(get_store)) -> dict:
+    try:
+        versions = await store.history(recommendation_id)
+    except CorruptedVersion as exc:
+        raise HTTPException(status_code=500, detail={"code": "stored_version_corrupted", "version_id": str(exc)}) from exc
+    if not versions:
+        raise HTTPException(status_code=404, detail={"code": "recommendation_not_found"})
+    return {"recommendation_id": recommendation_id, "versions": [v.model_dump(mode="json") for v in versions]}
+
+
+@app.get("/semantic/projects/{project_id}/proposals")
+async def project_proposals(project_id: str, limit: int = 100, store: ProposalStore = Depends(get_store)) -> dict:
+    try:
+        versions = await store.list_for_project(project_id, limit)
+    except CorruptedVersion as exc:
+        raise HTTPException(status_code=500, detail={"code": "stored_version_corrupted", "version_id": str(exc)}) from exc
+    return {"project_id": project_id, "versions": [v.model_dump(mode="json") for v in versions]}
+
+
+@app.post("/semantic/drafts")
+async def drafts(_: dict | None = None) -> JSONResponse:
+    """Снят с эксплуатации. Прежний обработчик подставлял шаблонные тексты («Официальная страница»,
+    «Заголовок страницы»), когда LLM был недоступен; такие «черновики» нельзя публиковать (ТЗ §9.3).
+    Замена — `POST /semantic/proposals`: он требует факты страницы и evidence и возвращает `needs_input`
+    вместо выдуманного текста."""
+    return JSONResponse(
+        status_code=410,
+        content={
+            "detail": {
+                "code": "drafts_endpoint_removed",
+                "replacement": "POST /semantic/proposals",
+                "schema": "GET /semantic/schemas/recommendation-version",
+            }
+        },
+    )
 
 
 @app.get("/semantic/latest/{project_id}")
@@ -345,13 +323,13 @@ async def latest(project_id: str) -> dict:
             select(ContentDraftRow).where(ContentDraftRow.project_id == project_id).order_by(ContentDraftRow.created_at.desc()).limit(1)
         )
         ff = ff_res.scalar_one_or_none()
-        eeat = eeat_res.scalar_one_or_none()
+        eeat_row = eeat_res.scalar_one_or_none()
         draft = draft_res.scalar_one_or_none()
         return {
             "project_id": project_id,
-            "ff_score": None if ff is None else {"id": ff.score_id, "score": ff.ff_score, "components": ff.components, "created_at": ff.created_at},
-            "eeat": None if eeat is None else {"id": eeat.score_id, "score": eeat.score, "breakdown": eeat.breakdown, "created_at": eeat.created_at},
-            "draft": None if draft is None else {"id": draft.draft_id, "root_url": draft.root_url, "drafts": draft.drafts, "created_at": draft.created_at},
+            "ff_score": None if ff is None else ff_view(ff),
+            "eeat": None if eeat_row is None else eeat_view(eeat_row),
+            "draft": None if draft is None else {"id": draft.draft_id, "root_url": draft.root_url, "drafts": draft.drafts, "created_at": draft.created_at, "legacy": True},
         }
 
 

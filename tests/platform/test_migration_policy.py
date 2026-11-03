@@ -9,7 +9,7 @@ from scripts import migration_policy as policy
 
 class MigrationPolicyTests(unittest.TestCase):
     def test_manifests_are_exact_immutable_and_disjoint(self) -> None:
-        self.assertEqual(len(policy.owned_tables("core")), 32)
+        self.assertEqual(len(policy.owned_tables("core")), 33)
         self.assertEqual(policy.owned_tables("management"), frozenset(
             policy.TableIdentity("public", name)
             for name in ("projects", "tasks", "hitl_approvals", "management_changelog")
@@ -41,7 +41,7 @@ class MigrationPolicyTests(unittest.TestCase):
             policy.TableIdentity("public", "failed_events"),
         ))
         policy.validate_metadata("core", expected)
-        self.assertEqual(len(expected - missing), 29)
+        self.assertEqual(len(expected - missing), 30)
         with self.assertRaises(policy.MigrationPolicyError) as failure:
             policy.validate_metadata("core", expected - missing)
         self.assertEqual(failure.exception.code, "MIGRATION_METADATA_INCOMPLETE")

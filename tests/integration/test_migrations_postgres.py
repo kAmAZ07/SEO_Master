@@ -23,8 +23,18 @@ pytestmark = pytest.mark.skipif(not ADMIN_URL, reason="TEST_PG_ADMIN_URL is not 
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = "20260414_001_crawl_partitions"
-HEAD = "20261103_001_workspaces"
+HEAD = "20261104_001_semantic_al5"
 AL4_TABLES = ("workspaces", "workspace_members", "projects", "domain_authorizations", "legacy_project_id_map", "public_audit_results")
+
+
+ALEMBIC_RUNNER = (
+    "import os, sys\n"
+    "from alembic import command\n"
+    "from alembic.config import Config\n"
+    "cfg = Config('alembic.ini')\n"
+    "cfg.set_main_option('sqlalchemy.url', os.environ['SEO_TEST_DSN'].replace('%', '%%'))\n"
+    "getattr(command, sys.argv[1])(cfg, *sys.argv[2:])\n"
+)
 
 
 class TempDatabase:
@@ -49,9 +59,10 @@ class TempDatabase:
         admin.dispose()
 
     def alembic(self, *args, check=True):
-        env = {**os.environ, "DATABASE_URL": self.url, "PYTHONPATH": str(ROOT), "MASTER_ENCRYPTION_KEY": "test-key", "ENVIRONMENT": "development"}
+        # После AR-2 env.py не читает DATABASE_URL: DSN передаётся явным sqlalchemy.url (docs/PLATFORM.md).
+        env = {**os.environ, "SEO_TEST_DSN": self.url, "PYTHONPATH": str(ROOT)}
         result = subprocess.run(
-            [sys.executable, "-m", "alembic", *args], cwd=ROOT / "database", env=env, capture_output=True, text=True, timeout=120
+            [sys.executable, "-c", ALEMBIC_RUNNER, *args], cwd=ROOT / "database", env=env, capture_output=True, text=True, timeout=120
         )
         if check and result.returncode != 0:
             raise AssertionError(f"alembic {' '.join(args)} failed:\n{result.stdout}\n{result.stderr}")
@@ -211,7 +222,7 @@ def test_downgrade_refuses_when_two_projects_share_a_url(db):
             ('p2', 'B', 'https://same.test/', 'u2', 'w2', 'https://same.test', '/');
         """
     )
-    result = db.alembic("downgrade", "-1", check=False)
+    result = db.alembic("downgrade", BASELINE, check=False)
     assert result.returncode != 0 and "Cannot restore global UNIQUE(url)" in result.stderr
     assert db.scalar("SELECT version_num FROM public.alembic_version") == HEAD  # состояние не изменилось
     assert db.scalar("SELECT count(*) FROM audit_schema.projects") == 2

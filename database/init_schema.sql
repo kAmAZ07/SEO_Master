@@ -315,13 +315,18 @@ CREATE TABLE IF NOT EXISTS semantic_schema.ff_scores (
     score_id VARCHAR(64) PRIMARY KEY,
     project_id VARCHAR(128),
     root_url VARCHAR(2048) NOT NULL,
-    ff_score DOUBLE PRECISION NOT NULL,
+    ff_score DOUBLE PRECISION,
+    status VARCHAR(32) NOT NULL,
+    formula_version VARCHAR(32) NOT NULL,
     components JSONB NOT NULL DEFAULT '{}'::jsonb,
     inputs JSONB NOT NULL DEFAULT '{}'::jsonb,
     thresholds JSONB NOT NULL DEFAULT '{}'::jsonb,
     eeat_score_id VARCHAR(64),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    CONSTRAINT ck_ff_scores_null_iff_insufficient CHECK ((status = 'insufficient_data') = (ff_score IS NULL)),
+    CONSTRAINT ck_ff_scores_range CHECK (ff_score IS NULL OR (ff_score >= 0 AND ff_score <= 100)),
+    CONSTRAINT ck_ff_scores_status CHECK (status IN ('complete', 'insufficient_data', 'legacy_estimated'))
 );
 
 CREATE INDEX idx_ff_score_project_id ON semantic_schema.ff_scores(project_id);
@@ -335,11 +340,16 @@ CREATE TABLE IF NOT EXISTS semantic_schema.eeat_scores (
     score_id VARCHAR(64) PRIMARY KEY,
     project_id VARCHAR(128),
     root_url VARCHAR(2048) NOT NULL,
-    score DOUBLE PRECISION NOT NULL,
+    score DOUBLE PRECISION,
+    status VARCHAR(32) NOT NULL,
+    formula_version VARCHAR(32) NOT NULL,
     breakdown JSONB NOT NULL DEFAULT '{}'::jsonb,
     signals JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    CONSTRAINT ck_eeat_scores_null_iff_insufficient CHECK ((status = 'insufficient_data') = (score IS NULL)),
+    CONSTRAINT ck_eeat_scores_range CHECK (score IS NULL OR (score >= 0 AND score <= 100)),
+    CONSTRAINT ck_eeat_scores_status CHECK (status IN ('complete', 'insufficient_data', 'legacy_estimated'))
 );
 
 CREATE INDEX idx_eeat_score_project_id ON semantic_schema.eeat_scores(project_id);
@@ -348,6 +358,43 @@ CREATE INDEX idx_eeat_root_url ON semantic_schema.eeat_scores(root_url);
 
 CREATE TRIGGER update_eeat_scores_updated_at BEFORE UPDATE ON semantic_schema.eeat_scores
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TABLE IF NOT EXISTS semantic_schema.recommendation_versions (
+    version_id VARCHAR(36) PRIMARY KEY,
+    recommendation_id VARCHAR(36) NOT NULL,
+    version INTEGER NOT NULL,
+    previous_version_id VARCHAR(36),
+    project_id VARCHAR(36) NOT NULL,
+    task_id VARCHAR(128),
+    target_url VARCHAR(2048) NOT NULL,
+    target_origin VARCHAR(300) NOT NULL,
+    operation_type VARCHAR(32) NOT NULL,
+    execution_mode VARCHAR(16) NOT NULL,
+    content_hash VARCHAR(64) NOT NULL,
+    schema_version VARCHAR(40) NOT NULL,
+    payload JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_recommendation_versions_version UNIQUE (recommendation_id, version),
+    CONSTRAINT ck_recommendation_versions_version CHECK (version >= 1),
+    CONSTRAINT ck_recommendation_versions_lineage CHECK ((version = 1) = (previous_version_id IS NULL)),
+    CONSTRAINT ck_recommendation_versions_operation CHECK (operation_type IN ('title', 'description', 'h1', 'schema_jsonld', 'content_edit', 'internal_link')),
+    CONSTRAINT ck_recommendation_versions_mode CHECK (execution_mode IN ('managed', 'manual')),
+    CONSTRAINT ck_recommendation_versions_hash CHECK (length(content_hash) = 64)
+);
+
+CREATE INDEX idx_recommendation_versions_latest ON semantic_schema.recommendation_versions(project_id, target_url, operation_type, version);
+CREATE INDEX idx_recommendation_versions_project_created ON semantic_schema.recommendation_versions(project_id, created_at);
+CREATE INDEX idx_recommendation_versions_hash ON semantic_schema.recommendation_versions(content_hash);
+CREATE UNIQUE INDEX uq_recommendation_versions_first ON semantic_schema.recommendation_versions(project_id, target_url, operation_type) WHERE version = 1;
+
+CREATE OR REPLACE FUNCTION semantic_schema.forbid_recommendation_version_update() RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'recommendation_versions rows are immutable' USING ERRCODE = 'integrity_constraint_violation';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_recommendation_versions_immutable BEFORE UPDATE ON semantic_schema.recommendation_versions
+    FOR EACH ROW EXECUTE FUNCTION semantic_schema.forbid_recommendation_version_update();
 
 CREATE TABLE IF NOT EXISTS semantic_schema.content_drafts (
     draft_id VARCHAR(64) PRIMARY KEY,

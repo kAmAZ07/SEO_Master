@@ -119,6 +119,30 @@ function check(bool $condition, string $message): void {
     if (!$condition) { throw new RuntimeException($message); }
 }
 $tests = [
+    'ASCII numeric object guards preserve mixed Unicode empty and compound shapes without ctype' => function (): void {
+        foreach (['0', '00', '01', '9', '1234567890', '18446744073709551616', str_repeat('9', 1024)] as $key) {
+            $body = '{"' . $key . '":"value"}';
+            expect_error(fn() => sm_v2_decode($body), 'invalid_schema');
+            expect_error(fn() => sm_v2_decode('{"outer":' . $body . '}'), 'invalid_schema');
+            expect_error(fn() => sm_v2_decode('{"outer":[' . $body . ']}'), 'invalid_schema');
+        }
+        foreach (['', '0a', 'a0', '+1', '1.0', '10e2', '0x1', '1 ', ' 1', '١', '１', '²', 'ключ😀'] as $key) {
+            $body = json_encode((object) [$key => 'exact 😀'], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+            $decoded = sm_v2_decode($body);
+            check(array_key_exists($key, $decoded) && $decoded[$key] === 'exact 😀', 'nondigit name was reclassified or normalized');
+            expect_error(fn() => sm_v2_keys($decoded, ['expected_schema_key']), 'invalid_schema');
+        }
+        foreach ([
+            '{"key":"bad\u0000value"}', '{"bad\u0000key":"value"}', "{\"key\":\"bad\0value\"}",
+            '[]', 'null', '1', '{"changes":{}}', '{"changes":{"0":{"op":"remove","field":"title"}}}',
+            '{"changes":[["remove","title"]]}', '{"outer":{"01":"value"}}',
+        ] as $body) {
+            expect_error(fn() => sm_v2_decode($body), 'invalid_schema');
+        }
+        check(sm_v2_decode('{}') === [] && sm_v2_decode('{"outer":{}}') === ['outer' => []], 'empty object conversion changed');
+        $decoded = sm_v2_decode('{"changes":[{"op":"remove","field":"title"}]}');
+        check(sm_v2_validate_changes($decoded['changes']) === ['title' => ['state' => 'missing']], 'real operation objects stopped working');
+    },
     'ten retries + lost response return identical durable signed receipt' => function (): void {
         $fixture = new ContractFixture();
         $command = $fixture->command();

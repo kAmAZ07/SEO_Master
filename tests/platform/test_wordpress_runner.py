@@ -5,6 +5,7 @@ import io
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -39,6 +40,20 @@ SOURCE_DIRECTORIES = (
 
 
 class WordPressRunnerTests(unittest.TestCase):
+    def test_php_contract_invocations_disable_optional_ctype_without_loading_ini(self) -> None:
+        executable = Path(sys.executable).resolve(strict=True)
+        with patch(
+            "tests.wordpress.run.subprocess.run",
+            return_value=SimpleNamespace(returncode=0, stdout="fixture", stderr=""),
+        ) as run:
+            self.assertEqual(wordpress_runner.run_php(
+                executable, Path.cwd(), {}, ["tests/wordpress/v2-contract.php"],
+            ), "fixture")
+        self.assertEqual(
+            run.call_args.args[0],
+            [str(executable), "-n", "-d", "disable_functions=ctype_digit", "tests/wordpress/v2-contract.php"],
+        )
+
     def create_fixture(self, root: Path) -> None:
         for name in REQUIRED_SOURCES:
             source = root / name

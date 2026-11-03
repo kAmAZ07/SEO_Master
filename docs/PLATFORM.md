@@ -13,6 +13,7 @@
 Архив `adapters/wordpress-plugin/dist/*.zip` пока нужен существующему Dockerfile API Gateway, поэтому глобального запрета всех `dist/` и ZIP нет. Это не подтверждает подпись или безопасность содержимого архива; release-проверка пакета относится к AR-15.
 
 ## Локальные проверки без запуска сервисов
+Общий runner канонизирует найденный PHP executable через `Path.resolve(strict=True)` до смены каталога дочернего процесса. Это относится и к symlink `python → python3.11` в Linux test fixture: ожидается разрешённый путь PHP-аргумента, а не буквальный `sys.executable`. Обязательная portable-регрессия дополнительно использует существующий путь с `..`, поэтому проверяет эту границу без прав на создание symlink в Windows; production canonicalization не ослабляется.
 Проверки платформы требуют Python 3.11 и инструменты из `locks/tooling.txt`. В новом отдельном venv установите их с проверкой хешей (не синхронизируйте рабочее окружение):
 
     python -m pip install --require-hashes --only-binary=:all: -r locks/tooling.txt

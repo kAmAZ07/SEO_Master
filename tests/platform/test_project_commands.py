@@ -80,16 +80,24 @@ class ProjectCommandTests(unittest.TestCase):
             runner = root / "tests/wordpress/run.py"
             runner.parent.mkdir(parents=True)
             runner.write_text("# fixture\n", encoding="utf-8")
-            with (
-                patch("scripts.project.run_checked", return_value=0) as run,
-                patch("scripts.project.check_frontend", return_value=0),
-                patch("scripts.project.shutil.which", return_value=sys.executable),
-            ):
-                self.assertEqual(project.check_quality(root, "test", "php"), 0)
-            self.assertEqual(
-                run.call_args_list[-1].args[0],
-                [sys.executable, "-B", str(runner), "--php", sys.executable],
-            )
+            tools = root / "tools"
+            tools.mkdir()
+            fixture = tools / ("python.exe" if os.name == "nt" else "python")
+            fixture.touch()
+            alias = str(tools / ".." / "tools" / fixture.name)
+            for executable in (sys.executable, alias):
+                with self.subTest(executable=executable):
+                    with (
+                        patch.object(sys, "executable", executable),
+                        patch("scripts.project.run_checked", return_value=0) as run,
+                        patch("scripts.project.check_frontend", return_value=0),
+                        patch("scripts.project.shutil.which", return_value=executable),
+                    ):
+                        self.assertEqual(project.check_quality(root, "test", "php"), 0)
+                    self.assertEqual(
+                        run.call_args_list[-1].args[0],
+                        [executable, "-B", str(runner), "--php", str(Path(executable).resolve(strict=True))],
+                    )
 
     def test_remote_or_malformed_docker_transports_are_rejected_before_daemon_call(self) -> None:
         for endpoint in (

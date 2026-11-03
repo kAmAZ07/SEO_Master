@@ -98,7 +98,7 @@ class DockerContextTests(unittest.TestCase):
             if line.lstrip().upper().startswith(("COPY ", "ADD "))
         ]
         allowed_sources = {
-            "services/management_service/requirements.txt",
+            "locks/management.txt",
             "config/",
             "database/",
             "shared/",

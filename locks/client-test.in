@@ -1,0 +1,2 @@
+-r ../services/client_api_gateway/requirements.txt
+-r tooling.in

@@ -1,0 +1,2 @@
+-r ../services/management_service/requirements.txt
+-r tooling.in

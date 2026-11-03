@@ -14,8 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY services/client_api_gateway/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY locks/client.txt ./requirements.lock
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.lock
 
 COPY config/ ./config/
 COPY services/client_api_gateway/ ./services/client_api_gateway/

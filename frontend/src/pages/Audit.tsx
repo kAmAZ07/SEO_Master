@@ -274,6 +274,7 @@ const Audit = () => {
         navigate(projectId ? `/audit/results/${audit.uid}?project=${projectId}` : `/audit/results/${audit.uid}`)
       }
     } catch {
+      // Ошибка запуска уже сохранена в состоянии аудита (rejected-действие).
     }
   }
 
@@ -338,7 +339,10 @@ const Audit = () => {
       })
   }, [currentAudit?.uid, currentAudit?.url, dispatch, isAuthenticated, navigate, savingProject, shouldSaveProject, token])
 
-  const allFindings = criteria.length > 0 ? flattenCriterionFindings(criteria) : currentAudit?.details ?? []
+  const allFindings = useMemo(
+    () => (criteria.length > 0 ? flattenCriterionFindings(criteria) : currentAudit?.details ?? []),
+    [criteria, currentAudit?.details],
+  )
   const topFindings = useMemo(() => getTopFindings(allFindings), [allFindings])
   const showProgress = currentAudit && currentAudit.status !== 'completed' && currentAudit.status !== 'failed'
   const showResults = currentAudit && currentAudit.status === 'completed'

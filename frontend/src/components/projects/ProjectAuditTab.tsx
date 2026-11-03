@@ -37,6 +37,7 @@ const ProjectAuditTab = ({ projectId, projectUrl }: ProjectAuditTabProps) => {
       const response = await api.get<AuditHistoryItem[]>('/audit/history', { params: { projectId } })
       setHistory(response.data ?? [])
     } catch {
+      // История необязательна: при ошибке остаётся прежний список.
     } finally {
       setHistoryLoading(false)
     }
@@ -88,6 +89,7 @@ const ProjectAuditTab = ({ projectId, projectUrl }: ProjectAuditTabProps) => {
       setAuditUid(audit.uid)
       dispatch(setPolling(audit.status !== 'completed' && audit.status !== 'failed'))
     } catch {
+      // Ошибка запуска уже сохранена в состоянии аудита (rejected-действие).
     }
   }
 

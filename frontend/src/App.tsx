@@ -27,6 +27,7 @@ const HomeRoute = () => {
         return <Navigate to={`/audit/results/${pendingSave.uid}?saveProject=1`} replace />;
       }
     } catch {
+      // Повреждённая запись в localStorage: считаем, что отложенного сохранения нет.
     }
 
     return <Navigate to="/dashboard" replace />;

@@ -1,0 +1,2 @@
+-r ../services/semantic_service/requirements.txt
+-r pytest7.in

@@ -1,6 +1,7 @@
 """Воспроизводимые locks и изолированные unit-проверки AR-сервисов."""
 
 import argparse
+import base64
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ import tempfile
 UV_VERSION = "0.11.3"
 PYTHON_VERSION = "3.11"
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_DIRECTORIES = ("config", "database", "shared", "services", "scripts", "tests")
+SOURCE_DIRECTORIES = ("config", "database", "shared", "services", "scripts", "tests", "adapters")
 WINDOWS_REPARSE_POINT = 0x400  # FILE_ATTRIBUTE_REPARSE_POINT из Windows SDK.
 
 
@@ -33,6 +34,42 @@ PROFILES = (
     )),
     Profile("client", "services/client_api_gateway/requirements.txt", (
         "tests/unit/test_client_gateway_rollback.py",
+    )),
+    Profile("api", "services/api_gateway/requirements.txt", (
+        "tests/unit/test_api_gateway_auth.py",
+        "tests/unit/test_api_gateway_error_headers.py",
+        "tests/unit/test_api_gateway_protected_routes_layout.py",
+        "tests/unit/test_domain_verification.py",
+        "tests/unit/test_domain_verification_network.py",
+        "tests/unit/test_netpolicy.py",
+        "tests/unit/test_project_access.py",
+        "tests/unit/test_project_core.py",
+        "tests/unit/test_project_integrations_service.py",
+        "tests/unit/test_project_scope.py",
+        "tests/unit/test_projects_gateway.py",
+        "tests/unit/test_public_audit_gateway.py",
+        "tests/unit/test_public_audit_rate_limit.py",
+    )),
+    Profile("audit", "services/audit_service/requirements.txt", (
+        "tests/unit/test_audit_task_created_handler.py",
+        "tests/unit/test_audit_top_findings.py",
+        "tests/unit/test_cwv_analyzer.py",
+        "tests/unit/test_meta_checker.py",
+        "tests/unit/test_public_audit_claim_token.py",
+        "tests/unit/test_public_audit_core.py",
+        "tests/unit/test_public_audit_lifecycle.py",
+        "tests/unit/test_public_crawler.py",
+    )),
+    Profile("semantic", "services/semantic_service/requirements.txt", (
+        "tests/unit/test_eeat_analyzer.py",
+        "tests/unit/test_ff_score_calculator.py",
+    )),
+    Profile("reporting", "services/reporting_service/requirements.txt", (
+        "tests/unit/test_csv_exporter.py",
+        "tests/unit/test_metrics_calculator.py",
+    )),
+    Profile("tilda", "adapters/tilda-adapter/requirements.txt", (
+        "tests/unit/test_tilda_meta_injector.py",
     )),
 )
 
@@ -93,12 +130,26 @@ def is_link_or_reparse_point(path: Path) -> bool:
 
 
 def validate_test_inventory(snapshot: Path, profile: Profile) -> None:
-    module = "management_service" if profile.name == "management" else "client_api_gateway"
-    discovered = {
-        candidate.relative_to(snapshot).as_posix()
-        for candidate in (snapshot / "tests/unit").glob("test_*.py")
-        if f"services.{module}" in candidate.read_text(encoding="utf-8")
-    }
+    discovered: set[str] = set()
+    for candidate in (snapshot / "tests/unit").glob("test_*.py"):
+        source = candidate.read_text(encoding="utf-8-sig")
+        owners = {
+            item.name for item in PROFILES
+            if (
+                str(Path(item.runtime_input).parent).replace("\\", "/").replace("/", ".")
+                in source
+                or str(Path(item.runtime_input).parent).replace("\\", "/") in source
+                or (item.name == "tilda" and "'tilda-adapter'" in source)
+            )
+        }
+        if not owners and ("shared.projects" in source or "shared.netpolicy" in source):
+            owners.add("api")
+        if not owners:
+            raise RuntimeError(
+                f"Unit-файл не принадлежит ни одному backend-профилю: {candidate.name}",
+            )
+        if profile.name in owners:
+            discovered.add(candidate.relative_to(snapshot).as_posix())
     if discovered != set(profile.tests):
         raise RuntimeError("Список unit-тестов сервиса изменился; обновите backend-профиль")
 
@@ -161,6 +212,42 @@ def update_locks(check: bool) -> int:
     return 0
 
 
+def build_test_environment(snapshot: Path, workspace: Path) -> dict[str, str]:
+    environment = build_tool_environment()
+    for name, relative in (
+        ("HOME", "home"), ("USERPROFILE", "home"),
+        ("APPDATA", "home/roaming"), ("LOCALAPPDATA", "home/local"),
+        ("TEMP", "temp"), ("TMP", "temp"), ("TMPDIR", "temp"),
+    ):
+        path = workspace / relative
+        path.mkdir(parents=True, exist_ok=True)
+        environment[name] = str(path)
+    environment.update({
+        "ENVIRONMENT": "test",
+        "DATABASE_URL": "postgresql://127.0.0.1:1/backend_unit",
+        "REDIS_URL": "redis://127.0.0.1:1/0",
+        "RABBITMQ_HOST": "127.0.0.1",
+        "RABBITMQ_PORT": "1",
+        "RABBITMQ_USER": "unit",
+        "RABBITMQ_PASSWORD": secrets.token_urlsafe(32),
+        "INTERNAL_API_KEY": secrets.token_urlsafe(32),
+        "JWT_SECRET_KEY": secrets.token_urlsafe(48),
+        "MASTER_ENCRYPTION_KEY": base64.urlsafe_b64encode(
+            secrets.token_bytes(32),
+        ).decode("ascii"),
+        "PYTHONPATH": str(snapshot),
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "CORS_ORIGINS": "http://localhost",
+    })
+    for prefix in ("AUDIT", "SEMANTIC", "REPORTING"):
+        environment.update({
+            f"{prefix}_DATABASE_URL": "postgresql+asyncpg://127.0.0.1:1/backend_unit",
+            f"{prefix}_REDIS_URL": "redis://127.0.0.1:1/0",
+            f"{prefix}_RABBITMQ_URL": "amqp://127.0.0.1:1/",
+        })
+    return environment
+
+
 def run_tests(profile: Profile) -> int:
     if sys.version_info[:2] != (3, 11):
         raise RuntimeError("Backend-профили требуют Python 3.11")
@@ -178,23 +265,11 @@ def run_tests(profile: Profile) -> int:
         for required in (*profile.tests, "scripts/pytest_required.py"):
             if not (snapshot / required).is_file():
                 raise RuntimeError(f"Нужный исходник не отслеживается Git: {required}")
-        environment.update({
-            "ENVIRONMENT": "test",
-            "DATABASE_URL": "postgresql://127.0.0.1:1/backend_unit",
-            "REDIS_URL": "redis://127.0.0.1:1/0",
-            "RABBITMQ_HOST": "127.0.0.1",
-            "RABBITMQ_PORT": "1",
-            "RABBITMQ_USER": "unit",
-            "RABBITMQ_PASSWORD": secrets.token_urlsafe(32),
-            "INTERNAL_API_KEY": secrets.token_urlsafe(32),
-            "PYTHONPATH": str(snapshot),
-            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
-            "CORS_ORIGINS": "http://localhost",
-        })
+        environment = build_test_environment(snapshot, Path(directory))
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "-p", "pytest_asyncio.plugin",
              "-p", "scripts.pytest_required", "--strict-config", "--strict-markers",
-             "-p", "no:cacheprovider", "-q", *profile.tests],
+             "-p", "no:cacheprovider", "-ra", "-q", *profile.tests],
             cwd=snapshot, env=environment, check=False,
         )
         return result.returncode

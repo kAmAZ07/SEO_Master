@@ -290,3 +290,33 @@ def test_cancel_passes_through():
             return (await client.post(f"/api/public/audit/{UID}/cancel")).json()
 
     assert run(scenario())["status"] == "cancelled"
+
+
+@respx.mock
+def test_claim_token_is_passed_to_the_creator_once_and_never_via_status(redis_fake):
+    respx.post(f"{AUDIT}/audit/public").respond(
+        200, json={"audit_id": "0123abcd-0000-4000-8000-000000000001", "status": "queued", "mode": "public", "claim_token": "tok-123"}
+    )
+    respx.get(f"{AUDIT}/public/audit/0123abcd-0000-4000-8000-000000000001").respond(200, json={"status": "queued", "root_url": "https://example.com/"})
+
+    async def scenario():
+        async with make_client() as client:
+            started = await client.post("/api/public/quick-audit", json={"url": "https://example.com/"})
+            status = await client.get("/api/public/audit-status/0123abcd-0000-4000-8000-000000000001")
+            return started, status
+
+    started, status = run(scenario())
+    assert started.json()["claim_token"] == "tok-123"
+    assert "tok-123" not in status.text and "claim" not in status.text
+
+
+@respx.mock
+def test_missing_claim_token_from_an_old_audit_service_is_null_not_an_error(redis_fake):
+    audit_ok()
+
+    async def scenario():
+        async with make_client() as client:
+            return await client.post("/api/public/quick-audit", json={"url": "https://example.com/"})
+
+    response = run(scenario())
+    assert response.status_code == 200 and response.json()["claim_token"] is None

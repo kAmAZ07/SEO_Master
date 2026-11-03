@@ -41,7 +41,8 @@ class AuditQueuedResponse(BaseModel):
 
 
 class PublicAuditResponse(AuditQueuedResponse):
-    pass
+    # Одноразовый токен присоединения аудита к проекту; возвращается только при запуске.
+    claim_token: str | None = None
 
 
 class FullAuditResponse(AuditQueuedResponse):

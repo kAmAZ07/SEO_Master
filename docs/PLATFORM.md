@@ -37,7 +37,7 @@ Frontend проверяется без изменения исходников:
 
 Если существующий frontend lint или тест не проходит, gate должен остаться красным. Правка в зоне Александры передаётся ей на согласование; отключать проверку или ставить `continue-on-error` нельзя.
 
-CI задаёт отдельные Linux image builds, но их фактический запуск ещё нужно подтвердить; миграции и реальный WordPress E2E не включены. Отдельный `WordPress isolated contracts (not E2E)` выполняет PHP syntax/contracts и общие Python/PHP vectors; это не запуск WordPress/MySQL. Успех новых unit-gates не означает готовность HITL/публикации и не заменяет негативные и конкурентные тесты следующих AR-задач.
+Linux job сборки/UID фактически прошёл на `ac16f4d` в run `41668552910`; это не зелёный workflow целиком. Отдельный `Alembic adapter (no database or DDL)` проверяет source-адаптер с настоящими закреплёнными библиотеками, но не применяет revisions. Миграции на БД и реальный WordPress E2E не включены. `WordPress isolated contracts (not E2E)` выполняет PHP syntax/contracts и общие Python/PHP vectors; это не запуск WordPress/MySQL. Успех новых unit-gates не означает готовность HITL/публикации и не заменяет негативные и конкурентные тесты следующих AR-задач.
 
 ### Linux-сборка и проверка UID без запуска стека
 Job `Linux image builds and UID (not stack E2E)` на Ubuntu 24.04 создаёт одноразовую dev-конфигурацию через общий `bootstrap`, проверяет `config --quiet` и выполняет общий `build`. PostgreSQL, Redis, RabbitMQ, приложения и миграции при этом не запускаются. Нет deploy-секретов, push образов, host mounts или автоматического schema/seed. Установка пакетов и Chromium внутри build всё ещё требует сети.
@@ -50,14 +50,14 @@ Probe переопределяет application entrypoint: Python запуска
 
 Если `docker create` завершился тайм-аутом до получения подтверждённого ID, результат создания неизвестен: helper не угадывает контейнер по имени и не делает общий cleanup. Возможный orphan остаётся до уничтожения одноразовой hosted VM; поэтому этот CI-helper не предназначен для автоматической уборки на постоянном/shared daemon.
 
-Локальные fake-subprocess регрессии проверяют команды, error paths и ownership cleanup, но **не доказывают сборку или запуск образа**. Недоступный локальный daemon остаётся блокером; только завершённый Linux CI run может подтвердить build/UID. Даже зелёный UID probe не проверяет application startup, readonly/tmpfs-поведение сервиса, readiness, browser egress, миграции или E2E. Источник правила tagging: `https://docs.docker.com/reference/cli/docker/compose/build/`.
+Локальные fake-subprocess регрессии проверяют команды, error paths и ownership cleanup, но **не доказывают сборку или запуск образа**. Реальное Linux-подтверждение build/UID получено для `ac16f4d`: job `126031215429` в `https://github.com/kAmAZ07/SEO_Master/actions/runs/41668552910` завершён с `success`, включая общий build и все восемь probes. Оно относится к этой ревизии; последующие изменения требуют нового CI. Локальный daemon по-прежнему недоступен. Даже зелёный UID probe не проверяет application startup, readonly/tmpfs-поведение сервиса, readiness, browser egress, миграции или E2E. Источник правила tagging: `https://docs.docker.com/reference/cli/docker/compose/build/`.
 
 ## Locks и изолированные backend-тесты
 Генератор — ровно uv 0.11.3, установленный через `locks/tooling.txt`, цель — Python 3.11. Источник runtime-зависимостей — исходный `requirements.txt` соответствующего сервиса. Management требует `httpx~=0.26.0`, client gateway — `httpx==0.27.0`: объединять их нельзя. Существующие manifests не изменяются; management manifest уже содержит dev/test-пакеты, поэтому первый faithful runtime-lock сохраняет их. Разделение runtime/dev — отдельная работа.
 
 Первый инкремент добавил `locks/management.txt` и `locks/client.txt`; теперь runtime/test locks есть для всех семи профилей. `*-test.in` добавляют инструменты, а `*-test.txt` разрешаются с runtime-lock в качестве constraint. `locks/tooling.txt` закрепляет сам uv, pytest, asyncio, mypy и Ruff с транзитивными зависимостями. Используются SHA-256, публичный PyPI, запрет сборки sdist. Все сервисные Dockerfile устанавливают свой lock с `--require-hashes --only-binary=:all:`. Полный inventory, версии pytest, native результаты и незакрытые audit-дефекты приведены в `docs/DEPENDENCIES.md`.
 
-Locks универсальные с platform markers, но это не обещание поддержки всех ОС/архитектур: проверены только фактически выполненные native установки. Локальная проверка — Windows x86_64/Python 3.11.9; Linux/Windows CI matrix должна отдельно подтвердить свои результаты после публикации. Docker daemon локально недоступен, поэтому установка wheel не является проверкой образа. Закрепление старых версий не заменяет security audit и обновление уязвимых зависимостей.
+Locks универсальные с platform markers, но это не обещание поддержки всех ОС/архитектур: проверены только фактически выполненные native установки. Локальная проверка — Windows x86_64/Python 3.11.9. На `ac16f4d` run `41668552910` подтвердил management/client/api/semantic/reporting/tilda на Ubuntu 24.04 и Windows 2022; оба audit jobs остались красными. Docker daemon локально недоступен; отдельный удалённый build/UID job прошёл, но установка wheel сама по себе проверкой образа не является. Закрепление старых версий не заменяет security audit и обновление уязвимых зависимостей.
 
 Из корня checkout в PowerShell и POSIX одинаково, из отдельного Python 3.11 tooling-окружения:
 
@@ -76,6 +76,26 @@ Snapshot берёт **текущие рабочие байты отслежив�
 Пропуск/xfail/xpass, пустая коллекция, отсутствующий пакет/plugin, ошибка установки и любое падение теста возвращают ненулевой код. Произвольные pytest-фильтры не принимаются. Прямой внутренний `test <profile>` предназначен для уже изолированного окружения; обычная локальная/CI-команда — `check <profile>`.
 
 Изменение зависимостей: править исходный manifest/`*.in`, выполнить `python scripts/backend.py lock`, проверить весь lock-diff и оба профиля. `lock --check` пересчитывает набор с существующими версиями как constraints и сравнивает результат, не подбирая незапрошенные новые версии. Это проверка соответствия входам, не утверждение «все пакеты самые новые». Обновление версий производится осознанным отдельным diff, без dirty `pip freeze`.
+## Alembic: безопасный source-адаптер AR-3
+`database/migrations/env.py` больше не импортирует приложение, `config.database_config`, secret provider или модели, не вызывает helper DDL и не делает собственный commit. URL берётся только из явно настроенного `sqlalchemy.url`; альтернативно вызывающий код передаёт уже открытую connection через `Config.attributes["connection"]`. Скрытого fallback на `DATABASE_URL` и рабочий `.env` нет. Собственные connection/engine закрываются и освобождаются при успехе и ошибках; borrowed connection не закрывается и не коммитится адаптером. Транзакцией revisions управляет Alembic.
+
+Для одного `database/migrations/env.py` явно задано `text eol=crlf` в `.gitattributes`: проверенные рабочие CRLF-байты сохраняются, а Git хранит канонический LF-текст. Это устраняет прежний mixed-EOL baseline без отключения whitespace-проверок; остальные файлы не перенормализуются.
+
+Пустой tracked URL в `database/alembic.ini` намеренно приводит к `MIGRATION_DSN_MISSING` до создания engine. Ошибки чтения/interpolation INI и разбора offline URL дают только `MIGRATION_DSN_INVALID` с подавленным исходным traceback; literal `%` в INI требует стандартного escaping `%%`. Ошибки создания собственного engine/connection дают `MIGRATION_CONNECTION_FAILED`. Ошибки самих revisions/transaction не маскируются как неверный DSN. Эти границы не делают безопасным логирование произвольных ошибок внутри legacy revisions.
+
+Чистая stdlib policy `scripts/migration_policy.py` фиксирует qualified identities `(schema, table)` для core 32, management 4 и client 2 таблиц; `None` нормализуется в `public`, но `audit_schema.projects` и `public.projects` остаются разными владельцами. Фильтры исключают чужие schemas/tables до reflection и сверяют table parent у columns/indexes/constraints. Отсутствующие, дублирующие и чужие metadata identities отклоняются. Это декларация владения, **не** полный загруженный ORM registry и не разрешение DROP.
+
+Пока полного чистого registry нет, `check`, `revision --autogenerate` и генерация через `revision_environment=True` блокируются как `MIGRATION_AUTOGENERATE_BLOCKED` до engine/reflection. Проверяются и CLI, и programmatic Alembic API. `target_metadata=None` не используется как основание удалить отсутствующие модели. Обычные revisions и AL-модели этим инкрементом не меняются; он не разрешает их применение и не устраняет опасные операции внутри существующих revisions/startup.
+
+Обязательные stdlib/fake регрессии входят в platform-набор. Отдельный CI job устанавливает существующий `locks/management-test.txt` с проверкой хешей: Alembic 1.13.3, SQLAlchemy и mypy находятся в одном изолированном job-окружении. Выполняются:
+
+    python -B -m tests.platform.test_migration_context --native-alembic
+    python -B -m mypy --strict --explicit-package-bases scripts/migration_policy.py scripts/migration_context.py database/migrations/env.py tests/platform/test_migration_policy.py tests/platform/test_migration_context.py
+
+Native probe использует настоящий Alembic и временный пустой versions-каталог, запрещает application imports, dotenv, сеть/native DBAPI и проверяет отсутствие engine/version-DDL/revision callback в отказных сценариях. Это не скрытый skipped test: отсутствие закреплённых зависимостей завершает команду ошибкой. При отдельном tooling Python для mypy нужно добавить `--python-executable <python-из-management-test-окружения>`; strict только со stdlib-фейками без реальных vendor types не считается проверкой `env.py`. Регрессия workflow требует mandatory native/type шаги без `if`/`continue-on-error`.
+
+Приёмка этого инкремента source-only. Полный registry, parity схемы, выделенная migration/runtime роль, empty/legacy PostgreSQL проверки, backup/restore и устранение startup DDL остаются открытыми; `up/e2e` по-прежнему закрыты. Подключение к БД и DDL требуют отдельного явного разрешения.
+
 ## Владельцы и независимое ревью
 В `.github/CODEOWNERS` назначены Арсений (`@kAmAZ07`) и Александра (`@sshpv`) по декомпозиции AL/AR. По умолчанию неперечисленные файлы относятся к платформенной зоне Арсения. Новые прикладные модули и тесты Александры нужно добавлять в правила в том же PR.
 
@@ -89,7 +109,7 @@ CODEOWNERS обозначает ответственность, но не зам
 
 ## Что требуется отдельно
 - Согласованная настройка защиты main с required checks и review. Добавление CI-файла само её не включает.
-- Подтверждение Linux-сборок обновлённых Dockerfile, согласование оставшихся locks и реальный запуск без root/read-only. Исправленные исходные файлы сами по себе этого не доказывают.
+- Повторные Linux-сборки/UID после следующих изменений и реальный application startup без root/read-only. Первый build/UID evidence относится только к `ac16f4d`; исправленные исходные файлы сами по себе этого не доказывают.
 - Изолированный E2E-стек с уникальным именем и безопасной очисткой. Существующий `tests/e2e/run_extended_e2e.ps1` делает `down -v`; его нельзя запускать на общей dev-конфигурации как обычный тест.
 - Доступный Docker daemon для build/runtime-проверок. Наличие Docker CLI не подтверждает доступность daemon.
 - Проверенная связка WordPress/PHP/тема/SEO-плагин для DEC-06. Пустые значения нельзя заменять непроверенными обещаниями совместимости.
@@ -136,7 +156,7 @@ Make предоставляет `bootstrap`, `config`, `up`, `test`, `e2e`, `lin
 
 Все внешние base/runtime images закреплены multiarch SHA-256 indexes. Digests сверены с сырыми manifest-байтами public registries без daemon/pull; это проверяет подлинность конкретной ссылки, не запуск, отсутствие CVE или актуальность upstream. Node — версия уже выбранного CI 24.14.1; Python — 3.11-slim-bookworm. PostgreSQL остаётся major 15, без скрытого major upgrade; старые тома не подключаются и не изменяются.
 
-Playwright Jammy 1.49.1 использует системный Python 3.10, поэтому audit собирается на том же Python 3.11-bookworm; locked Playwright 1.49.1 сам устанавливает соответствующий Chromium в `/ms-playwright`. Установка browser assets/apt-dependencies требует сети и ещё не проверена Linux-сборкой: pin не делает этот шаг hermetic. Browser egress/изоляция AL также не закрыты.
+Playwright Jammy 1.49.1 использует системный Python 3.10, поэтому audit собирается на том же Python 3.11-bookworm; locked Playwright 1.49.1 сам устанавливает соответствующий Chromium в `/ms-playwright`. Установка browser assets/apt-dependencies требует сети: pin не делает этот шаг hermetic. Linux-сборка на `ac16f4d` прошла, но запуск Chromium, rendering и browser egress/изоляция AL этим build/UID job не проверяются и остаются открытыми.
 
 Redis закреплён на 7.4; конфигурация с паролем создаётся внутри контейнера с umask 077, health использует `REDISCLI_AUTH`, не `redis-cli -a`. RabbitMQ 3.13 закреплён для минимизации несовместимых изменений, но **community support закончилась 30.09.2024**: это явный release blocker и требует отдельного совместимого обновления/проверки, а не заявления о production support. Источники: `https://www.rabbitmq.com/release-information`, `https://redis.io/docs/latest/operate/oss_and_stack/install/version-mgmt/`, `https://github.com/microsoft/playwright-python/blob/v1.49.1/utils/docker/Dockerfile.jammy`.
 
@@ -149,6 +169,6 @@ Audit startup выполняет schema/create_all/partition DDL и cleanup/reco
 
 До открытия `up/e2e` нужны версионированные миграции/роли, устранённый startup DDL, тесты empty/legacy DB на отдельном разрешённом стенде, безопасный browser egress и полноценная readiness. Management health использует `/health/ready`, worker — адресованный inspect ping. Beat status проверяет доступность worker, но ещё не доказывает свежесть scheduler heartbeat; `/health` остальных сервисов также не доказывает живой consumer. Эти ограничения остаются открытыми.
 
-AL-4 уже находится в базе ветки, но его `legacy_project_id_map` нельзя использовать как подтверждение владельца: `_map_management_projects` сопоставляет единственный canonical project по host без доказательства owner/workspace. Задача исправления остаётся за AL; AR-3 не переносит разрешения или историю по такому `matched`. Alembic `env.py` дополнительно требует отдельной доработки: сейчас inspection-команды могут выполнять DDL/commit, metadata неполно, а фильтр autogenerate не ограничен владельцем таблиц. Исследование не запускало эти команды против БД.
+AL-4 уже находится в базе ветки, но его `legacy_project_id_map` нельзя использовать как подтверждение владельца: `_map_management_projects` сопоставляет единственный canonical project по host без доказательства owner/workspace. Задача исправления остаётся за AL; AR-3 не переносит разрешения или историю по такому `matched`. Source-адаптер Alembic убирает helper DDL/commit и блокирует generation при неполной metadata, как описано выше. Это не проверка существующих revisions и не завершение всего AR-3; команды против БД не запускались.
 
 Bootstrap production-ключей намеренно отсутствует; `--mode prod` не является production deploy-процессом. Для настоящего staging/production необходимы внешний secret provider, TLS/ingress, миграционное разрешение, backup/restore, immutable artifact promotion и согласованная проверка. Никакая сборка или проверка Compose не меняет рабочую БД и не включает старый автодеплой.

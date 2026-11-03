@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 if (!defined('ABSPATH')) {
     exit;
 }
@@ -14,7 +14,7 @@ function seo_master_get_frontend_post_id() {
 
 function seo_master_get_managed_meta($post_id, $meta_key) {
     $value = get_post_meta((int) $post_id, $meta_key, true);
-    return is_string($value) ? trim($value) : '';
+    return is_string($value) ? $value : '';
 }
 
 function seo_master_get_managed_title($post_id = 0) {
@@ -23,7 +23,9 @@ function seo_master_get_managed_title($post_id = 0) {
         return '';
     }
 
-    return seo_master_get_managed_meta($post_id, '_seo_master_meta_title');
+    $value = seo_master_get_managed_meta($post_id, '_seo_master_meta_title');
+    try { return sm_v2_text($value, 512); }
+    catch (SM_V2_Error $error) { return ''; }
 }
 
 function seo_master_get_managed_description($post_id = 0) {
@@ -32,7 +34,9 @@ function seo_master_get_managed_description($post_id = 0) {
         return '';
     }
 
-    return seo_master_get_managed_meta($post_id, '_seo_master_meta_description');
+    $value = seo_master_get_managed_meta($post_id, '_seo_master_meta_description');
+    try { return sm_v2_text($value, 2000); }
+    catch (SM_V2_Error $error) { return ''; }
 }
 
 function seo_master_get_managed_h1($post_id = 0) {
@@ -59,8 +63,10 @@ function seo_master_get_managed_schema_array($post_id = 0) {
         return null;
     }
 
-    $decoded = json_decode($schema_json, true);
-    return is_array($decoded) ? $decoded : null;
+    try {
+        sm_v2_jsonld($schema_json);
+        return json_decode($schema_json, true);
+    } catch (SM_V2_Error $error) { return null; }
 }
 
 function seo_master_has_yoast_seo() {
@@ -100,64 +106,16 @@ function seo_master_filter_seo_description($description) {
 }
 
 function seo_master_filter_h1_title($title, $post_id = 0) {
-    if (is_admin() || !is_singular() || !in_the_loop() || !is_main_query()) {
-        return $title;
-    }
-
-    $queried_post_id = seo_master_get_frontend_post_id();
-    if (!$queried_post_id || (int) $post_id !== $queried_post_id) {
-        return $title;
-    }
-
-    $managed_h1 = seo_master_get_managed_h1($queried_post_id);
-    return $managed_h1 !== '' ? $managed_h1 : $title;
+    return $title;
 }
 
 function seo_master_filter_yoast_schema_graph($graph) {
-    $schema = seo_master_get_managed_schema_array();
-    if (!$schema) {
-        return $graph;
-    }
-
-    if (isset($schema['@graph']) && is_array($schema['@graph'])) {
-        return $schema['@graph'];
-    }
-
-    if (array_keys($schema) === range(0, count($schema) - 1)) {
-        return $schema;
-    }
-
-    return array($schema);
+    // JSON-LD with an SEO plugin is manual until a real merge/conflict compatibility matrix is verified.
+    return $graph;
 }
 
-function seo_master_filter_rank_math_schema($data) {
-    $schema = seo_master_get_managed_schema_array();
-    if (!$schema) {
-        return $data;
-    }
-
-    $rank_math_schema = array();
-    if (isset($schema['@graph']) && is_array($schema['@graph'])) {
-        foreach ($schema['@graph'] as $index => $schema_node) {
-            if (is_array($schema_node)) {
-                $rank_math_schema['seo_master_' . (int) $index] = $schema_node;
-            }
-        }
-
-        return !empty($rank_math_schema) ? $rank_math_schema : $data;
-    }
-
-    if (array_keys($schema) === range(0, count($schema) - 1)) {
-        foreach ($schema as $index => $schema_node) {
-            if (is_array($schema_node)) {
-                $rank_math_schema['seo_master_' . (int) $index] = $schema_node;
-            }
-        }
-
-        return !empty($rank_math_schema) ? $rank_math_schema : $data;
-    }
-
-    return array('seo_master' => $schema);
+function seo_master_filter_rank_math_schema($schema_graph) {
+    return $schema_graph;
 }
 
 /**
@@ -180,6 +138,6 @@ function seo_master_output_meta_tags() {
 
     $schema = seo_master_get_managed_schema_array($post_id);
     if ($schema) {
-        echo '<script type="application/ld+json">' . wp_json_encode($schema, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . '</script>' . "\n";
+        echo '<script type="application/ld+json">' . wp_json_encode($schema, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) . '</script>' . "\n";
     }
 }

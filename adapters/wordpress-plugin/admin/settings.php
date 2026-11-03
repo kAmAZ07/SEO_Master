@@ -1,83 +1,44 @@
-﻿<?php
-if (!defined('ABSPATH')) {
-    exit;
-}
+<?php
+if (!defined('ABSPATH')) { exit; }
 
 function seo_master_register_settings_page() {
-    add_options_page(
-        __('SEO Master Connector', 'seo-master-connector'),
-        __('SEO Master Connector', 'seo-master-connector'),
-        'manage_options',
-        'seo-master-connector',
-        'seo_master_render_settings_page'
-    );
+    add_options_page('SEO Master Connector', 'SEO Master Connector', 'manage_options', 'seo-master-connector', 'seo_master_render_settings_page');
 }
-
+function seo_master_sanitize_pairing_id($value) {
+    // Invalid/missing input clears the binding rather than retaining an accidentally permissive project.
+    return sm_v2_uuid($value) ? $value : '';
+}
 function seo_master_register_settings() {
-    register_setting('seo_master_settings', 'seo_master_project_id', array(
-        'type' => 'string',
-        'sanitize_callback' => 'sanitize_text_field',
-        'default' => '',
-    ));
-
-    register_setting('seo_master_settings', 'seo_master_max_drift', array(
-        'type' => 'integer',
-        'sanitize_callback' => 'absint',
-        'default' => 300,
-    ));
-}
-
-function seo_master_render_settings_page() {
-    if (!current_user_can('manage_options')) {
-        return;
+    foreach (array('seo_master_project_id', 'seo_master_site_id') as $option) {
+        register_setting('seo_master_settings', $option, array(
+            'type' => 'string', 'sanitize_callback' => 'seo_master_sanitize_pairing_id', 'default' => '', 'show_in_rest' => false,
+        ));
     }
+}
+function seo_master_render_settings_page() {
+    if (!current_user_can('manage_options')) { return; }
+    $paired = false;
+    try { seo_master_v2_config(); $paired = true; }
+    catch (SM_V2_Error $error) { $paired = false; }
     ?>
     <div class="wrap">
-        <h1><?php esc_html_e('SEO Master Connector', 'seo-master-connector'); ?></h1>
-        <p><?php esc_html_e('Configure authentication and project binding for incoming SEO patches.', 'seo-master-connector'); ?></p>
-
+        <h1>SEO Master Connector v2</h1>
+        <p><?php echo esc_html($paired ? 'Привязка настроена; готовность хранилища проверяется отдельно.' : 'Привязка неполная. Подписанные операции закрыты.'); ?></p>
+        <p>Публикация разрешается только доверенному Gateway, который проверяет пользователя, одобрение, его срок и хеш предложения. Плагин самостоятельно HITL не подтверждает.</p>
         <form method="post" action="options.php">
             <?php settings_fields('seo_master_settings'); ?>
             <table class="form-table" role="presentation">
-                <tr>
-                    <th scope="row">
-                        <label for="seo_master_project_id"><?php esc_html_e('Project ID', 'seo-master-connector'); ?></label>
-                    </th>
-                    <td>
-                        <input name="seo_master_project_id" id="seo_master_project_id" type="text" class="regular-text" value="<?php echo esc_attr(get_option('seo_master_project_id', '')); ?>" />
-                        <p class="description"><?php esc_html_e('Must match X-Project-ID from signed requests.', 'seo-master-connector'); ?></p>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row"><?php esc_html_e('HMAC Secret', 'seo-master-connector'); ?></th>
-                    <td>
-                        <?php $secret_configured = function_exists('seo_master_get_hmac_secret') && seo_master_get_hmac_secret() !== ''; ?>
-                        <p>
-                            <strong>
-                                <?php echo $secret_configured ? esc_html__('Configured from environment/wp-config', 'seo-master-connector') : esc_html__('Not configured', 'seo-master-connector'); ?>
-                            </strong>
-                        </p>
-                        <p class="description">
-                            <?php esc_html_e('For security, the shared secret is no longer stored in wp_options. Define SEO_MASTER_HMAC_SECRET in wp-config.php or the server environment.', 'seo-master-connector'); ?>
-                        </p>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row">
-                        <label for="seo_master_max_drift"><?php esc_html_e('Max timestamp drift (seconds)', 'seo-master-connector'); ?></label>
-                    </th>
-                    <td>
-                        <input name="seo_master_max_drift" id="seo_master_max_drift" type="number" min="10" step="1" class="small-text" value="<?php echo esc_attr(get_option('seo_master_max_drift', 300)); ?>" />
-                    </td>
-                </tr>
+                <?php foreach (array('seo_master_project_id' => 'Project UUID', 'seo_master_site_id' => 'Site UUID') as $option => $label) { ?>
+                    <tr><th scope="row"><label for="<?php echo esc_attr($option); ?>"><?php echo esc_html($label); ?></label></th>
+                    <td><input class="regular-text" required maxlength="36" name="<?php echo esc_attr($option); ?>" id="<?php echo esc_attr($option); ?>" value="<?php echo esc_attr(get_option($option, '')); ?>" /></td></tr>
+                <?php } ?>
             </table>
             <?php submit_button(); ?>
         </form>
-
-        <h2><?php esc_html_e('REST endpoints', 'seo-master-connector'); ?></h2>
-        <code><?php echo esc_html(home_url('/wp-json/seo-master/v1/meta')); ?></code><br />
-        <code><?php echo esc_html(home_url('/wp-json/seo-master/v1/schema')); ?></code><br />
-        <code><?php echo esc_html(home_url('/wp-json/seo-master/v1/interlinks')); ?></code>
+        <p>Ключи задаются только через окружение / wp-config: SEO_MASTER_KEY_ID, SEO_MASTER_HMAC_SECRET и отдельный SEO_MASTER_RECEIPT_SECRET. Секреты здесь не отображаются и в options не сохраняются.</p>
+        <p>Флаг SEO_MASTER_TRUSTED_GATEWAY=1 включается только после подключения проверяющего HITL Gateway. Пока AR-4 не интегрирован, оставьте публикацию выключенной.</p>
+        <p>Схема v2 не устанавливается автоматически. Активация с SEO_MASTER_INSTALL_V2_SCHEMA=1 допустима лишь на отдельно согласованном изолированном стенде; после установки удалите флаг. Инструкции и ограничения: docs/WORDPRESS.md.</p>
+        <code><?php echo esc_html(home_url('/wp-json/seo-master/v2/capabilities')); ?></code>
     </div>
     <?php
 }

@@ -1,10 +1,10 @@
-﻿<?php
+<?php
 if (!defined('ABSPATH')) {
     exit;
 }
 
 /**
- * Compatibility policy: support the latest three tested WordPress minors.
+ * Minimum API requirements only; runtime compatibility is not yet certified.
  */
 if (!defined('SEO_MASTER_MIN_PHP_VERSION')) {
     define('SEO_MASTER_MIN_PHP_VERSION', '8.0');
@@ -14,26 +14,13 @@ if (!defined('SEO_MASTER_SUPPORTED_WP_MIN')) {
     define('SEO_MASTER_SUPPORTED_WP_MIN', '6.7');
 }
 
-if (!defined('SEO_MASTER_SUPPORTED_WP_MAX')) {
-    define('SEO_MASTER_SUPPORTED_WP_MAX', '6.9');
-}
-
-function seo_master_normalize_wp_minor_version($version) {
-    $parts = explode('.', preg_replace('/[^0-9.].*/', '', (string) $version));
-    $major = isset($parts[0]) && $parts[0] !== '' ? $parts[0] : '0';
-    $minor = isset($parts[1]) && $parts[1] !== '' ? $parts[1] : '0';
-
-    return $major . '.' . $minor;
-}
 
 function seo_master_get_supported_wordpress_versions() {
-    return array('6.7', '6.8', '6.9');
+    return array();
 }
 
 function seo_master_is_wordpress_version_supported($version) {
-    $minor_version = seo_master_normalize_wp_minor_version($version);
-
-    return in_array($minor_version, seo_master_get_supported_wordpress_versions(), true);
+    return version_compare((string) $version, SEO_MASTER_SUPPORTED_WP_MIN, '>=');
 }
 
 function seo_master_is_compatible() {
@@ -57,11 +44,10 @@ function seo_master_render_incompatibility_notice() {
     echo '<div class="notice notice-error"><p>';
     echo esc_html(
         sprintf(
-            /* translators: 1: PHP version, 2: WordPress min version, 3: WordPress max version. */
-            __('SEO Master Connector requires PHP %1$s+ and supports WordPress %2$s-%3$s.', 'seo-master-connector'),
+            /* translators: 1: PHP version, 2: WordPress min version. */
+            __('SEO Master Connector requires PHP %1$s+ and WordPress %2$s+. Runtime compatibility is not certified.', 'seo-master-connector'),
             SEO_MASTER_MIN_PHP_VERSION,
-            SEO_MASTER_SUPPORTED_WP_MIN,
-            SEO_MASTER_SUPPORTED_WP_MAX
+            SEO_MASTER_SUPPORTED_WP_MIN
         )
     );
     echo '</p></div>';

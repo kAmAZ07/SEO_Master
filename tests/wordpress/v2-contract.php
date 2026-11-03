@@ -16,6 +16,9 @@ final class MemoryStore implements SM_V2_Store {
     public bool $fail_storage = false;
     public bool $lose_commit_response = false;
     public bool $fail_rollback = false;
+    public array $invalidated = [];
+    private array $scheduled_cache = [];
+    private bool $in_transaction = false;
     public string $post_status = 'publish';
     private ?array $backup = null;
     public function check_storage(): void {
@@ -27,7 +30,7 @@ final class MemoryStore implements SM_V2_Store {
         if (isset($this->nonces[$key])) { throw new SM_V2_Error('replay', 409); }
         $this->nonces[$key] = $expires;
     }
-    public function begin(): void { $this->events[] = 'begin'; $this->backup = [$this->fields, $this->operations, $this->writes]; }
+    public function begin(): void { $this->events[] = 'begin'; $this->in_transaction = true; $this->backup = [$this->fields, $this->operations, $this->writes]; }
     public function lock_operation(string $operation_id, string $request_hash): ?array {
         $this->events[] = 'lock:' . $operation_id;
         if (!isset($this->operations[$operation_id])) { return null; }
@@ -53,14 +56,28 @@ final class MemoryStore implements SM_V2_Store {
         $this->operations[$operation_id] = ['request_hash' => $request_hash, 'receipt' => $receipt];
     }
     public function read_operation(string $operation_id): ?array { $this->events[] = 'read'; return $this->operations[$operation_id]['receipt'] ?? null; }
+    public function schedule_cache_invalidation(int $entity_id): void {
+        if (!$this->in_transaction) { throw new SM_V2_Error('needs_reconciliation', 503); }
+        if ($entity_id < 1 || $entity_id > 2147483647) { throw new SM_V2_Error('invalid_schema', 400); }
+        $this->events[] = 'schedule:' . $entity_id;
+        $this->scheduled_cache[$entity_id] = true;
+    }
     public function commit(): void {
         $this->events[] = 'commit';
         $this->backup = null;
+        $this->in_transaction = false;
         if ($this->lose_commit_response) { throw new SM_V2_Error('needs_reconciliation', 503); }
+        foreach (array_keys($this->scheduled_cache) as $entity_id) {
+            $this->events[] = 'invalidate:' . $entity_id;
+            $this->invalidated[] = $entity_id;
+        }
+        $this->scheduled_cache = [];
     }
     public function rollback(): void {
         if ($this->fail_rollback) { throw new SM_V2_Error('storage_failure', 503); }
         if ($this->backup !== null) { [$this->fields, $this->operations, $this->writes] = $this->backup; $this->backup = null; }
+        $this->in_transaction = false;
+        $this->scheduled_cache = [];
     }
 }
 
@@ -152,7 +169,7 @@ $tests = [
         $route = '/seo-master/v2/operations/' . ContractFixture::OPERATION;
         $fixture->store->events = [];
         check($fixture->service->handle('GET', $route, '', $fixture->headers('GET', $route, '', ContractFixture::OPERATION), 1793715600) === $receipt, 'status lost receipt');
-        check($fixture->store->events === ['begin', 'read', 'commit'], 'status receipt was read outside an explicit transaction');
+        check($fixture->store->events === ['begin', 'read', 'schedule:7', 'commit', 'invalidate:7'], 'verified status did not schedule cache invalidation within transaction after receipt read');
         $signature = $receipt['signature'];
         unset($receipt['signature']);
         check(hash_equals(sm_v2_receipt_signature($receipt, $fixture->receipt_secret), $signature), 'receipt signature invalid');
@@ -611,6 +628,69 @@ $tests += [
         check($fixture->store->writes === 1 && count($fixture->store->operations) === 1, 'policy failure mutated');
     },
 ];
+$tests['unverified receipts never schedule cache effects on status or same-id recovery'] = function (): void {
+    foreach (['status', 'apply', 'rollback'] as $path) {
+        foreach (['scope', 'signature', 'schema', 'cross_kind', 'rollback_type'] as $case) {
+            if ($case === 'rollback_type' && $path !== 'rollback') { continue; }
+            $fixture = new ContractFixture();
+            $command = $fixture->command();
+            $original = $fixture->send($command);
+            if ($path === 'rollback') {
+                $command = rollback_command($original);
+                $fixture->send($command, '/seo-master/v2/rollback');
+            }
+            $operation = $command['operation_id'];
+            $receipt = &$fixture->store->operations[$operation]['receipt'];
+            if ($case === 'scope') { $receipt['site_id'] = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'; }
+            if ($case === 'signature') { $receipt['signature'] = str_repeat('0', 64); }
+            if ($case === 'schema') { $receipt['entity_id'] = 0; }
+            if ($case === 'cross_kind') { $receipt['kind'] = 'rollback_guard'; }
+            if ($case === 'rollback_type') {
+                foreach (['operation_type', 'original_operation_id', 'original_receipt_id', 'original_request_hash', 'original_proposal_hash', 'reason'] as $field) { unset($receipt[$field]); }
+                $receipt['outcome'] = 'applied_unverified';
+                unset($receipt['signature']);
+                $receipt['signature'] = sm_v2_receipt_signature($receipt, $fixture->receipt_secret);
+            }
+            unset($receipt);
+            $fixture->store->events = [];
+            $fixture->store->invalidated = [];
+            $action = $path === 'status' ? function () use ($fixture, $operation): array {
+                $route = '/seo-master/v2/operations/' . $operation;
+                return $fixture->service->handle('GET', $route, '', $fixture->headers('GET', $route, '', $operation), 1793715600);
+            } : fn() => $fixture->send($command, $path === 'apply' ? '/seo-master/v2/apply' : '/seo-master/v2/rollback');
+            expect_error($action, $case === 'scope' && $path === 'status' ? 'operation_not_found' : 'needs_reconciliation');
+            check($fixture->store->invalidated === [] &&
+                array_filter($fixture->store->events, static fn(string $event): bool => str_starts_with($event, 'schedule:')) === [],
+                'unverified/wrong-type receipt scheduled cache invalidation');
+        }
+    }
+};
+$tests['original guard dry-run conflict and missing status do not schedule recovery invalidation'] = function (): void {
+    $fixture = new ContractFixture();
+    $command = $fixture->command();
+    $original = $fixture->send($command);
+    $reverse = rollback_command($original);
+    foreach (['dry-run', 'rollback/dry-run'] as $route) {
+        $fixture->store->events = [];
+        $preview = $route === 'dry-run' ? $fixture->command() : $reverse;
+        check($fixture->send($preview, '/seo-master/v2/' . $route)['outcome'] === 'ready', 'preview failed');
+        check(array_filter($fixture->store->events, static fn(string $event): bool => str_starts_with($event, 'schedule:')) === [], 'dry-run or original lookup scheduled invalidation');
+    }
+    $fixture->store->events = [];
+    $fixture->send($reverse, '/seo-master/v2/rollback');
+    check(array_filter($fixture->store->events, static fn(string $event): bool => str_starts_with($event, 'schedule:')) === [], 'new rollback original lookup scheduled recovery invalidation');
+    $fixture->store->events = [];
+    expect_error(fn() => $fixture->send(rollback_command($original, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'), '/seo-master/v2/rollback'), 'rollback_already_consumed');
+    check(array_filter($fixture->store->events, static fn(string $event): bool => str_starts_with($event, 'schedule:')) === [], 'consumed guard or linked receipt scheduled recovery invalidation');
+    $fixture->store->events = [];
+    $command['approval_ref'] = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    expect_error(fn() => $fixture->send($command), 'idempotency_conflict');
+    $missing = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    $route = '/seo-master/v2/operations/' . $missing;
+    expect_error(fn() => $fixture->service->handle('GET', $route, '', $fixture->headers('GET', $route, '', $missing), 1793715600), 'operation_not_found');
+    check($fixture->store->invalidated === [] &&
+        array_filter($fixture->store->events, static fn(string $event): bool => str_starts_with($event, 'schedule:')) === [], 'conflict/missing status scheduled invalidation');
+};
 $failures = [];
 foreach ($tests as $name => $test) {
     try { $test(); } catch (Throwable $error) { $failures[] = "$name: {$error->getMessage()}"; }

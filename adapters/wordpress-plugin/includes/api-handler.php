@@ -5,10 +5,6 @@ function seo_master_upgrade_required() {
     return new WP_Error('upgrade_required', 'Legacy mutations are disabled; a trusted v2 gateway is required.', array('status' => 426));
 }
 function seo_master_v2_response(array $result) {
-    if (($result['kind'] ?? null) === 'receipt' && isset($result['entity_id']) && is_int($result['entity_id'])) {
-        // Includes rollback/status recovery after committed writes with an interrupted response/cache invalidation.
-        wp_cache_delete($result['entity_id'], 'post_meta');
-    }
     $response = new WP_REST_Response($result, 200);
     $response->header('Cache-Control', 'no-store, private');
     return $response;

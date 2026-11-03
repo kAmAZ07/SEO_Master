@@ -100,7 +100,16 @@ $rollback_receipt = ['kind' => 'receipt', 'operation_type' => 'rollback', 'entit
 $response = seo_master_v2_response($rollback_receipt);
 assertion($response->body === $rollback_receipt && $response->status === 200 &&
     $response->headers['Cache-Control'] === 'no-store, private', 'rollback response changed or cacheable');
-assertion(AdapterFixture::$cache_invalidations === [[7, 'post_meta']], 'rollback receipt/status cache healing absent');
+assertion(AdapterFixture::$cache_invalidations === [], 'response serializer duplicated service/store cache effects');
+foreach ([
+    ['kind' => 'receipt', 'entity_id' => 7, 'outcome' => 'no_op', 'applied_fields' => []],
+    ['kind' => 'receipt', 'entity_id' => 8, 'signature' => 'unverified raw response array'],
+    ['kind' => 'rollback_guard', 'entity_id' => 9],
+] as $unverified) {
+    $response = seo_master_v2_response($unverified);
+    assertion($response->body === $unverified && $response->headers['Cache-Control'] === 'no-store, private' &&
+        AdapterFixture::$cache_invalidations === [], 'serializer caused cache effects for no-op/unverified/cross-kind result');
+}
 foreach ($failures as $failure) { fwrite(STDERR, "FAIL: $failure\n"); }
 printf("WP adapter boundaries: %d/%d passed (standalone stubs, not WP runtime)\n", $assertions - count($failures), $assertions);
 exit($failures === [] ? 0 : 1);

@@ -12,6 +12,7 @@ interface SM_V2_Store {
     public function restore_fields(int $entity_id, array $fields): void;
     public function save_operation(string $operation_id, string $request_hash, array $receipt): void;
     public function read_operation(string $operation_id): ?array;
+    public function schedule_cache_invalidation(int $entity_id): void;
     public function commit(): void;
     public function rollback(): void;
 }
@@ -37,7 +38,9 @@ final class SM_V2_Service {
                 $receipt = $this->store->read_operation($status_operation);
                 if ($receipt === null || ($receipt['project_id'] ?? null) !== $this->config->project() ||
                     ($receipt['site_id'] ?? null) !== $this->config->site()) { throw new SM_V2_Error('operation_not_found', 404); }
-                return $this->checked_receipt($receipt, $status_operation);
+                $receipt = $this->checked_receipt($receipt, $status_operation);
+                if ($receipt['applied_fields'] !== []) { $this->store->schedule_cache_invalidation($receipt['entity_id']); }
+                return $receipt;
             });
         }
         $payload = sm_v2_decode($body);
@@ -91,7 +94,11 @@ final class SM_V2_Service {
         return $this->transaction(function () use ($route, $payload, $fields, $request_hash, $now): array {
             if ($route === '/seo-master/v2/apply') {
                 $existing = $this->store->lock_operation($payload['operation_id'], $request_hash);
-                if ($existing !== null) { return $this->checked_receipt($existing, $payload['operation_id'], $request_hash); }
+                if ($existing !== null) {
+                    $existing = $this->checked_receipt($existing, $payload['operation_id'], $request_hash);
+                    if ($existing['applied_fields'] !== []) { $this->store->schedule_cache_invalidation($existing['entity_id']); }
+                    return $existing;
+                }
             }
             $before = $this->store->snapshot($payload['entity_id']);
             sm_v2_validate_snapshot($before, true);
@@ -157,6 +164,7 @@ final class SM_V2_Service {
                 if ($existing !== null) {
                     $existing = $this->checked_receipt($existing, $payload['operation_id'], $request_hash);
                     if (($existing['operation_type'] ?? null) !== 'rollback') { throw new SM_V2_Error('needs_reconciliation', 503); }
+                    if ($existing['applied_fields'] !== []) { $this->store->schedule_cache_invalidation($existing['entity_id']); }
                     return $existing;
                 }
             }

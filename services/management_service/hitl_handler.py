@@ -15,6 +15,7 @@ from services.management_service.schemas.hitl import (
     HITLDecision,
     HITLBatchApproveResponse
 )
+from services.management_service.approval_ledger import read_approved_notification
 from services.management_service.proposal_handoff import ProposalHandoffError
 from config.logging_config import get_logger
 from prometheus_client import Counter, Histogram
@@ -417,44 +418,7 @@ async def handle_hitl_approved_event(
     correlation_id: Optional[str] = None
 ) -> Dict[str, Any]:
 
-    payload = event.get("payload", {})
-    task_id = payload.get("task_id")
-    approved_by = payload.get("approved_by")
-    auto_deploy = payload.get("auto_deploy")
-    if auto_deploy is None:
-        auto_deploy = payload.get("auto_deployed", True)
-    notes = payload.get("notes")
-
-    if not task_id:
-        raise ValueError("task_id is required in event payload")
-
-    if not approved_by:
-        raise ValueError("approved_by is required in event payload")
-
-    handler = HITLHandler(db)
-
-    decision = HITLDecision(
-        auto_deploy=auto_deploy,
-        notes=notes
-    )
-
-    result = await handler.approve_task(
-        task_id=task_id,
-        approved_by=approved_by,
-        decision=decision,
-        correlation_id=correlation_id
-    )
-
-    logger.info(
-        f"HITLApproved event processed for task {task_id}",
-        extra={
-            "task_id": task_id,
-            "approved_by": approved_by,
-            "correlation_id": correlation_id
-        }
-    )
-
-    return result
+    return read_approved_notification(db, event)
 
 
 def handle_hitl_rejected_event(

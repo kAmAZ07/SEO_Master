@@ -129,6 +129,15 @@ def approve_hitl_task(
         raise HTTPException(exc.http_status, exc.code) from exc
 
 
+@router.get("/tasks/{task_id}/history")
+def get_hitl_history(task_id: UUID, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0, le=100_000),
+                      actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    try:
+        return _service(db).history(str(task_id), actor, limit=limit, offset=offset)
+    except ApprovalError as exc:
+        raise HTTPException(exc.http_status, exc.code) from exc
+
+
 @router.post("/tasks/{task_id}/reject")
 def reject_hitl_task(
     task_id: UUID,

@@ -6,3 +6,4 @@
 /services/management_service/hitl_handler.py text eol=crlf
 /tests/unit/test_hitl_handler.py text eol=crlf
 /frontend/src/pages/Dashboard.tsx text eol=crlf
+/services/management_service/tasks/periodic_tasks.py text eol=crlf

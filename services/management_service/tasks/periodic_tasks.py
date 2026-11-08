@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import asyncio
 from typing import Any, Dict
 
 import httpx
@@ -11,6 +12,15 @@ from config.logging_config import get_logger
 from services.management_service.tasks.celery_app import celery_app
 
 logger = get_logger(__name__)
+
+
+@celery_app.task(name="services.management_service.tasks.periodic_tasks.dispatch_hitl_outbox",
+                 soft_time_limit=40, time_limit=45)
+def dispatch_hitl_outbox() -> Dict[str, int]:
+    from services.management_service.outbox import drain_outbox
+    from services.management_service.outbox_transport import publish_stored_event
+
+    return asyncio.run(drain_outbox(SessionLocal, publish_stored_event))
 
 
 @celery_app.task(

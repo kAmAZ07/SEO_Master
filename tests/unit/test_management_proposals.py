@@ -228,6 +228,10 @@ def test_saga_uses_only_proposals_and_saves_version_bound_pending_approval(monke
             events.append(kwargs)
 
         monkeypatch.setattr(orchestrator, "publish_event", publish)
+        prepared = SimpleNamespace(id=TASK_ID, status=orchestrator.HITLStatus.PENDING)
+        service = SimpleNamespace(prepare=Mock(return_value=prepared))
+        factory = Mock(return_value=service)
+        monkeypatch.setattr(orchestrator, "ApprovalService", factory)
         saga = orchestrator.OptimizationSaga(PROJECT_ID, TARGET_URL, TASK_ID, request)
         # Caller не может незаметно переписать сохранённый запрос по alias.
         request["task_id"] = "changed-after-construction"
@@ -239,11 +243,11 @@ def test_saga_uses_only_proposals_and_saves_version_bound_pending_approval(monke
         approval = await saga._create_hitl_decision(db)
         assert len(requests) == 1 and requests[0].url.path == "/semantic/proposals"
         assert approval.status is orchestrator.HITLStatus.PENDING
-        assert approval.meta["recommendation_version_id"] == version.version_id
-        assert approval.meta["recommendation_content_hash"] == version.content_hash
-        assert approval.diff_data["recommendation_version"] == version.model_dump(mode="json")
-        assert db.commits == 1 and saga.state is orchestrator.SagaState.AWAITING_HITL
-        assert events[0]["event_type"] == "HITLApprovalRequired"
+        factory.assert_called_once_with(db)
+        assert service.prepare.call_args.args[0] == version
+        assert saga.context["decision_id"] == TASK_ID
+        assert saga.state is orchestrator.SagaState.AWAITING_HITL
+        assert events == []  # Notification belongs to the transaction/outbox, not the saga.
 
     asyncio.run(scenario())
 
@@ -400,3 +404,24 @@ def test_prepare_does_not_wait_for_approval_or_emit_completed(monkeypatch):
     assert saga.state is orchestrator.SagaState.AWAITING_HITL and db.closed
     apply.assert_not_called()
     completion.assert_not_called()
+
+
+def test_prepare_conflict_does_not_mark_competing_task_failed(monkeypatch):
+    from services.management_service.db import session
+    from services.management_service.approval_policy import ApprovalError
+    db = Database()
+    monkeypatch.setattr(session, "SessionLocal", lambda: db)
+    request, _, _ = management_proposal_fixture()
+    saga = orchestrator.OptimizationSaga(PROJECT_ID, TARGET_URL, TASK_ID, request)
+    for method in ("_save_saga_state", "_run_crawl", "_wait_for_crawl_completion",
+                   "_trigger_scores_calculation", "_wait_for_scores_completion",
+                   "_trigger_content_generation", "_wait_for_content_generation"):
+        monkeypatch.setattr(saga, method, AsyncMock())
+    monkeypatch.setattr(saga, "_bind_audit_evidence", Mock())
+    monkeypatch.setattr(saga, "_create_hitl_decision", AsyncMock(side_effect=ApprovalError("approval_task_state_conflict")))
+    write_status = AsyncMock(side_effect=AssertionError("Competing task must remain unchanged"))
+    monkeypatch.setattr(saga, "_update_task_status", write_status)
+    assert asyncio.run(saga.execute()) is False
+    assert saga.context["error"]["reason"] == "approval_task_state_conflict"
+    write_status.assert_not_called()
+    assert db.closed

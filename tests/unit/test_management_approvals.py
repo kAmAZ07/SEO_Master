@@ -123,3 +123,14 @@ def test_arbitrary_payload_cannot_use_the_old_adapter_without_authorization():
     adapter = object.__new__(ClientAPIAdapter)
     with pytest.raises(ApprovalError, match="version_bound_executor_required"):
         asyncio.run(adapter.deploy_changes(TASK_ID, {"changes": {"after": {"title": "unreviewed"}}}))
+
+
+def test_worker_notification_cannot_become_a_new_human_decision(monkeypatch):
+    from services.management_service import hitl_handler
+    approve = AsyncMock(return_value={"status": "approved"})
+    monkeypatch.setattr(hitl_handler, "HITLHandler", Mock(return_value=SimpleNamespace(approve_task=approve)))
+    with pytest.raises(ApprovalError, match="human_decision_required"):
+        asyncio.run(hitl_handler.handle_hitl_approved_event(Mock(), {"payload": {
+            "task_id": TASK_ID, "approved_by": "forged-event-actor", "auto_deployed": False,
+        }}))
+    approve.assert_not_called()

@@ -18,7 +18,7 @@ ModelProfile = Literal["management", "client"]
 MODEL_EXPORTS = {
     "management": (
         "services.management_service",
-        ("Base", "Task", "TaskType", "TaskStatus", "HITLStatus", "HITLApproval", "Changelog", "Project"),
+        ("Base", "Task", "TaskType", "TaskStatus", "HITLStatus", "HITLApproval", "Changelog", "Project", "HITLHistory", "ManagementOutbox"),
     ),
     "client": (
         "services.client_api_gateway",
@@ -140,6 +140,14 @@ with (
                 "before_value", "after_value", "applied", "applied_at", "source",
                 "metadata", "created_at",
             },
+            "hitl_history": {
+                "id", "approval_id", "task_id", "project_id", "version_id", "entry_type",
+                "content_hash", "entry_hash", "metadata", "created_at",
+            },
+            "management_outbox": {
+                "id", "history_id", "event_type", "routing_key", "status", "attempts", "available_at",
+                "lease_token", "lease_expires_at", "published_at", "error_code", "metadata", "created_at", "updated_at",
+            },
         }
         expected_lengths = {
             ("projects", "name"): 255, ("projects", "domain"): 255, ("projects", "platform"): 50,
@@ -149,6 +157,10 @@ with (
             ("management_changelog", "entity_type"): 100,
             ("management_changelog", "change_type"): 100,
             ("management_changelog", "source"): 50,
+            ("hitl_history", "version_id"): 36, ("hitl_history", "entry_type"): 16,
+            ("hitl_history", "content_hash"): 64, ("hitl_history", "entry_hash"): 64,
+            ("management_outbox", "event_type"): 100, ("management_outbox", "routing_key"): 255,
+            ("management_outbox", "status"): 16, ("management_outbox", "error_code"): 64,
         }
         expected_foreign_keys = {
             ("tasks", "project_id", "projects.id", "CASCADE"),
@@ -156,8 +168,12 @@ with (
             ("hitl_approvals", "project_id", "projects.id", "CASCADE"),
             ("management_changelog", "project_id", "projects.id", "CASCADE"),
             ("management_changelog", "task_id", "tasks.id", "SET NULL"),
+            ("hitl_history", "approval_id", "hitl_approvals.id", "RESTRICT"),
+            ("hitl_history", "task_id", "tasks.id", "RESTRICT"),
+            ("management_outbox", "history_id", "hitl_history.id", "RESTRICT"),
         }
-        mapped_classes = (models.Project, models.Task, models.HITLApproval, models.Changelog)
+        mapped_classes = (models.Project, models.Task, models.HITLApproval, models.Changelog,
+                          models.HITLHistory, models.ManagementOutbox)
     else:
         expected_columns = {
             "client_keys": {
@@ -209,7 +225,8 @@ with (
         for table in metadata.tables.values() for reference in table.foreign_keys
     }
     assert actual_foreign_keys == expected_foreign_keys, "FOREIGN_KEY_ACTION_DRIFT"
-    json_defaults = [(table.name, "metadata") for table in metadata.tables.values()]
+    new_tables = {"hitl_history", "management_outbox"} if profile == "management" else set()
+    json_defaults = [(table.name, "metadata") for table in metadata.tables.values() if table.name not in new_tables]
     if profile == "management":
         json_defaults.append(("projects", "settings"))
     for table_name, column_name in json_defaults:
@@ -219,6 +236,13 @@ with (
         assert getattr(column.default, "is_scalar"), "JSON_DEFAULT_KIND_DRIFT"
         assert type(getattr(column.default, "arg")) is dict, "JSON_DEFAULT_TYPE_DRIFT"
         assert getattr(column.default, "arg") == {}, "JSON_DEFAULT_VALUE_DRIFT"
+    for table_name in new_tables:
+        column = metadata.tables[table_name].c.metadata
+        assert isinstance(column.type, JSONB), "JSONB_TYPE_DRIFT"
+        assert column.default is not None and getattr(column.default, "is_callable"), "JSON_DEFAULT_KIND_DRIFT"
+        first = getattr(column.default, "arg")(None)
+        second = getattr(column.default, "arg")(None)
+        assert first == second == {} and first is not second, "JSON_DEFAULT_SHARED_INSTANCE"
     for owned_table in metadata.tables.values():
         assert isinstance(owned_table.c.id.type, UUID), "UUID_TYPE_DRIFT"
     mapper_ids = {id(mapper) for mapper in models.Base.registry.mappers}
@@ -229,7 +253,7 @@ with (
     ).parent / "db/models.py"
     aliases = runpy.run_path(str(shim_path), run_name="model_compatibility_contract")
     exports = (
-        ("Base", "Task", "TaskType", "TaskStatus", "HITLStatus", "HITLApproval", "Changelog", "Project")
+        ("Base", "Task", "TaskType", "TaskStatus", "HITLStatus", "HITLApproval", "Changelog", "Project", "HITLHistory", "ManagementOutbox")
         if profile == "management" else ("Base", "ClientKey", "DeploymentLog")
     )
     for name in exports:

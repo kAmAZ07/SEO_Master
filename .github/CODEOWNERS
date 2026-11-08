@@ -72,6 +72,7 @@
 /tests/e2e/ @kAmAZ07
 /tests/platform/ @kAmAZ07
 /tests/fixtures/management_proposal.py @kAmAZ07
+/services/management_service/migrations/ @kAmAZ07
 
 # Исключения внутри каталогов Александры: ставить после общих правил.
 /database/migrations/env.py @kAmAZ07

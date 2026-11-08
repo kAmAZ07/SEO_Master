@@ -3,14 +3,16 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Literal, Mapping, Protocol, cast
 from uuid import UUID
+import uuid
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from services.management_service.approval_policy import (
     ApprovalError, DecisionRecord, DecisionRequest, UserActor, make_record, record_state,
 )
-from services.management_service.models import HITLApproval, HITLStatus, Task, TaskStatus
+from services.management_service.approval_ledger import append_history, snapshot_hash
+from services.management_service.models import HITLApproval, HITLHistory, HITLStatus, Task, TaskStatus
 from services.management_service.proposal_handoff import (
     ProposalHandoffError, audit_proposal_request, proposal_result, version_diff,
 )
@@ -43,6 +45,8 @@ class ApprovalRow(Protocol):
     rejected_at: datetime | None
     rejection_reason: str | None
     updated_at: datetime
+    impact_score: float | None
+    recommendation: str | None
 
 
 class ApprovalService:
@@ -51,6 +55,92 @@ class ApprovalService:
         self.db = db
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.ttl = ttl
+
+    def prepare(self, version: RecommendationVersion, *, metadata: dict[str, Any],
+                impact: float | None = None) -> ApprovalRow:
+        """Prepare a preview; regeneration archives old facts and never approves."""
+        try:
+            task = cast(TaskRow | None, self.db.query(Task).filter(
+                Task.id == version.task_id,
+            ).populate_existing().with_for_update().first())
+            if task is None or str(task.project_id) != version.project_id:
+                raise ApprovalError("hitl_task_not_found", 404)
+            scope = self.db.execute(text(
+                "SELECT id, workspace_id, origin, path_prefix, status FROM audit_schema.projects "
+                "WHERE id = :project_id FOR SHARE"
+            ), {"project_id": version.project_id}).mappings().first()
+            if scope is None:
+                raise ApprovalError("hitl_task_not_found", 404)
+            candidate = HITLApproval(id=uuid.uuid4(), task_id=task.id, project_id=task.project_id,
+                                     status=HITLStatus.PENDING, diff_data=version_diff(version))
+            self._version(cast(ApprovalRow, candidate), task, dict(scope))
+            approval = cast(ApprovalRow | None, self.db.query(HITLApproval).filter(
+                HITLApproval.task_id == task.id,
+            ).populate_existing().with_for_update().first())
+            if approval is not None and str(approval.project_id) != str(task.project_id):
+                raise ApprovalError("hitl_task_not_found", 404)
+            if approval is not None and approval.diff_data == version_diff(version):
+                append_history(self.db, approval_id=str(approval.id), task_id=str(task.id), version=version,
+                               entry_type="prepared", metadata=approval.meta or {}, now=self.clock(),
+                               emit=approval.status == HITLStatus.PENDING)
+                self.db.commit()
+                return approval
+            if task.status in {TaskStatus.DEPLOYED, TaskStatus.COMPLETED} or (
+                    approval is not None and task.status == TaskStatus.IN_PROGRESS):
+                raise ApprovalError("approval_task_state_conflict")
+            now = self.clock()
+            if approval is not None:
+                try:
+                    old_version = RecommendationVersion.model_validate(approval.diff_data.get("recommendation_version"))
+                except ValueError:
+                    raise ApprovalError("legacy_approval_requires_migration") from None
+                if (old_version.content_hash != compute_content_hash(old_version)
+                        or approval.diff_data != version_diff(old_version)
+                        or old_version.task_id != str(task.id)
+                        or old_version.project_id != str(task.project_id)):
+                    raise ApprovalError("approval_history_invalid")
+                old_metadata = dict(approval.meta or {})
+                append_history(self.db, approval_id=str(approval.id), task_id=str(task.id), version=old_version,
+                               entry_type="prepared", metadata={}, now=now, emit=False)
+                if "decision_record" in old_metadata:
+                    try:
+                        record = DecisionRecord.model_validate(old_metadata["decision_record"])
+                    except ValueError:
+                        raise ApprovalError("approval_history_invalid") from None
+                    if (record.digest() != old_metadata.get("decision_hash")
+                            or record.approval_id != str(approval.id)
+                            or record.task_id != str(task.id) or record.project_id != version.project_id
+                            or record.recommendation_version_id != old_version.version_id
+                            or record.recommendation_content_hash != old_version.content_hash
+                            or record.target_url != old_version.target.url):
+                        raise ApprovalError("approval_history_invalid")
+                    append_history(self.db, approval_id=str(approval.id), task_id=str(task.id), version=old_version,
+                                   entry_type=record.decision, metadata=old_metadata, now=now, emit=False)
+                    if old_metadata.get("revocation") is not None:
+                        append_history(self.db, approval_id=str(approval.id), task_id=str(task.id), version=old_version,
+                                       entry_type="revoke", metadata=old_metadata, now=now, emit=False)
+            else:
+                self.db.add(candidate)
+                approval = cast(ApprovalRow, candidate)
+            prepared = {key: metadata[key] for key in ("saga_id", "correlation_id", "ffscore", "eeat_score") if key in metadata}
+            prepared.update(url=version.target.url, recommendation_version_id=version.version_id,
+                            recommendation_content_hash=version.content_hash, proposal_version=version.version,
+                            execution_mode=version.execution_mode.value, prepared_at=now.isoformat())
+            approval.status, task.status = HITLStatus.PENDING, TaskStatus.PENDING
+            approval.diff_data, approval.meta = version_diff(version), prepared
+            approval.approved_by = approval.approved_at = None
+            approval.rejected_by = approval.rejected_at = approval.rejection_reason = None
+            approval.impact_score = impact
+            approval.recommendation = "Review generated SEO changes before deployment"
+            approval.updated_at = task.updated_at = now
+            self.db.flush()
+            append_history(self.db, approval_id=str(approval.id), task_id=str(task.id), version=version,
+                           entry_type="prepared", metadata=prepared, now=now)
+            self.db.commit()
+            return approval
+        except Exception:
+            self.db.rollback()
+            raise
 
     def _scope(self, project_id: str, actor: UserActor, permission: Permission) -> Mapping[str, Any]:
         # Read the canonical authority, never host-match legacy public.projects.
@@ -84,6 +174,25 @@ class ApprovalService:
         if approval is None or str(approval.project_id) != str(task.project_id):
             raise ApprovalError("hitl_task_not_found", 404)
         return approval, task
+
+    def history(self, task_id: str, actor: UserActor, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 100 or not 0 <= offset <= 100_000:
+            raise ApprovalError("history_limit_invalid", 422)
+        _, task = self.readable(task_id, actor)
+        rows = self.db.execute(select(
+            HITLHistory.id, HITLHistory.entry_type, HITLHistory.version_id, HITLHistory.content_hash,
+            HITLHistory.entry_hash, HITLHistory.meta, HITLHistory.created_at,
+        ).where(HITLHistory.task_id == task.id, HITLHistory.project_id == task.project_id).order_by(
+            HITLHistory.created_at, HITLHistory.id,
+        ).offset(offset).limit(limit)).all()
+        result = []
+        for row in rows:
+            if snapshot_hash(row[5]) != row[4]:
+                raise ApprovalError("approval_history_corrupted")
+            result.append({"id": str(row[0]), "entry_type": row[1], "version_id": row[2],
+                           "content_hash": row[3], "entry_hash": row[4], "snapshot": row[5],
+                           "created_at": row[6].isoformat()})
+        return result
 
     def _version(self, approval: ApprovalRow, task: TaskRow, scope: Mapping[str, Any]) -> RecommendationVersion:
         raw = (approval.diff_data or {}).get("recommendation_version")
@@ -218,6 +327,8 @@ class ApprovalService:
                     state = "rejected"
             approval.meta = metadata
             approval.updated_at = task.updated_at = now
+            append_history(self.db, approval_id=str(approval.id), task_id=str(task.id), version=version,
+                           entry_type=action, metadata=metadata, now=now)
             self.db.commit()
             return {"task_id": str(task.id), "project_id": version.project_id,
                     "approval_id": str(approval.id), "status": state,

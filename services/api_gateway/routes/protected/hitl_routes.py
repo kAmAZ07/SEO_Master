@@ -158,6 +158,15 @@ async def approve_task(
                             payload=request.model_dump())
 
 
+@router.get("/hitl/tasks/{task_id}/history")
+async def get_hitl_history(task_id: str, request: Request, limit: int = Query(50, ge=1, le=100),
+                           offset: int = Query(0, ge=0, le=100_000),
+                           current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    await _get_owned_hitl_task(task_id, current_user, db, request)
+    return await _hitl_json("GET", f"/api/v1/hitl/tasks/{task_id}/history", request,
+                            params={"limit": limit, "offset": offset})
+
+
 @router.post("/hitl/tasks/{task_id}/reject")
 async def reject_task(
     task_id: str,

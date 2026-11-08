@@ -53,6 +53,8 @@ def stand(tmp_path, monkeypatch):
 
     def respond(request):
         calls.append(request)
+        if request.url.path.endswith("/history"):
+            return httpx.Response(200, json=[])
         if request.method == "GET":
             return httpx.Response(200, json={"id": APPROVAL_ID, "task_id": TASK_ID, "project_id": PROJECT_ID})
         return httpx.Response(200, json={"status": "approved", "publication_status": "not_requested"})
@@ -108,3 +110,19 @@ def test_comment_only_or_forged_body_identity_is_rejected_before_proxy(stand):
     for body in ({"comment": "old client"}, {**command(), "user_id": BOB}):
         assert client.post(f"/api/hitl/tasks/{TASK_ID}/approve", json=body).status_code == 422
     assert calls == []
+
+
+def test_foreign_user_cannot_read_approval_history(stand):
+    client, _, calls = stand
+    response = client.get(f"/api/hitl/tasks/{TASK_ID}/history", headers={"X-User": BOB})
+    assert response.status_code == 404
+    assert len(calls) == 1 and not calls[0].url.path.endswith("/history")
+
+
+def test_history_forwards_bounded_pagination_and_authenticated_headers(stand):
+    client, _, calls = stand
+    response = client.get(f"/api/hitl/tasks/{TASK_ID}/history", params={"limit": 2, "offset": 4},
+                           headers={"Authorization": "Bearer fixture-access"})
+    assert response.status_code == 200 and response.json() == []
+    assert calls[-1].url.params["limit"] == "2" and calls[-1].url.params["offset"] == "4"
+    assert calls[-1].headers["authorization"] == "Bearer fixture-access"

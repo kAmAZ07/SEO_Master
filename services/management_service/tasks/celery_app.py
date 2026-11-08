@@ -62,6 +62,11 @@ celery_app.conf.update(
 )
 
 celery_app.conf.beat_schedule = {
+    "dispatch_hitl_outbox": {
+        "task": "services.management_service.tasks.periodic_tasks.dispatch_hitl_outbox",
+        "schedule": 10.0,
+        "options": {"queue": "management_periodic", "routing_key": "management.periodic"},
+    },
     "daily_ff_score_recalculation": {
         "task": "services.management_service.tasks.periodic_tasks.daily_ff_score_recalculation",
         "schedule": _cron_from_expr(settings.DEFAULT_FFSCORE_SCHEDULE),

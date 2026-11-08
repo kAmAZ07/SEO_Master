@@ -11,11 +11,13 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.logging_config import get_logger
 from services.management_service.config import settings
-from services.management_service.db.models import HITLApproval, HITLStatus, Task, TaskStatus
+from services.management_service.db.models import HITLStatus, Task, TaskStatus
+from services.management_service.approval_policy import ApprovalError
+from services.management_service.approval_service import ApprovalRow, ApprovalService
 from services.management_service.events.publishers import publish_event
 from services.management_service.score_contract import parse_score_response
 from services.management_service.proposal_handoff import (
-    ProposalHandoffError, audit_proposal_request, bound_request, proposal_result, version_diff,
+    ProposalHandoffError, audit_proposal_request, bound_request, proposal_result,
 )
 
 logger = get_logger(__name__)
@@ -180,6 +182,11 @@ class OptimizationSaga:
                 # исполнение не запускаются автоматически из старой саги.
                 await self._save_saga_state(db)
                 return True
+        except ApprovalError as exc:
+            self.state = SagaState.FAILED
+            self.context["error"] = {"reason": exc.code}
+            # Do not overwrite a competing command's task status/context.
+            return False
         except ProposalHandoffError as exc:
             if exc.code == "proposal_no_change":
                 self.state = SagaState.NO_CHANGE
@@ -389,55 +396,21 @@ class OptimizationSaga:
             raise ProposalHandoffError("proposal_version_required")
         return result.version
 
-    async def _create_hitl_decision(self, db: Session) -> HITLApproval:
-        self.state = SagaState.AWAITING_HITL
-
+    async def _create_hitl_decision(self, db: Session) -> ApprovalRow:
         if not self.task_id:
             raise ValueError("task_id is required to create HITL approval record")
-
         version = self._bound_proposal()
-        diff = version_diff(version)
-
-        decision = HITLApproval(
-            task_id=self.task_id,
-            project_id=self.project_id,
-            status=HITLStatus.PENDING,
-            diff_data=diff,
-            impact_score=self.context.get("ffscore"),
-            recommendation="Review generated SEO changes before deployment",
-            meta={
-                "saga_id": self.saga_id,
-                "correlation_id": self.correlation_id,
-                "url": self.url,
-                "ffscore": self.context.get("ffscore"),
-                "eeat_score": self.context.get("eeat_score"),
-                "recommendation_version_id": version.version_id,
-                "recommendation_content_hash": version.content_hash,
-                "proposal_version": version.version,
-                "execution_mode": version.execution_mode.value,
+        decision = ApprovalService(db).prepare(
+            version, impact=self.context.get("ffscore"), metadata={
+                "saga_id": self.saga_id, "correlation_id": self.correlation_id,
+                "ffscore": self.context.get("ffscore"), "eeat_score": self.context.get("eeat_score"),
             },
         )
-        db.add(decision)
-        db.commit()
-        db.refresh(decision)
-
-        await publish_event(
-            routing_key="management.hitl.approval_required",
-            payload={
-                "payload": {
-                    "decision_id": str(decision.id),
-                    "project_id": self.project_id,
-                    "url": self.url,
-                    "recommendation_version_id": version.version_id,
-                    "content_hash": version.content_hash,
-                },
-                "decision_id": str(decision.id),
-                "correlation_id": self.correlation_id,
-            },
-            event_type="HITLApprovalRequired",
-            correlation_id=self.correlation_id,
-        )
-
+        self.context["decision_id"] = str(decision.id)
+        self.state = {
+            HITLStatus.APPROVED: SagaState.HITL_APPROVED,
+            HITLStatus.REJECTED: SagaState.HITL_REJECTED,
+        }.get(decision.status, SagaState.AWAITING_HITL)
         return decision
 
     async def _apply_changes(self):

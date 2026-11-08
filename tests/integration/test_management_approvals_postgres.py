@@ -3,9 +3,13 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from threading import Barrier
+from pathlib import Path
+import runpy
 import uuid
 
 import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -37,7 +41,12 @@ def stand():
             conn.execute(text("CREATE SCHEMA semantic_schema"))
             for table in (User.__table__, Workspace.__table__, WorkspaceMember.__table__, CanonicalProject.__table__):
                 table.create(conn)
-            Base.metadata.create_all(conn)
+            for name in ("projects", "tasks", "hitl_approvals", "management_changelog"):
+                Base.metadata.tables[name].create(conn)
+            revision_path = Path(__file__).resolve().parents[2] / "services/management_service/migrations/versions/20261109_001_hitl_ledger.py"
+            revision = runpy.run_path(str(revision_path))
+            with Operations.context(MigrationContext.configure(conn)):
+                revision["upgrade"]()
             RecommendationVersionRow.__table__.create(conn)
             CrawlResult.__table__.create(conn)
             for remainder in range(8):
@@ -101,6 +110,21 @@ def test_real_decision_binds_actor_role_version_scope_and_exact_24h_expiry(stand
     assert state(engine) == "approved"
     assert state(engine, now=NOW + timedelta(hours=24, microseconds=-1)) == "approved"
     assert state(engine, now=NOW + timedelta(hours=24)) == "expired"
+
+
+def test_decision_and_event_are_committed_in_one_transaction(stand):
+    engine, version, command = stand
+    result = decide(engine, command)
+    with engine.connect() as conn:
+        assert conn.scalar(text("SELECT to_regclass('public.hitl_history')")) is not None
+        assert conn.scalar(text("SELECT to_regclass('public.management_outbox')")) is not None
+        history = conn.execute(text("SELECT entry_type, version_id, metadata FROM public.hitl_history")).mappings().one()
+        event = conn.execute(text("SELECT status, metadata FROM public.management_outbox")).mappings().one()
+    assert history["entry_type"] == "approve" and history["version_id"] == version.version_id
+    assert history["metadata"]["decision_hash"] == result["approval_hash"]
+    assert event["status"] == "pending"
+    assert event["metadata"]["payload"]["approval_hash"] == result["approval_hash"]
+    assert event["metadata"]["payload"]["auto_deployed"] is False
 
 
 @pytest.mark.parametrize("action", ["approve", "reject", "revoke"])

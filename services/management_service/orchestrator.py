@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 import uuid
 from datetime import datetime, timedelta
 from enum import Enum
@@ -10,9 +11,12 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.logging_config import get_logger
 from services.management_service.config import settings
-from services.management_service.client_api_adapter import deploy_changes as deploy_client_changes
 from services.management_service.db.models import HITLApproval, HITLStatus, Task, TaskStatus
 from services.management_service.events.publishers import publish_event
+from services.management_service.score_contract import parse_score_response
+from services.management_service.proposal_handoff import (
+    ProposalHandoffError, audit_proposal_request, bound_request, proposal_result, version_diff,
+)
 
 logger = get_logger(__name__)
 
@@ -25,6 +29,8 @@ class SagaState(str, Enum):
     SCORES_COMPLETED = "scores_completed"
     GENERATING_CONTENT = "generating_content"
     CONTENT_GENERATED = "content_generated"
+    NEEDS_INPUT = "needs_input"
+    NO_CHANGE = "no_change"
     AWAITING_HITL = "awaiting_hitl"
     HITL_APPROVED = "hitl_approved"
     HITL_REJECTED = "hitl_rejected"
@@ -35,13 +41,18 @@ class SagaState(str, Enum):
 
 
 class OptimizationSaga:
-    def __init__(self, project_id: str, url: str, task_id: Optional[str] = None):
+    def __init__(self, project_id: str, url: str, task_id: Optional[str] = None,
+                 proposal_request: Optional[dict] = None, proposal_operation: Optional[str] = None):
         self.project_id = project_id
         self.url = url
         self.task_id = task_id
         self.saga_id = str(uuid.uuid4())
         self.state = SagaState.INITIATED
         self.context: Dict[str, Any] = {}
+        if proposal_operation is not None:
+            self.context["proposal_operation"] = proposal_operation
+        if proposal_request is not None:
+            self.context["proposal_request"] = deepcopy(proposal_request)
         self.correlation_id = str(uuid.uuid4())
         self.client: Optional[httpx.AsyncClient] = None
 
@@ -71,32 +82,6 @@ class OptimizationSaga:
             content_parts.append(str(finding.get("message") or finding.get("title") or finding.get("description") or ""))
 
         return "\n".join(part for part in content_parts if part).strip()
-
-    def _extract_current_page_snapshot(self, crawl_result: dict) -> dict:
-        if not isinstance(crawl_result, dict):
-            return {"title": None, "description": None, "h1": None, "schema_org": None}
-
-        pages = crawl_result.get("pages", [])
-        selected_page = None
-        for page in pages:
-            if not isinstance(page, dict):
-                continue
-            if str(page.get("url") or "").rstrip("/") == self.url.rstrip("/"):
-                selected_page = page
-                break
-        if selected_page is None and pages:
-            first_page = pages[0]
-            selected_page = first_page if isinstance(first_page, dict) else None
-
-        # Older tests and some integrations still pass a flattened crawl snapshot
-        # instead of a page list. Keep supporting that shape to avoid regressions.
-        selected_page = selected_page or crawl_result
-        return {
-            "title": selected_page.get("title"),
-            "description": selected_page.get("description"),
-            "h1": selected_page.get("h1"),
-            "schema_org": selected_page.get("schema_org"),
-        }
 
     @staticmethod
     def _derive_backlinks_count(crawl_result: dict, reporting_summary: dict | None) -> int:
@@ -156,6 +141,18 @@ class OptimizationSaga:
         return response.json()
 
     async def execute(self) -> bool:
+        # Проверяем известные входы до открытия БД и запуска нового обхода.
+        try:
+            if not self.task_id:
+                raise ProposalHandoffError("proposal_task_required")
+            if "proposal_request" in self.context:
+                bound_request(self.context["proposal_request"], project_id=self.project_id,
+                              task_id=self.task_id, url=self.url)
+        except ProposalHandoffError as exc:
+            missing = exc.code in {"proposal_task_required", "proposal_evidence_required"}
+            self.state = SagaState.NEEDS_INPUT if missing else SagaState.FAILED
+            self.context["needs_input" if missing else "error"] = {"reason": exc.code}
+            return False
         from services.management_service.db.session import SessionLocal
 
         db = SessionLocal()
@@ -167,6 +164,7 @@ class OptimizationSaga:
 
                 await self._run_crawl()
                 await self._wait_for_crawl_completion()
+                self._bind_audit_evidence()
                 await self._save_saga_state(db)
 
                 await self._trigger_scores_calculation()
@@ -177,27 +175,24 @@ class OptimizationSaga:
                 await self._wait_for_content_generation()
                 await self._save_saga_state(db)
 
-                if self.task_id:
-                    hitl_decision = await self._create_hitl_decision(db)
-                    approved = await self._wait_for_hitl_decision(db, str(hitl_decision.id))
-                else:
-                    self.state = SagaState.HITL_APPROVED
-                    approved = True
-
-                if not approved:
-                    self.state = SagaState.HITL_REJECTED
-                    await self._update_task_status(db, TaskStatus.CANCELLED)
-                    await self._publish_completion_event(success=False, reason="HITL rejected")
-                    return False
-
-                await self._apply_changes()
-                await self._wait_for_changes_applied()
-
-                self.state = SagaState.COMPLETED
-                await self._update_task_status(db, TaskStatus.COMPLETED)
+                await self._create_hitl_decision(db)
+                # Подготовка завершается на awaiting_hitl; решение и отдельное
+                # исполнение не запускаются автоматически из старой саги.
                 await self._save_saga_state(db)
-                await self._publish_completion_event(success=True)
                 return True
+        except ProposalHandoffError as exc:
+            if exc.code == "proposal_no_change":
+                self.state = SagaState.NO_CHANGE
+            elif exc.code in {"proposal_needs_input", "proposal_evidence_required",
+                              "proposal_evidence_ambiguous", "single_proposal_required"}:
+                self.state = SagaState.NEEDS_INPUT
+                self.context.setdefault("needs_input", {"reason": exc.code})
+            else:
+                self.state = SagaState.FAILED
+                self.context["error"] = {"reason": exc.code}
+                await self._update_task_status(db, TaskStatus.FAILED)
+            await self._save_saga_state(db)
+            return False
         except Exception as exc:
             logger.error(
                 f"Saga failed for project {self.project_id}, url {self.url}: {exc}",
@@ -205,7 +200,6 @@ class OptimizationSaga:
                 exc_info=True,
             )
             self.state = SagaState.FAILED
-            await self._compensate()
             await self._update_task_status(db, TaskStatus.FAILED)
             await self._save_saga_state(db)
             await self._publish_completion_event(success=False, reason=str(exc))
@@ -265,14 +259,13 @@ class OptimizationSaga:
             if status == "failed":
                 raise RuntimeError(f"Crawl failed: {self.context['crawl_id']}")
 
+            if status in {"partial", "cancelled", "expired"}:
+                raise ProposalHandoffError("proposal_evidence_required")
+
             await asyncio.sleep(2)
 
         raise TimeoutError("Crawl timeout")
 
-    @retry(
-        stop=stop_after_attempt(settings.SAGA_RETRY_MAX_ATTEMPTS),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-    )
     async def _trigger_scores_calculation(self):
         self.state = SagaState.CALCULATING_SCORES
 
@@ -332,53 +325,69 @@ class OptimizationSaga:
             },
         )
         ffscore_response.raise_for_status()
-        ff_data = ffscore_response.json()
+        result = parse_score_response(ffscore_response.json())
 
-        self.context["ffscore"] = ff_data.get("ff_score")
-        self.context["eeat_score"] = (ff_data.get("eeat") or {}).get("score")
-        self.context["ffscore_task_id"] = ff_data.get("ff_score_id")
-        self.context["eeat_task_id"] = ff_data.get("eeat_score_id")
+        self.context["score_result"] = result.model_dump(mode="json")
+        self.context["ffscore"] = result.ff_score
+        self.context["ffscore_status"] = result.status
+        self.context["ffscore_formula_version"] = result.formula_version
+        self.context["eeat_score"] = result.eeat["score"]
+        self.context["eeat_status"] = result.eeat["status"]
+        self.context["ffscore_task_id"] = result.ff_score_id
+        self.context["eeat_task_id"] = result.eeat_score_id
 
     async def _wait_for_scores_completion(self):
-        if self.context.get("ffscore") is None:
-            raise RuntimeError("FF-Score calculation returned no score")
-
+        # insufficient_data — завершённый расчёт с отсутствующими входами,
+        # а не failure. Проверяем весь ответ, чтобы не принять malformed null.
+        parse_score_response(self.context.get("score_result"))
         self.state = SagaState.SCORES_COMPLETED
 
-    @retry(
-        stop=stop_after_attempt(settings.SAGA_RETRY_MAX_ATTEMPTS),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-    )
+    def _bind_audit_evidence(self):
+        request = audit_proposal_request(
+            self.context.get("crawl_result", {}), project_id=self.project_id,
+            task_id=self.task_id, url=self.url, requested=self.context.get("proposal_request"),
+            operation=self.context.get("proposal_operation"),
+        )
+        self.context["proposal_request"] = request.model_dump(mode="json")
+
     async def _trigger_content_generation(self):
         self.state = SagaState.GENERATING_CONTENT
-
-        crawl_result = self.context.get("crawl_result", {})
-        pages = crawl_result.get("pages", []) if isinstance(crawl_result, dict) else []
-        snippets = []
-        for page in pages[:10]:
-            if isinstance(page, dict):
-                snippets.append(str(page.get("title") or ""))
-                snippets.append(str(page.get("description") or ""))
-
+        request = bound_request(
+            self.context.get("proposal_request"), project_id=self.project_id,
+            task_id=self.task_id, url=self.url,
+        )
         response = await self.client.post(
-            f"{settings.SEMANTIC_SERVICE_URL}/semantic/drafts",
-            json={
-                "project_id": self.project_id,
-                "root_url": self.url,
-                "content": "\n".join(snippets),
-            },
+            f"{settings.SEMANTIC_SERVICE_URL}/semantic/proposals",
+            json=request.model_dump(mode="json"),
         )
         response.raise_for_status()
-
-        result = response.json()
-        self.context["content_generation_id"] = result.get("draft_id")
-        self.context["generated_content"] = result.get("drafts", {})
+        if len(response.content) > 1_048_576:
+            raise ProposalHandoffError("proposal_response_too_large")
+        result = proposal_result(response.json(), request)
+        self.context["proposal_status"] = result.status
+        if result.version is None:
+            self.context["needs_input"] = result.needs_input or {"reason": "proposal_no_change"}
+            raise ProposalHandoffError("proposal_" + result.status)
+        self.context["recommendation_version"] = result.version.model_dump(mode="json")
 
     async def _wait_for_content_generation(self):
-        if self.context.get("generated_content") is None:
-            raise RuntimeError("Content generation returned empty response")
-
+        self._bound_proposal()
         self.state = SagaState.CONTENT_GENERATED
+
+    def _bound_proposal(self):
+        request = bound_request(
+            self.context.get("proposal_request"), project_id=self.project_id,
+            task_id=self.task_id, url=self.url,
+        )
+        result = proposal_result({
+            "project_id": request.project_id, "target_url": request.target_url,
+            "items": [{"operation_type": request.requested_operations()[0].value,
+                       "status": self.context.get("proposal_status"),
+                       "version": self.context.get("recommendation_version")}],
+        }, request)
+        if result.version is None:
+            raise ProposalHandoffError("proposal_version_required")
+        return result.version
 
     async def _create_hitl_decision(self, db: Session) -> HITLApproval:
         self.state = SagaState.AWAITING_HITL
@@ -386,16 +395,14 @@ class OptimizationSaga:
         if not self.task_id:
             raise ValueError("task_id is required to create HITL approval record")
 
-        crawl_data = self.context.get("crawl_result", {})
-        old_content = self._extract_current_page_snapshot(crawl_data)
-
-        new_content = self.context.get("generated_content", {})
+        version = self._bound_proposal()
+        diff = version_diff(version)
 
         decision = HITLApproval(
             task_id=self.task_id,
             project_id=self.project_id,
             status=HITLStatus.PENDING,
-            diff_data={"before": old_content, "after": new_content},
+            diff_data=diff,
             impact_score=self.context.get("ffscore"),
             recommendation="Review generated SEO changes before deployment",
             meta={
@@ -404,12 +411,12 @@ class OptimizationSaga:
                 "url": self.url,
                 "ffscore": self.context.get("ffscore"),
                 "eeat_score": self.context.get("eeat_score"),
+                "recommendation_version_id": version.version_id,
+                "recommendation_content_hash": version.content_hash,
+                "proposal_version": version.version,
+                "execution_mode": version.execution_mode.value,
             },
         )
-        # Backward-compatible fields for existing tests and old integrations.
-        decision.old_content = old_content
-        decision.new_content = new_content
-
         db.add(decision)
         db.commit()
         db.refresh(decision)
@@ -421,6 +428,8 @@ class OptimizationSaga:
                     "decision_id": str(decision.id),
                     "project_id": self.project_id,
                     "url": self.url,
+                    "recommendation_version_id": version.version_id,
+                    "content_hash": version.content_hash,
                 },
                 "decision_id": str(decision.id),
                 "correlation_id": self.correlation_id,
@@ -431,136 +440,11 @@ class OptimizationSaga:
 
         return decision
 
-    async def _wait_for_hitl_decision(self, db: Session, decision_id: str) -> bool:
-        timeout = datetime.utcnow() + timedelta(hours=settings.HITL_TIMEOUT_HOURS)
-
-        while datetime.utcnow() < timeout:
-            decision = db.query(HITLApproval).filter(HITLApproval.id == decision_id).first()
-            if decision is None:
-                await asyncio.sleep(2)
-                continue
-
-            if decision.status == HITLStatus.APPROVED:
-                self.state = SagaState.HITL_APPROVED
-                return True
-            if decision.status == HITLStatus.REJECTED:
-                self.state = SagaState.HITL_REJECTED
-                return False
-
-            await asyncio.sleep(2)
-
-        raise TimeoutError("HITL decision timeout")
-
-    @retry(
-        stop=stop_after_attempt(settings.SAGA_RETRY_MAX_ATTEMPTS),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-    )
     async def _apply_changes(self):
-        self.state = SagaState.APPLYING_CHANGES
-
-        generated = self.context.get("generated_content") or {}
-        if isinstance(generated, dict):
-            after = {
-                "title": generated.get("title") or generated.get("meta_title"),
-                "description": generated.get("description") or generated.get("meta_description"),
-                "h1": generated.get("h1"),
-            }
-        else:
-            after = {"content": generated}
-
-        payload = {
-            "project_id": self.project_id,
-            "task_id": self.task_id,
-            "change_type": "meta",
-            "entity_id": self.url,
-            "entity_type": "web_page",
-            "changes": {"before": {}, "after": after},
-            "metadata": {
-                "saga_id": self.saga_id,
-                "correlation_id": self.correlation_id,
-            },
-        }
-
-        deploy_task_id = self.task_id or self.saga_id
-        result = await deploy_client_changes(
-            task_id=deploy_task_id,
-            changes_data=payload,
-            correlation_id=self.correlation_id,
-            use_internal=None,
-        )
-
-        self.context["change_id"] = result.get("change_id") or result.get("deployment_id")
+        raise ProposalHandoffError("version_bound_executor_required")
 
     async def _wait_for_changes_applied(self):
-        change_id = self.context.get("change_id")
-        if not change_id:
-            raise RuntimeError("Change ID missing after deploy")
-
-        timeout = datetime.utcnow() + timedelta(minutes=settings.SAGA_TIMEOUT_MINUTES)
-
-        while datetime.utcnow() < timeout:
-            response = await self.client.get(
-                f"{settings.CLIENT_GATEWAY_URL}/changes/pending/{self.project_id}",
-                headers={
-                    "X-Internal-API-Key": settings.INTERNAL_API_KEY,
-                    "X-Correlation-ID": self.correlation_id,
-                },
-            )
-            response.raise_for_status()
-            rows = response.json() or []
-
-            for row in rows:
-                if str(row.get("change_id")) != str(change_id):
-                    continue
-
-                row_status = str(row.get("status") or "").lower()
-                if row_status in {"applied", "received", "pending"}:
-                    return
-                if row_status in {"failed", "rejected"}:
-                    raise RuntimeError("Changes application failed")
-
-            # If row already consumed by downstream worker and no longer pending, accept as applied.
-            if not rows:
-                return
-
-            await asyncio.sleep(2)
-
-        raise TimeoutError("Changes application timeout")
-
-    async def _compensate(self):
-        self.state = SagaState.COMPENSATING
-        logger.info(
-            "Starting compensation for saga",
-            extra={
-                "correlation_id": self.correlation_id,
-                "saga_id": self.saga_id,
-                "project_id": self.project_id,
-                "url": self.url,
-            },
-        )
-
-        if "change_id" in self.context:
-            try:
-                async with httpx.AsyncClient(timeout=settings.SERVICE_REQUEST_TIMEOUT) as client:
-                    response = await client.post(
-                        f"{settings.CLIENT_GATEWAY_URL}/internal/deploy/{self.context['change_id']}/rollback",
-                        headers={
-                            "X-Internal-API-Key": settings.INTERNAL_API_KEY,
-                            "X-Correlation-ID": self.correlation_id,
-                        },
-                    )
-                    response.raise_for_status()
-                    self.context["rollback"] = response.json()
-            except Exception as exc:
-                logger.warning(
-                    "Rollback request failed; manual compensation may still be required",
-                    extra={
-                        "change_id": self.context.get("change_id"),
-                        "project_id": self.project_id,
-                        "correlation_id": self.correlation_id,
-                        "error": str(exc),
-                    },
-                )
+        raise ProposalHandoffError("independent_verification_required")
 
     async def _update_task_status(self, db: Session, status: TaskStatus):
         if not self.task_id:
@@ -580,11 +464,11 @@ class OptimizationSaga:
         if not task:
             return
 
-        metadata = task.meta or {}
+        metadata = dict(task.meta or {})
         metadata["saga_state"] = self.state.value
         metadata["saga_id"] = self.saga_id
         metadata["saga_correlation_id"] = self.correlation_id
-        metadata["saga_context"] = self.context
+        metadata["saga_context"] = deepcopy(self.context)
         task.meta = metadata
         task.updated_at = datetime.utcnow()
         db.commit()
@@ -604,7 +488,10 @@ class OptimizationSaga:
                     "success": success,
                     "reason": reason,
                     "ffscore": self.context.get("ffscore"),
+                    "ffscore_status": self.context.get("ffscore_status"),
+                    "ffscore_formula_version": self.context.get("ffscore_formula_version"),
                     "eeat_score": self.context.get("eeat_score"),
+                    "eeat_status": self.context.get("eeat_status"),
                 },
                 "saga_id": self.saga_id,
                 "correlation_id": self.correlation_id,
@@ -614,9 +501,18 @@ class OptimizationSaga:
         )
 
 
-async def run_optimization_cycle(project_id: str, url: str, task_id: Optional[str] = None) -> bool:
-    saga = OptimizationSaga(project_id, url, task_id)
-    return await saga.execute()
+async def run_optimization_cycle(project_id: str, url: str, task_id: Optional[str] = None,
+                                 proposal_request: Optional[dict] = None,
+                                 proposal_operation: Optional[str] = None) -> dict:
+    saga = OptimizationSaga(project_id, url, task_id, proposal_request, proposal_operation)
+    prepared = await saga.execute()
+    return {
+        "status": saga.state.value,
+        "success": prepared,
+        "publication_status": "not_requested",
+        "reason": saga.context.get("error") or saga.context.get("needs_input"),
+        "saga_id": saga.saga_id,
+    }
 
 
 

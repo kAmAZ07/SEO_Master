@@ -121,3 +121,7 @@ temp/
 Thumbs.db
 .DS_Store
 pytest-cache-files-*
+
+# Local agent instructions
+/AGENTS.md
+/CODING_STANDARDS.md

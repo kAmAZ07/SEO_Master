@@ -1,3 +1,8 @@
 /database/migrations/env.py text eol=crlf
 /services/management_service/db/models.py text eol=crlf
 /services/client_api_gateway/db/models.py text eol=crlf
+/.gitignore text eol=crlf
+/services/management_service/orchestrator.py text eol=crlf
+/services/management_service/hitl_handler.py text eol=crlf
+/tests/unit/test_hitl_handler.py text eol=crlf
+/frontend/src/pages/Dashboard.tsx text eol=crlf

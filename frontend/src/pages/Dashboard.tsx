@@ -33,19 +33,27 @@ const Dashboard = () => {
 
   const pendingTasks = useMemo(() => hitlState.tasks.filter((task) => task.status === 'pending'), [hitlState.tasks])
 
-  const handleApprove = async (taskId: string) => {
+  const handleApprove = async (task: HITLTask) => {
+    if (!task.recommendationVersionId || !task.contentHash || task.authorizationStatus !== 'pending') return
+    const taskId = task.taskId
     setSubmittingTaskId(taskId)
     try {
-      await dispatch(approveHITLTask({ taskId, approved: true, comment: comments[taskId] || undefined }))
+      await dispatch(approveHITLTask({ taskId, approvalId: task.id,
+        recommendationVersionId: task.recommendationVersionId, contentHash: task.contentHash,
+        approved: true, comment: comments[taskId] || undefined }))
     } finally {
       setSubmittingTaskId(null)
     }
   }
 
-  const handleReject = async (taskId: string) => {
+  const handleReject = async (task: HITLTask) => {
+    if (!task.recommendationVersionId || !task.contentHash || task.authorizationStatus !== 'pending') return
+    const taskId = task.taskId
     setSubmittingTaskId(taskId)
     try {
-      await dispatch(rejectHITLTask({ taskId, approved: false, comment: comments[taskId] || undefined }))
+      await dispatch(rejectHITLTask({ taskId, approvalId: task.id,
+        recommendationVersionId: task.recommendationVersionId, contentHash: task.contentHash,
+        approved: false, comment: comments[taskId] || undefined }))
     } finally {
       setSubmittingTaskId(null)
     }
@@ -101,6 +109,7 @@ const Dashboard = () => {
             {pendingTasks.map((task) => {
               const isExpanded = expandedTaskId === task.id
               const isSubmitting = submittingTaskId === task.taskId
+              const canDecide = task.authorizationStatus === 'pending' && !!task.recommendationVersionId && !!task.contentHash
               const beforeValue = stringifyDiffValue(task.diffData.before)
               const afterValue = stringifyDiffValue(task.diffData.after)
 
@@ -129,10 +138,10 @@ const Dashboard = () => {
                       <Button type="button" variant="outline" onClick={() => setExpandedTaskId(isExpanded ? null : task.id)}>
                         {isExpanded ? 'Скрыть diff' : 'Показать diff'}
                       </Button>
-                      <Button type="button" disabled={isSubmitting} onClick={() => void handleApprove(task.taskId)}>
+                      <Button type="button" disabled={isSubmitting || !canDecide} onClick={() => void handleApprove(task)}>
                         {isSubmitting ? 'Сохраняем...' : 'Одобрить'}
                       </Button>
-                      <Button type="button" variant="destructive" disabled={isSubmitting} onClick={() => void handleReject(task.taskId)}>
+                      <Button type="button" variant="destructive" disabled={isSubmitting || !canDecide} onClick={() => void handleReject(task)}>
                         Отклонить
                       </Button>
                     </div>

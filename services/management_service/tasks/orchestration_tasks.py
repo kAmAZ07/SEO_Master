@@ -2,7 +2,6 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from services.management_service.config import settings
 from services.management_service.db.session import SessionLocal
 from services.management_service.db.models import Project
 from services.management_service.orchestrator import run_optimization_cycle
@@ -26,6 +25,8 @@ def run_optimization_cycle_task(
     url: str,
     task_id: Optional[str] = None,
     correlation_id: Optional[str] = None,
+    proposal_request: Optional[dict] = None,
+    proposal_operation: Optional[str] = None,
 ) -> Dict[str, Any]:
     started_at = datetime.now(timezone.utc).isoformat()
     logger.info(
@@ -39,12 +40,12 @@ def run_optimization_cycle_task(
     )
 
     try:
-        success = _run_async(
-            run_optimization_cycle(project_id=project_id, url=url, task_id=task_id)
+        result = _run_async(
+            run_optimization_cycle(project_id=project_id, url=url, task_id=task_id,
+                                   proposal_request=proposal_request, proposal_operation=proposal_operation)
         )
         return {
-            "status": "completed" if success else "failed",
-            "success": bool(success),
+            **result,
             "project_id": project_id,
             "task_id": task_id,
             "started_at": started_at,

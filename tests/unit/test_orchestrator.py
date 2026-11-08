@@ -37,7 +37,7 @@ class DbStub:
         self.refreshed.append(obj)
 
 
-def test_create_hitl_decision_builds_event(monkeypatch):
+def test_create_hitl_decision_rejects_legacy_unversioned_content(monkeypatch):
     async def _run():
         orchestrator = _import_orchestrator()
 
@@ -71,14 +71,8 @@ def test_create_hitl_decision_builds_event(monkeypatch):
         }
 
         db = DbStub()
-        decision = await saga._create_hitl_decision(db)
-
-        assert decision.status == orchestrator.HITLStatus.PENDING
-        assert decision.old_content["title"] == "Old Title"
-        assert decision.new_content["title"] == "New Title"
-        assert db.committed is True
-        assert events
-        assert events[0]["event_type"] == "HITLApprovalRequired"
-        assert events[0]["routing_key"] == "management.hitl.approval_required"
+        with pytest.raises(orchestrator.ProposalHandoffError, match="proposal_evidence_required"):
+            await saga._create_hitl_decision(db)
+        assert db.committed is False and db.added == [] and events == []
 
     asyncio.run(_run())

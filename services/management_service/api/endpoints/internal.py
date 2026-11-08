@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from services.management_service.db.models import Project
@@ -13,6 +13,7 @@ from services.management_service.tasks.orchestration_tasks import (
     reprioritize_project_tasks,
     run_optimization_cycle_task,
 )
+from services.semantic_service.proposals.facts import ProposalRequest
 
 router = APIRouter()
 
@@ -22,6 +23,14 @@ class OptimizationRunRequest(BaseModel):
     url: str = Field(..., min_length=1)
     task_id: Optional[str] = None
     correlation_id: Optional[str] = None
+    proposal_request: Optional[ProposalRequest] = None
+    proposal_operation: Literal["title", "description", "h1", "schema_jsonld"] | None = None
+
+    @model_validator(mode="after")
+    def validate_proposal_selection(self):
+        if self.proposal_request is not None and self.proposal_operation is not None:
+            raise ValueError("use either proposal_request or proposal_operation")
+        return self
 
 
 @router.post("/optimization/run", status_code=status.HTTP_202_ACCEPTED)
@@ -31,6 +40,8 @@ def enqueue_optimization_cycle(payload: OptimizationRunRequest) -> dict[str, Any
         url=payload.url,
         task_id=payload.task_id,
         correlation_id=payload.correlation_id,
+        proposal_request=payload.proposal_request.model_dump(mode="json") if payload.proposal_request else None,
+        proposal_operation=payload.proposal_operation,
     )
     return {
         "status": "queued",

@@ -59,6 +59,9 @@ describe('HITL page', () => {
         taskId: 'task-1',
         projectId: 'project-1',
         status: 'pending',
+        authorizationStatus: 'pending',
+        recommendationVersionId: 'version-1',
+        contentHash: 'a'.repeat(64),
         diffData: {
           before: { title: 'Old title' },
           after: { title: 'New title' },
@@ -97,6 +100,9 @@ describe('HITL page', () => {
     await waitFor(() => {
       expect(apiMocks.approveTask).toHaveBeenCalledWith({
         taskId: 'task-1',
+        approvalId: 'approval-1',
+        recommendationVersionId: 'version-1',
+        contentHash: 'a'.repeat(64),
         approved: true,
         comment: 'Approved in test',
       })
@@ -109,5 +115,19 @@ describe('HITL page', () => {
     renderHITL()
 
     expect(await screen.findByText(/Нет ожидающих HITL/i)).toBeInTheDocument()
+  })
+
+  it('prevents a decision for an invalidated preview', async () => {
+    apiMocks.fetchHITLTasks.mockResolvedValueOnce([{
+      id: 'approval-1', taskId: 'task-1', projectId: 'project-1', status: 'pending',
+      authorizationStatus: 'invalidated', recommendationVersionId: 'old-version', contentHash: 'a'.repeat(64),
+      diffData: { before: { title: 'Old' }, after: { title: 'New' } }, metadata: {},
+    }])
+    renderHITL()
+    const button = await screen.findByRole('button', { name: /^Одобрить$/i })
+    expect(button).toBeDisabled()
+    await userEvent.click(button)
+    expect(apiMocks.approveTask).not.toHaveBeenCalled()
+    expect(await screen.findByText(/требуется актуальная проверенная версия/i)).toBeInTheDocument()
   })
 })

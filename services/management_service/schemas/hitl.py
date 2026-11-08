@@ -48,7 +48,7 @@ class HITLApprovalResponse(BaseModel):
 
 
 class HITLDecision(BaseModel):
-    auto_deploy: bool = True
+    auto_deploy: bool = False
     notes: Optional[str] = Field(None, max_length=1000)
     rejection_reason: Optional[str] = Field(None, max_length=1000)
 
@@ -65,7 +65,7 @@ class HITLApprovalListResponse(BaseModel):
 class HITLBatchApproveRequest(BaseModel):
     task_ids: List[UUID4]
     approved_by: str
-    auto_deploy: bool = True
+    auto_deploy: bool = False
     correlation_id: Optional[str] = None
 
 

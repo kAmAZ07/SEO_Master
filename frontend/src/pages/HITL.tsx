@@ -53,15 +53,21 @@ const HITL = () => {
   )
 
   const handleDecision = async (task: HITLTask, approved: boolean) => {
+    if (!task.recommendationVersionId || !task.contentHash || task.authorizationStatus !== 'pending') return
     const comment = comments[task.taskId]?.trim()
+    const decision = { taskId: task.taskId, approvalId: task.id,
+      recommendationVersionId: task.recommendationVersionId, contentHash: task.contentHash, approved, comment }
     setProcessingTaskId(task.taskId)
 
     try {
       if (approved) {
-        await dispatch(approveHITLTask({ taskId: task.taskId, approved: true, comment })).unwrap()
+        await dispatch(approveHITLTask(decision)).unwrap()
       } else {
-        await dispatch(rejectHITLTask({ taskId: task.taskId, approved: false, comment })).unwrap()
+        await dispatch(rejectHITLTask(decision)).unwrap()
       }
+    } catch {
+      // The thunk stores the server error, displayed by this page.
+      return
     } finally {
       setProcessingTaskId(null)
     }
@@ -103,6 +109,7 @@ const HITL = () => {
           {sortedTasks.map((task) => {
             const taskUrl = getTaskUrl(task)
             const isProcessing = processingTaskId === task.taskId
+            const canDecide = task.authorizationStatus === 'pending' && !!task.recommendationVersionId && !!task.contentHash
 
             return (
               <Card key={task.id} className="overflow-hidden p-0">
@@ -154,13 +161,15 @@ const HITL = () => {
                     />
 
                     <div className="mt-4 grid grid-cols-2 gap-3">
-                      <Button type="button" variant="outline" disabled={isProcessing} onClick={() => void handleDecision(task, false)}>
+                      <Button type="button" variant="outline" disabled={isProcessing || !canDecide} onClick={() => void handleDecision(task, false)}>
                         Отклонить
                       </Button>
-                      <Button type="button" disabled={isProcessing} onClick={() => void handleDecision(task, true)}>
+                      <Button type="button" disabled={isProcessing || !canDecide} onClick={() => void handleDecision(task, true)}>
                         Одобрить
                       </Button>
                     </div>
+                    <p className="mt-2 text-sm text-gray-600">Одобрение сохраняет решение. Публикация выполняется отдельно.</p>
+                    {!canDecide && <p className="mt-2 text-sm text-amber-700">Для решения требуется актуальная проверенная версия.</p>}
                   </aside>
 
                   <section className="min-w-0 p-6">

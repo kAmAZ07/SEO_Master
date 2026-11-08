@@ -17,6 +17,12 @@ COPY database/ ./database/
 COPY shared/ ./shared/
 COPY services/management_service/ ./services/management_service/
 COPY services/project_integrations/ ./services/project_integrations/
+COPY services/semantic_service/schemas/ff_score.py ./services/semantic_service/schemas/
+COPY services/semantic_service/proposals/__init__.py ./services/semantic_service/proposals/
+COPY services/semantic_service/proposals/model.py ./services/semantic_service/proposals/
+COPY services/semantic_service/proposals/facts.py ./services/semantic_service/proposals/
+COPY services/semantic_service/proposals/derive.py ./services/semantic_service/proposals/
+COPY services/semantic_service/proposals/validators.py ./services/semantic_service/proposals/
 COPY services/event_resilience.py ./services/event_resilience.py
 
 RUN groupadd --gid 10001 appuser && useradd --uid 10001 --gid appuser --no-create-home appuser && \

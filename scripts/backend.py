@@ -32,6 +32,9 @@ PROFILES = (
         "tests/unit/test_orchestrator.py",
         "tests/unit/test_prioritizer.py",
         "tests/unit/test_management_model_imports.py",
+        "tests/unit/test_management_scores.py",
+        "tests/unit/test_management_proposals.py",
+        "tests/unit/test_management_approvals.py",
     )),
     Profile("client", "services/client_api_gateway/requirements.txt", (
         "tests/unit/test_client_gateway_rollback.py",
@@ -43,6 +46,7 @@ PROFILES = (
         "tests/unit/test_api_gateway_protected_routes_layout.py",
         "tests/unit/test_domain_verification.py",
         "tests/unit/test_domain_verification_network.py",
+        "tests/unit/test_hitl_gateway.py",
         "tests/unit/test_netpolicy.py",
         "tests/unit/test_project_access.py",
         "tests/unit/test_project_core.py",
@@ -53,6 +57,7 @@ PROFILES = (
         "tests/unit/test_public_audit_rate_limit.py",
     )),
     Profile("audit", "services/audit_service/requirements.txt", (
+        "tests/unit/test_audit_page_evidence.py",
         "tests/unit/test_audit_task_created_handler.py",
         "tests/unit/test_audit_top_findings.py",
         "tests/unit/test_cwv_analyzer.py",

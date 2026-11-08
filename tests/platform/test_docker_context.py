@@ -104,6 +104,12 @@ class DockerContextTests(unittest.TestCase):
             "shared/",
             "services/management_service/",
             "services/project_integrations/",
+            "services/semantic_service/schemas/ff_score.py",
+            "services/semantic_service/proposals/__init__.py",
+            "services/semantic_service/proposals/model.py",
+            "services/semantic_service/proposals/facts.py",
+            "services/semantic_service/proposals/derive.py",
+            "services/semantic_service/proposals/validators.py",
             "services/event_resilience.py",
         }
         application_sources: set[str] = set()

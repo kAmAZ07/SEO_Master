@@ -1,7 +1,6 @@
-import os
 from typing import Optional
 from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator
 
 
 class Settings(BaseSettings):
@@ -53,6 +52,7 @@ class Settings(BaseSettings):
     
     AUDIT_SERVICE_URL: str = Field(default="http://localhost:8001", env="AUDIT_SERVICE_URL")
     MANAGEMENT_SERVICE_URL: str = Field(default="http://localhost:8004", env="MANAGEMENT_SERVICE_URL")
+    INTERNAL_API_KEY: str = Field(default="", env="INTERNAL_API_KEY")
     SEMANTIC_SERVICE_URL: str = Field(default="http://localhost:8002", env="SEMANTIC_SERVICE_URL")
     REPORTING_SERVICE_URL: str = Field(default="http://localhost:8003", env="REPORTING_SERVICE_URL")
 

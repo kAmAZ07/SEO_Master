@@ -25,7 +25,7 @@ pytestmark = pytest.mark.skipif(not ADMIN_URL, reason="TEST_PG_ADMIN_URL is not 
 
 ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS = "20261103_001_workspaces"
-HEAD = "20261104_001_semantic_al5"
+HEAD = "20261109_001_hitl_barrier"
 PROJECT = "11111111-1111-4111-8111-111111111111"
 OTHER_PROJECT = "22222222-2222-4222-8222-222222222222"
 

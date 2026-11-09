@@ -65,14 +65,14 @@ class ExecutionService:
             raise ApprovalError("execution_approval_invalid")
         approver_role = self.db.execute(text(
             "SELECT m.role FROM audit_schema.workspace_members m JOIN public.users u ON u.id=m.user_id "
-            "WHERE m.workspace_id=:workspace AND m.user_id=:actor AND u.is_active IS TRUE FOR SHARE OF m,u"
+            "WHERE m.workspace_id=:workspace AND m.user_id=:actor AND u.is_active IS TRUE"
         ), {"workspace": decision.workspace_id, "actor": decision.actor_id}).scalar()
         if not isinstance(approver_role, str) or not has_permission(approver_role, Permission.APPROVE):
             raise ApprovalError("execution_approver_permission_lost")
         verified = self.db.execute(text(
             "SELECT verified_at FROM audit_schema.domain_authorizations WHERE project_id=:project AND workspace_id=:workspace "
             "AND status='verified' AND scope_origin=:origin AND scope_path_prefix=:prefix "
-            "AND revoked_at IS NULL FOR SHARE"
+            "AND revoked_at IS NULL"
         ), {"project": version.project_id, "workspace": decision.workspace_id, "origin": scope["origin"],
             "prefix": scope["path_prefix"]}).scalar()
         if verified is None or not is_fresh("verified", verified, self.fresh_days, self.clock()):
@@ -167,9 +167,8 @@ class ExecutionService:
             initial = self._row(operation_id)
             record = initial.meta["record"]
             references = ExecutionRequest.model_validate({key: record[key] for key in ExecutionRequest.model_fields})
-            # Short read/write barrier shared with both producer tables; never held over HTTP.
+            # _authorize locks Task first, then the enforced Core authority barrier.
             self.db.execute(text("SET LOCAL lock_timeout='5s'"))
-            self.db.execute(text("LOCK TABLE semantic_schema.recommendation_versions, audit_schema.crawl_results IN SHARE MODE"))
             task, _, version, _, decision, valid_until = self._authorize(references, actor)
             row = self._row(operation_id, lock=True)
             if (row.meta["state"] != "ready" or actor.user_id != record["actor_id"]

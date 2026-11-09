@@ -14,9 +14,10 @@ from fastapi import HTTPException
 from services.client_api_gateway.config import settings
 from services.client_api_gateway.wordpress_v2 import WordPressV2
 from shared.hitl_execution import ExecutionError, ExecutionRequest, WordPressBinding
+from shared.cms_http import CMSHttpClient
 
 
-def wordpress_target(project_id: str, binding: WordPressBinding | None = None) -> WordPressV2:
+def wordpress_target(project_id: str, binding: WordPressBinding | None = None, *, http: CMSHttpClient | None = None) -> WordPressV2:
     try:
         raw = settings.WORDPRESS_V2_TARGETS_JSON or ""
         if len(raw) > 1_048_576:
@@ -34,7 +35,7 @@ def wordpress_target(project_id: str, binding: WordPressBinding | None = None) -
             if not isinstance(reference, str) or not reference.startswith("env:") or not reference[4:].isidentifier():
                 raise ValueError()
             secrets.append(os.environ.get(reference[4:], ""))
-        return WordPressV2(project_id, configured, *secrets)
+        return WordPressV2(project_id, configured, *secrets, http=http)
     except (ValueError, KeyError, TypeError):
         raise HTTPException(503, "wordpress_v2_binding_unconfigured") from None
 
@@ -48,12 +49,12 @@ class TargetFactory(Protocol):
 
 
 class HITLExecutor:
-    def __init__(self, authorization: str, *, authority: Authority | None = None, target_factory: TargetFactory = wordpress_target):
+    def __init__(self, authorization: str, *, authority: Authority | None = None, target_factory: TargetFactory | None = None):
         if (not authorization.lower().startswith("bearer ") or not authorization[7:].strip() or len(authorization) > 8192):
             raise HTTPException(401, "user_session_required")
         self.authorization = authorization
         self.authority = authority or self._authority
-        self.target_factory = target_factory
+        self.target_factory = target_factory or wordpress_target
 
     async def read(self, operation_id: str) -> dict[str, Any]:
         return await self.authority("GET", "/" + operation_id)

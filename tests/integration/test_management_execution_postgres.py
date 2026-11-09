@@ -3,7 +3,9 @@ from concurrent.futures import ThreadPoolExecutor
 import asyncio
 from copy import deepcopy
 from datetime import timedelta
+from queue import Queue
 from threading import Barrier
+import time
 import uuid
 
 import pytest
@@ -39,7 +41,6 @@ def executable(stand):
     _, _, version = management_proposal_fixture(entity=ExternalEntity(kind="post", id="42"),
         evidence_override=[item.model_dump(mode="json") for item in original.evidence])
     with engine.begin() as conn:
-        DomainAuthorization.__table__.create(conn)
         conn.execute(text("UPDATE audit_schema.workspace_members SET role='owner' WHERE user_id=:actor"), {"actor": ALICE})
     with Session(engine) as session:
         session.query(RecommendationVersionRow).delete()
@@ -180,12 +181,10 @@ def test_head_without_unique_execution_index_is_not_ready(executable):
 def test_durable_inbox_commits_before_ack_and_redelivery_cannot_decide_or_apply(executable):
     from unittest.mock import AsyncMock
     import json
-    from services.event_resilience import EVENT_TRACKING_STATEMENTS, ResilientConsumerConfig
+    from services.event_resilience import ResilientConsumerConfig
     from services.management_service.events.hitl_inbox import CONSUMER, process_notification, record_notification
     engine, _, _, _ = executable
     with engine.begin() as conn:
-        # Explicit test fixture DDL from Core's contract, never called by runtime inbox.
-        conn.execute(text(EVENT_TRACKING_STATEMENTS[0]))
         event = conn.scalar(text("SELECT metadata FROM public.management_outbox WHERE event_type='HITLApproved'"))
     async def check_ack():
         with engine.connect() as conn:
@@ -208,3 +207,43 @@ def test_durable_inbox_commits_before_ack_and_redelivery_cannot_decide_or_apply(
     with engine.connect() as conn:
         assert conn.scalar(text("SELECT count(*) FROM public.management_changelog")) == 0
         assert conn.scalar(text("SELECT count(*) FROM public.processed_events")) == 1
+
+
+def test_repeatable_read_authority_is_rejected_before_using_a_stale_snapshot(executable):
+    engine, _, _, refs = executable
+    with Session(engine.execution_options(isolation_level="REPEATABLE READ")) as session:
+        with pytest.raises(ApprovalError, match="authority_isolation_unsupported"):
+            ExecutionService(session, clock=lambda: NOW).context(refs, UserActor(ALICE))
+
+
+@pytest.mark.parametrize("mutation", ["role", "version"])
+def test_begin_waiting_for_producer_commit_reads_fresh_authority(executable, mutation):
+    engine, version, _, refs = executable
+    reserve(engine, refs)
+    waiting_pid = Queue()
+    def attempt():
+        with Session(engine) as session:
+            waiting_pid.put(session.scalar(text("SELECT pg_backend_pid()")))
+            with pytest.raises(ApprovalError):
+                ExecutionService(session, clock=lambda: NOW).begin(refs.operation_id, UserActor(ALICE))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with Session(engine) as producer:
+            if mutation == "role":
+                producer.execute(text("UPDATE audit_schema.workspace_members SET role='viewer' WHERE user_id=:id"), {"id": ALICE})
+            else:
+                newer = version.model_copy(update={"version_id": str(uuid.uuid4()), "version": 2, "previous_version_id": version.version_id})
+                producer.add(row_from_version(newer))
+                producer.flush()
+            future = pool.submit(attempt)
+            pid = waiting_pid.get(timeout=5)
+            # Prove that begin actually waits on the producer transaction, not a sleep.
+            deadline = time.monotonic() + 4
+            with engine.connect() as observer:
+                while not observer.scalar(text("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=:pid AND locktype='advisory' AND NOT granted)"), {"pid": pid}):
+                    assert not future.done() and time.monotonic() < deadline
+                    time.sleep(.01)
+            producer.commit()
+        future.result(timeout=5)
+    with engine.connect() as conn:
+        assert conn.scalar(text("SELECT metadata->>'state' FROM public.management_changelog")) == "ready"
+        assert conn.scalar(text("SELECT status::text FROM public.tasks WHERE id=:id"), {"id": TASK_ID}) == TaskStatus.APPROVED.name

@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(not ADMIN_URL, reason="TEST_PG_ADMIN_URL is not 
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = "20260414_001_crawl_partitions"
-HEAD = "20261104_001_semantic_al5"
+HEAD = "20261109_001_hitl_barrier"
 AL4_TABLES = ("workspaces", "workspace_members", "projects", "domain_authorizations", "legacy_project_id_map", "public_audit_results")
 
 
@@ -38,7 +38,7 @@ ALEMBIC_RUNNER = (
 
 
 class TempDatabase:
-    def __init__(self):
+    def __init__(self) -> None:
         self.name = "al4_" + uuid.uuid4().hex[:12]
         base = sa.engine.make_url(ADMIN_URL)
         self.url = base.set(database=self.name).render_as_string(hide_password=False)

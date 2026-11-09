@@ -29,6 +29,7 @@ class NativeWordPress(AbstractContextManager["NativeWordPress"]):
         self.resources: list[tuple[str, str]] = []
         self.port = 0
         self.entity_id = 0
+        self.postgres_url: str | None = None
 
     def run(self, *args: str, stdin: str | None = None, timeout: int = 90) -> str:
         result = subprocess.run([*self.docker, *args], input=stdin, env=self.tool_environment,
@@ -64,11 +65,13 @@ class NativeWordPress(AbstractContextManager["NativeWordPress"]):
             raise RuntimeError("native fixture source copy failed")
 
     def start_postgres(self) -> str:
+        if self.postgres_url is not None:
+            return self.postgres_url
         name = self.owner + "-pg"
         password = secrets.token_hex(32)
         self.private_values.append(password)
         self.run("run", "-d", "--rm", "--name", name, "--network", self.network,
-                 "--label", "seo.test.owner=" + self.owner, "--publish", "127.0.0.1::5432",
+                 "--label", "seo.test.owner=" + self.owner, "--network-alias", "postgres", "--publish", "127.0.0.1::5432",
                  "--tmpfs", "/var/lib/postgresql/data:rw,nosuid", "-e", "POSTGRES_PASSWORD=" + password, POSTGRES)
         self.resources.append(("container", name))
         for _ in range(30):
@@ -81,7 +84,8 @@ class NativeWordPress(AbstractContextManager["NativeWordPress"]):
             raise RuntimeError("isolated PostgreSQL readiness timed out")
         info = json.loads(self.run("inspect", name))[0]
         port = int(info["NetworkSettings"]["Ports"]["5432/tcp"][0]["HostPort"])
-        return f"postgresql://postgres:{password}@127.0.0.1:{port}/postgres"
+        self.postgres_url = f"postgresql://postgres:{password}@127.0.0.1:{port}/postgres"
+        return self.postgres_url
 
     def __enter__(self) -> "NativeWordPress":
         try:
@@ -102,6 +106,7 @@ class NativeWordPress(AbstractContextManager["NativeWordPress"]):
             else:
                 raise RuntimeError("isolated MariaDB readiness timed out")
             self.run("run", "-d", "--rm", "--name", self.wp, "--network", self.network,
+                     "--network-alias", "wordpress.test",
                      "--label", "seo.test.owner=" + self.owner, "--publish", "127.0.0.1::80",
                      "--tmpfs", "/var/www/html:rw,nosuid", "-e", "WORDPRESS_DB_HOST=db", "-e", "WORDPRESS_DB_USER=root",
                      "-e", "WORDPRESS_DB_PASSWORD=" + password, "-e", "WORDPRESS_DB_NAME=wordpress",
@@ -162,4 +167,6 @@ echo json_encode(['entity_id'=>$id]);
             if labels.get("seo.test.owner") != self.owner or not name.startswith(self.owner + "-"):
                 raise RuntimeError("refusing native fixture cleanup: ownership mismatch")
             self.run("network", "rm", name) if kind == "network" else self.run("stop", name)
+            if kind == "container" and not info["HostConfig"]["AutoRemove"]:
+                self.run("container", "rm", name)
         self.resources.clear()

@@ -20,6 +20,7 @@ from services.semantic_service.proposals.model import RecommendationVersion, com
 from services.semantic_service.proposals.validators import canonical_url
 from shared.projects.roles import Permission, has_permission
 from shared.projects.scope import ScopeError, parse_scope
+from shared.schema_state import require_producer_barrier
 
 
 # Instance attributes of the legacy Column-based models. Keep the ORM definitions
@@ -56,6 +57,13 @@ class ApprovalService:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.ttl = ttl
 
+    def _lock_authority(self) -> None:
+        if self.db.scalar(text("SELECT current_setting('transaction_isolation')")) != "read committed":
+            raise ApprovalError("authority_isolation_unsupported")
+        require_producer_barrier(self.db.connection())
+        self.db.execute(text("SET LOCAL lock_timeout='5s'"))
+        self.db.execute(text("SELECT pg_advisory_xact_lock(74219031109004)"))
+
     def prepare(self, version: RecommendationVersion, *, metadata: dict[str, Any],
                 impact: float | None = None) -> ApprovalRow:
         """Prepare a preview; regeneration archives old facts and never approves."""
@@ -65,9 +73,10 @@ class ApprovalService:
             ).populate_existing().with_for_update().first())
             if task is None or str(task.project_id) != version.project_id:
                 raise ApprovalError("hitl_task_not_found", 404)
+            self._lock_authority()
             scope = self.db.execute(text(
                 "SELECT id, workspace_id, origin, path_prefix, status FROM audit_schema.projects "
-                "WHERE id = :project_id FOR SHARE"
+                "WHERE id = :project_id"
             ), {"project_id": version.project_id}).mappings().first()
             if scope is None:
                 raise ApprovalError("hitl_task_not_found", 404)
@@ -144,12 +153,13 @@ class ApprovalService:
 
     def _scope(self, project_id: str, actor: UserActor, permission: Permission) -> Mapping[str, Any]:
         # Read the canonical authority, never host-match legacy public.projects.
+        self._lock_authority()
         row = self.db.execute(text(
             "SELECT p.id, p.workspace_id, p.origin, p.path_prefix, p.status, m.role "
             "FROM audit_schema.projects p JOIN audit_schema.workspace_members m "
             "ON m.workspace_id = p.workspace_id "
             "JOIN public.users u ON u.id = m.user_id "
-            "WHERE p.id = :project_id AND m.user_id = :actor_id AND u.is_active IS TRUE FOR SHARE OF p, m, u"
+            "WHERE p.id = :project_id AND m.user_id = :actor_id AND u.is_active IS TRUE"
         ), {"project_id": project_id, "actor_id": actor.user_id}).mappings().first()
         if row is None:
             raise ApprovalError("hitl_task_not_found", 404)

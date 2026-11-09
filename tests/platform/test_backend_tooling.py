@@ -30,6 +30,7 @@ class BackendToolingTests(unittest.TestCase):
             "tests/unit/test_management_approvals.py",
         ))
         self.assertEqual(client.tests, (
+            "tests/unit/test_client_startup.py",
             "tests/unit/test_client_gateway_rollback.py",
             "tests/unit/test_client_model_imports.py",
         ))

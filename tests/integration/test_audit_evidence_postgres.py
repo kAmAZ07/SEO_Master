@@ -1,21 +1,23 @@
 """Audit evidence JSONB round trip and competing finalization on disposable PostgreSQL.
 
 Uses TEST_PG_ADMIN_URL and an isolated database created by the existing test fixture.
-The table is an ORM test fixture; this does not validate migrations or startup DDL.
+Core tables and partitions are provisioned by the actual migration graph.
 """
 
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import secrets
+from uuid import uuid4
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tests.integration.test_semantic_postgres import ADMIN_URL, TempDatabase
 from services.audit_service import main
 from services.audit_service.db.models import CrawlResult
-from services.audit_service.db.session import _create_crawl_result_partitions
 from services.management_service.proposal_handoff import audit_proposal_request
 from shared.page_evidence import verify_evidence
 
@@ -29,10 +31,6 @@ def test_competing_finalizers_preserve_one_persisted_snapshot(monkeypatch):
     async def scenario(database):
         engine = create_async_engine(database.async_url)
         try:
-            async with engine.begin() as connection:
-                await connection.execute(text("CREATE SCHEMA audit_schema"))
-                await connection.run_sync(CrawlResult.__table__.create)
-                await _create_crawl_result_partitions(connection)
             maker = async_sessionmaker(engine, expire_on_commit=False)
 
             @asynccontextmanager
@@ -77,4 +75,40 @@ def test_competing_finalizers_preserve_one_persisted_snapshot(monkeypatch):
             await engine.dispose()
 
     with TempDatabase() as database:
+        database.alembic("upgrade", "head")
         asyncio.run(scenario(database))
+
+
+def test_audit_and_semantic_initializers_only_read_migrated_schema(monkeypatch):
+    from sqlalchemy import event
+    from services.audit_service.db import session as audit_db
+    from services.semantic_service.db import session as semantic_db
+    from services.event_resilience import ensure_event_tracking_tables
+
+    with TempDatabase() as database:
+        database.alembic("upgrade", "head")
+        database.engine.hide_parameters = True
+        role, password = "ar4_source_" + uuid4().hex[:12], secrets.token_hex(32)
+        database.run(f'CREATE ROLE "{role}" LOGIN PASSWORD :password NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE', password=password)
+        try:
+            database.run(f'GRANT USAGE ON SCHEMA public,audit_schema,semantic_schema TO "{role}"; GRANT SELECT ON ALL TABLES IN SCHEMA public,audit_schema,semantic_schema TO "{role}"')
+            async def check():
+                url = make_url(database.async_url).set(username=role, password=password)
+                engine = create_async_engine(url, hide_parameters=True)
+                statements = []
+                def record(_conn, _cursor, statement, _params, _context, _many):
+                    statements.append(statement)
+                event.listen(engine.sync_engine, "before_cursor_execute", record)
+                monkeypatch.setattr(audit_db, "_engine", engine)
+                monkeypatch.setattr(semantic_db, "_engine", engine)
+                try:
+                    await audit_db.init_db()
+                    await semantic_db.init_db()
+                    async with engine.connect() as conn:
+                        await ensure_event_tracking_tables(conn)
+                    assert statements and all(sql.lstrip().upper().startswith("SELECT") for sql in statements)
+                finally:
+                    await engine.dispose()
+            asyncio.run(check())
+        finally:
+            database.run(f'DROP OWNED BY "{role}"; DROP ROLE "{role}"')

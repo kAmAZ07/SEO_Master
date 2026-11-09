@@ -2,9 +2,10 @@
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from shared.schema_state import MANAGEMENT_HEAD
 
 LEDGER_HEAD = "20261109_001_hitl_ledger"
-HEAD = "20261109_003_execution"
+HEAD = MANAGEMENT_HEAD
 TABLES = (
     "projects",
     "tasks",
@@ -38,7 +39,7 @@ def require_schema(connection: Connection, *, expected_head: str = HEAD) -> None
             {"table": "public." + name, "unqualified": name},
         )
         is True
-        for name in (*TABLES, "management_migration_state")
+        for name in (*TABLES, "management_migration_state", *(("client_keys", "deployment_log") if expected_head == HEAD else ()))
     ):
         raise RuntimeError("MANAGEMENT_SCHEMA_NOT_READY")
     if expected_head == HEAD:

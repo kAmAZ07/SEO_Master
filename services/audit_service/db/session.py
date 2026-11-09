@@ -1,9 +1,8 @@
 from contextlib import asynccontextmanager
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine, async_sessionmaker
 
 from services.audit_service.config import settings
-from services.audit_service.db.models import Base
+from shared.schema_state import require_core_schema
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
@@ -30,38 +29,9 @@ async def get_session():
         yield session
 
 
-async def _create_crawl_result_partitions(conn) -> None:
-    result = await conn.execute(
-        text(
-            """
-            SELECT EXISTS (
-                SELECT 1
-                FROM pg_partitioned_table pt
-                JOIN pg_class c ON c.oid = pt.partrelid
-                JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE n.nspname = 'audit_schema' AND c.relname = 'crawl_results'
-            )
-            """
-        )
-    )
-    if not result.scalar():
-        return
-
-    for remainder in range(8):
-        await conn.execute(
-            text(
-                f"""
-                CREATE TABLE IF NOT EXISTS audit_schema.crawl_results_p{remainder}
-                PARTITION OF audit_schema.crawl_results
-                FOR VALUES WITH (MODULUS 8, REMAINDER {remainder})
-                """
-            )
-        )
-
-
 async def init_db() -> None:
     engine = _get_engine()
-    async with engine.begin() as conn:
-        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS audit_schema"))
-        await conn.run_sync(Base.metadata.create_all)
-        await _create_crawl_result_partitions(conn)
+    async with engine.connect() as conn:
+        await conn.run_sync(lambda sync: require_core_schema(sync, (
+            "audit_schema.crawl_results", "audit_schema.public_audit_results",
+            "public.processed_events", "public.failed_events"), crawl_partitions=True))

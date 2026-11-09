@@ -10,3 +10,4 @@
 /services/management_service/interlinkgenerator.py whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 /.env.example whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 /services/api_gateway/config.py whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+/config/database_config.py whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

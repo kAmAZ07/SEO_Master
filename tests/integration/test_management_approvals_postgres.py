@@ -1,6 +1,6 @@
 """AR-4 PostgreSQL transactions on the checked Management migration line.
 
-Core/Audit/Semantic tables remain isolated ORM fixtures, not full-stack migrations.
+Core and Management schemas are created by their actual migration graphs.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -20,7 +20,6 @@ from services.management_service.approval_service import ApprovalService
 from services.management_service.migrations.runner import migrate
 from services.management_service.models import HITLApproval, HITLStatus, Task, TaskStatus, TaskType
 from services.management_service.proposal_handoff import version_diff
-from services.semantic_service.db.models import RecommendationVersionRow
 from services.semantic_service.proposals.repository import row_from_version
 from shared.page_evidence import seal_evidence
 from tests.fixtures.management_proposal import PROJECT_ID, TASK_ID, TARGET_URL, management_proposal_fixture
@@ -36,16 +35,7 @@ APPROVAL = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 @pytest.fixture()
 def stand():
     with TempDatabase() as database:
-        with database.engine.begin() as conn:
-            conn.execute(text("CREATE SCHEMA audit_schema"))
-            conn.execute(text("CREATE SCHEMA semantic_schema"))
-            for table in (User.__table__, Workspace.__table__, WorkspaceMember.__table__, CanonicalProject.__table__):
-                table.create(conn)
-            RecommendationVersionRow.__table__.create(conn)
-            CrawlResult.__table__.create(conn)
-            for remainder in range(8):
-                conn.execute(text(f"CREATE TABLE audit_schema.crawl_results_p{remainder} "
-                                  f"PARTITION OF audit_schema.crawl_results FOR VALUES WITH (MODULUS 8, REMAINDER {remainder})"))
+        database.alembic("upgrade", "head")
         with database.engine.connect() as conn:
             migrate(conn, expected_role=database.engine.url.username or "")
         request, _, _ = management_proposal_fixture()

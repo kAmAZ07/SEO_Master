@@ -21,51 +21,9 @@ EVENT_DLX_NAME = "seo_master.events.dlx"
 RETRY_DELAYS_SECONDS = (10, 60, 300)
 REDIS_BUFFER_TTL_SECONDS = 7 * 24 * 60 * 60
 
-EVENT_TRACKING_STATEMENTS = (
-    """
-    CREATE TABLE IF NOT EXISTS public.processed_events (
-        id VARCHAR(255) PRIMARY KEY,
-        event_id VARCHAR(128) NOT NULL,
-        consumer_name VARCHAR(128) NOT NULL,
-        event_name VARCHAR(128),
-        routing_key VARCHAR(255),
-        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-        processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-        CONSTRAINT uq_processed_events_consumer_event UNIQUE (consumer_name, event_id)
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS idx_processed_events_event_id ON public.processed_events(event_id)",
-    "CREATE INDEX IF NOT EXISTS idx_processed_events_consumer ON public.processed_events(consumer_name)",
-    "CREATE INDEX IF NOT EXISTS idx_processed_events_processed_at ON public.processed_events(processed_at DESC)",
-    """
-    CREATE TABLE IF NOT EXISTS public.failed_events (
-        id VARCHAR(255) PRIMARY KEY,
-        event_id VARCHAR(128) NOT NULL,
-        consumer_name VARCHAR(128) NOT NULL,
-        event_name VARCHAR(128),
-        routing_key VARCHAR(255),
-        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-        error TEXT NOT NULL,
-        attempt INTEGER NOT NULL DEFAULT 1,
-        retry_policy JSONB NOT NULL DEFAULT '[10, 60, 300]'::jsonb,
-        next_retry_at TIMESTAMP WITH TIME ZONE,
-        resolved BOOLEAN NOT NULL DEFAULT FALSE,
-        resolved_at TIMESTAMP WITH TIME ZONE,
-        failed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-        CONSTRAINT uq_failed_events_consumer_event UNIQUE (consumer_name, event_id)
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS idx_failed_events_event_id ON public.failed_events(event_id)",
-    "CREATE INDEX IF NOT EXISTS idx_failed_events_consumer ON public.failed_events(consumer_name)",
-    "CREATE INDEX IF NOT EXISTS idx_failed_events_resolved ON public.failed_events(resolved)",
-    "CREATE INDEX IF NOT EXISTS idx_failed_events_next_retry_at ON public.failed_events(next_retry_at)",
-    "CREATE INDEX IF NOT EXISTS idx_failed_events_failed_at ON public.failed_events(failed_at DESC)",
+EVENT_TRACKING_READINESS = (
+    "SELECT id,event_id,consumer_name,event_name,routing_key,payload,metadata,processed_at,created_at,updated_at FROM public.processed_events LIMIT 0",
+    "SELECT id,event_id,consumer_name,event_name,routing_key,payload,error,attempt,retry_policy,next_retry_at,resolved,resolved_at,failed_at,metadata,created_at,updated_at FROM public.failed_events LIMIT 0",
 )
 
 
@@ -157,12 +115,12 @@ async def declare_resilient_queue(
 
 
 async def ensure_event_tracking_tables(session: Any) -> None:
-    for statement in EVENT_TRACKING_STATEMENTS:
+    for statement in EVENT_TRACKING_READINESS:
         await session.execute(text(statement))
 
 
 def ensure_event_tracking_tables_sync(session: Any) -> None:
-    for statement in EVENT_TRACKING_STATEMENTS:
+    for statement in EVENT_TRACKING_READINESS:
         session.execute(text(statement))
 
 

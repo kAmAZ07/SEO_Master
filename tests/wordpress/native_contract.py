@@ -124,10 +124,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--docker-context", default="desktop-linux")
     parser.add_argument("--with-management", action="store_true")
+    parser.add_argument("--with-apps", action="store_true")
     args = parser.parse_args()
     with NativeWordPress(Path(__file__).resolve().parents[2], project_id=PROJECT_ID, site_id=str(uuid4()), context=args.docker_context) as wp:
         asyncio.run(run_contract(wp))
-        if args.with_management:
+        if args.with_management or args.with_apps:
             # Native tests never load the checkout's working .env configuration.
             import tempfile
             from scripts.backend import build_test_environment
@@ -147,7 +148,11 @@ def main() -> None:
                         return WordPressV2(PROJECT_ID, binding, wp.secret, wp.receipt_secret,
                             http=CMSHttpClient(policy=NetPolicy(allow_private_hosts=frozenset({"wordpress.test"})),
                                 resolver=resolver, network_backend=LoopbackBackend(wp.port)))
-                    asyncio.run(run_authority(wp, factory))
+                    if args.with_management:
+                        asyncio.run(run_authority(wp, factory))
+                    if args.with_apps:
+                        from tests.wordpress.app_http import run_apps
+                        run_apps(wp)
                 finally:
                     os.chdir(previous_directory)
                     os.environ.clear()

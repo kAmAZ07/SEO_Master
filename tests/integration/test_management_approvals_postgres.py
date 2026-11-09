@@ -1,15 +1,14 @@
-"""Real PostgreSQL transactions for AR-4, using disposable ORM fixtures, not migration acceptance."""
+"""AR-4 PostgreSQL transactions on the checked Management migration line.
+
+Core/Audit/Semantic tables remain isolated ORM fixtures, not full-stack migrations.
+"""
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from threading import Barrier
-from pathlib import Path
-import runpy
 import uuid
 
 import pytest
-from alembic.migration import MigrationContext
-from alembic.operations import Operations
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -18,6 +17,7 @@ from database.models import User, Workspace, WorkspaceMember, Project as Canonic
 from services.audit_service.db.models import CrawlResult
 from services.management_service.approval_policy import ApprovalError, DecisionRequest, UserActor
 from services.management_service.approval_service import ApprovalService
+from services.management_service.migrations.runner import migrate
 from services.management_service.models import Base, HITLApproval, HITLStatus, Project, Task, TaskStatus, TaskType
 from services.management_service.proposal_handoff import version_diff
 from services.semantic_service.db.models import RecommendationVersionRow
@@ -43,15 +43,13 @@ def stand():
                 table.create(conn)
             for name in ("projects", "tasks", "hitl_approvals", "management_changelog"):
                 Base.metadata.tables[name].create(conn)
-            revision_path = Path(__file__).resolve().parents[2] / "services/management_service/migrations/versions/20261109_001_hitl_ledger.py"
-            revision = runpy.run_path(str(revision_path))
-            with Operations.context(MigrationContext.configure(conn)):
-                revision["upgrade"]()
             RecommendationVersionRow.__table__.create(conn)
             CrawlResult.__table__.create(conn)
             for remainder in range(8):
                 conn.execute(text(f"CREATE TABLE audit_schema.crawl_results_p{remainder} "
                                   f"PARTITION OF audit_schema.crawl_results FOR VALUES WITH (MODULUS 8, REMAINDER {remainder})"))
+        with database.engine.connect() as conn:
+            migrate(conn, expected_role=database.engine.url.username or "")
         request, _, _ = management_proposal_fixture()
         envelope = seal_evidence({"schema_version": "page_evidence_v1", "audit_id": "source-audit",
                                   "project_id": PROJECT_ID, "url": TARGET_URL, "final_url": TARGET_URL,

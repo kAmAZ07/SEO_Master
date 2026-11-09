@@ -10,8 +10,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 revision = "20261109_001_hitl_ledger"
-down_revision = None
-branch_labels = ("management",)
+down_revision = "20261109_000_management_base"
+branch_labels = None
 depends_on = None
 
 

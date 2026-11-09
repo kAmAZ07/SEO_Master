@@ -4,11 +4,10 @@ import uuid
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
 import uvicorn
 
 from services.management_service.config import settings
-from services.management_service.db.session import SessionLocal, init_db
+from services.management_service.db.session import get_db_health, init_db
 from services.management_service.events.consumers import consumers_are_running, start_consumers, stop_consumers
 from services.management_service.events.publishers import check_rabbitmq_connection
 from services.management_service.api.endpoints import hitl, internal, projects, tasks
@@ -132,18 +131,9 @@ async def health_check():
 
 @app.get("/health/ready", status_code=status.HTTP_200_OK)
 async def readiness_check():
-    db_healthy = False
+    db_healthy = get_db_health()["status"] == "healthy"
     rabbitmq_healthy = False
     consumers_healthy = consumers_are_running()
-
-    db = SessionLocal()
-    try:
-        db.execute(text("SELECT 1"))
-        db_healthy = True
-    except Exception as exc:
-        logger.error(f"Database health check failed: {exc}")
-    finally:
-        db.close()
 
     try:
         rabbitmq_healthy = await check_rabbitmq_connection()

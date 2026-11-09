@@ -134,3 +134,76 @@ def test_worker_notification_cannot_become_a_new_human_decision(monkeypatch):
             "task_id": TASK_ID, "approved_by": "forged-event-actor", "auto_deployed": False,
         }}))
     approve.assert_not_called()
+
+
+def test_management_startup_refuses_missing_migrations_without_creating_tables(monkeypatch):
+    from contextlib import nullcontext
+    from services.management_service.db import session
+    from services.management_service.models import Base
+    connection = SimpleNamespace(scalar=Mock(return_value=None))
+    engine = SimpleNamespace(connect=Mock(return_value=nullcontext(connection)))
+    ddl = Mock(side_effect=AssertionError("Startup must not create application tables"))
+    monkeypatch.setattr(session, "engine", engine)
+    monkeypatch.setattr(Base.metadata, "create_all", ddl)
+    with pytest.raises(RuntimeError, match="MANAGEMENT_SCHEMA_NOT_READY"):
+        session.init_db()
+    ddl.assert_not_called()
+
+
+@pytest.mark.parametrize("operation", ["drop_db", "reset_db"])
+def test_management_runtime_schema_reset_is_forbidden(monkeypatch, operation):
+    from services.management_service.db import session
+
+    connection = Mock(side_effect=AssertionError("Runtime DDL must never connect"))
+    monkeypatch.setattr(session, "engine", SimpleNamespace(connect=connection))
+    with pytest.raises(RuntimeError, match="MANAGEMENT_RUNTIME_DDL_FORBIDDEN"):
+        getattr(session, operation)()
+    connection.assert_not_called()
+
+
+def test_management_health_rejects_live_connection_without_migration_stamp(monkeypatch):
+    from contextlib import nullcontext
+    from services.management_service.db import session
+
+    connection = SimpleNamespace(scalar=Mock(return_value=None))
+    monkeypatch.setattr(session, "engine", SimpleNamespace(connect=lambda: nullcontext(connection)))
+    assert session.get_db_health() == {
+        "status": "unhealthy", "database": "disconnected", "error": "MANAGEMENT_DATABASE_NOT_READY",
+    }
+
+
+def test_management_readiness_requires_schema_health_even_when_broker_is_ready(monkeypatch):
+    from unittest.mock import AsyncMock
+    from services.management_service import main
+
+    monkeypatch.setattr(main, "get_db_health", lambda: {"status": "unhealthy"})
+    monkeypatch.setattr(main, "consumers_are_running", lambda: True)
+    monkeypatch.setattr(main, "check_rabbitmq_connection", AsyncMock(return_value=True))
+    response = asyncio.run(main.readiness_check())
+    assert response.status_code == 503
+
+
+def test_management_runner_has_no_application_dsn_fallback(monkeypatch, capsys):
+    from services.management_service.migrations import runner
+
+    monkeypatch.setattr("sys.argv", ["runner", "upgrade", "--url-env", "EXPLICIT_TEST_MIGRATION_DSN",
+                                    "--expected-role", "management_migrator"])
+    monkeypatch.delenv("EXPLICIT_TEST_MIGRATION_DSN", raising=False)
+    engine = Mock(side_effect=AssertionError("Missing explicit DSN must not create engine"))
+    monkeypatch.setattr(runner, "create_engine", engine)
+    assert runner.main() == 1
+    assert "MANAGEMENT_MIGRATION_DSN_REQUIRED" in capsys.readouterr().out
+    engine.assert_not_called()
+
+
+def test_management_runner_never_prints_vendor_errors_or_dsn(monkeypatch, capsys):
+    from services.management_service.migrations import runner
+
+    secret = "private-migration-password"
+    monkeypatch.setattr("sys.argv", ["runner", "status", "--url-env", "EXPLICIT_TEST_MIGRATION_DSN",
+                                    "--expected-role", "management_migrator"])
+    monkeypatch.setenv("EXPLICIT_TEST_MIGRATION_DSN", "postgresql://actor:" + secret + "@localhost/fixture")
+    monkeypatch.setattr(runner, "create_engine", Mock(side_effect=ValueError(secret)))
+    assert runner.main() == 1
+    output = capsys.readouterr().out
+    assert "MANAGEMENT_MIGRATION_FAILED" in output and secret not in output

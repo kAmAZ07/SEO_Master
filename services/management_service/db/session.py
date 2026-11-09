@@ -1,10 +1,11 @@
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 from typing import Generator
 
 from services.management_service.config import settings
 from config.logging_config import get_logger
+from services.management_service.migrations.schema import require_runtime_role, require_schema
 
 logger = get_logger(__name__)
 
@@ -18,7 +19,7 @@ engine = create_engine(
     echo=settings.ENVIRONMENT == "development",
     connect_args={
         "connect_timeout": 10,
-        "options": "-c timezone=utc",
+        "options": "-c timezone=utc -c search_path=pg_catalog,public,pg_temp",
     },
 )
 
@@ -42,46 +43,34 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    from services.management_service.db.models import Base
-
-    try:
-        Base.metadata.create_all(bind=engine)
-        logger.info("Database tables created successfully")
-    except Exception as exc:
-        logger.error(f"Failed to create database tables: {exc}")
-        raise
+    with engine.connect() as connection:
+        require_schema(connection)
+        require_runtime_role(connection)
+    logger.info("Management schema and runtime role verified")
 
 
 def drop_db() -> None:
-    from services.management_service.db.models import Base
-
-    try:
-        Base.metadata.drop_all(bind=engine)
-        logger.warning("Database tables dropped")
-    except Exception as exc:
-        logger.error(f"Failed to drop database tables: {exc}")
-        raise
+    raise RuntimeError("MANAGEMENT_RUNTIME_DDL_FORBIDDEN")
 
 
 def reset_db() -> None:
-    drop_db()
-    init_db()
-    logger.info("Database reset completed")
+    raise RuntimeError("MANAGEMENT_RUNTIME_DDL_FORBIDDEN")
 
 
 def get_db_health() -> dict:
     try:
         with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
+            require_schema(connection)
+            require_runtime_role(connection)
         return {
             "status": "healthy",
             "database": "connected",
         }
-    except Exception as exc:
-        logger.error(f"Database health check failed: {exc}")
+    except Exception:
+        logger.error("Management database schema/role health check failed")
         return {
             "status": "unhealthy",
             "database": "disconnected",
-            "error": str(exc),
+            "error": "MANAGEMENT_DATABASE_NOT_READY",
         }
 

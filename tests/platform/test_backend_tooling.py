@@ -9,6 +9,7 @@ import tempfile
 import textwrap
 import unittest
 from unittest.mock import patch
+import yaml
 from scripts import backend
 
 
@@ -16,6 +17,17 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class BackendToolingTests(unittest.TestCase):
+    def test_job_env_cannot_reference_runtime_job_context(self) -> None:
+        # GitHub evaluates job.env before a running job/services context exists.
+        # This narrow regression supplements YAML parsing; it is not actionlint.
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+            for job_name, job in workflow.get("jobs", {}).items():
+                for value in job.get("env", {}).values():
+                    if isinstance(value, str):
+                        with self.subTest(workflow=path.name, job=job_name):
+                            self.assertNotRegex(value, r"\$\{\{[^}]*\bjob\.")
+
     def test_profiles_keep_incompatible_runtime_requirements_separate(self) -> None:
         management = backend.get_profile("management")
         client = backend.get_profile("client")
@@ -25,8 +37,12 @@ class BackendToolingTests(unittest.TestCase):
             "tests/unit/test_orchestrator.py",
             "tests/unit/test_prioritizer.py",
             "tests/unit/test_management_model_imports.py",
+            "tests/unit/test_management_scores.py",
+            "tests/unit/test_management_proposals.py",
+            "tests/unit/test_management_approvals.py",
         ))
         self.assertEqual(client.tests, (
+            "tests/unit/test_client_startup.py",
             "tests/unit/test_client_gateway_rollback.py",
             "tests/unit/test_client_model_imports.py",
         ))

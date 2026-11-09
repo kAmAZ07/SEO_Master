@@ -13,6 +13,7 @@ COPY locks/client.txt ./requirements.lock
 RUN python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.lock
 
 COPY config/ ./config/
+COPY shared/ ./shared/
 COPY services/client_api_gateway/ ./services/client_api_gateway/
 COPY services/project_integrations/ ./services/project_integrations/
 
@@ -24,6 +25,6 @@ USER appuser
 EXPOSE 8005
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/health', timeout=3).close()"]
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/health/ready', timeout=3).close()"]
 
 CMD ["python", "-m", "uvicorn", "services.client_api_gateway.main:app", "--host", "0.0.0.0", "--port", "8005"]

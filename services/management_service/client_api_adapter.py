@@ -10,6 +10,7 @@ import time
 import httpx
 from sqlalchemy.orm import Session
 
+from services.management_service.approval_policy import ApprovalError
 from services.management_service.config import settings
 from services.management_service.db.models import Task, TaskStatus, TaskType, Changelog
 from config.logging_config import get_logger
@@ -630,64 +631,7 @@ class ClientAPIAdapter:
         use_internal: Optional[bool] = None,
         task: Optional[Task] = None,
     ) -> Dict[str, Any]:
-        logger.info(
-            f"Deploying changes for task {task_id}",
-            extra={
-                "task_id": task_id,
-                "project_id": changes_data.get("project_id"),
-                "change_type": changes_data.get("change_type"),
-                "entity_id": changes_data.get("entity_id"),
-                "correlation_id": correlation_id,
-            },
-        )
-
-        if use_internal is None:
-            use_internal = self.deploy_mode == "internal"
-
-        if use_internal:
-            payload = self._build_internal_payload(task_id, changes_data, correlation_id)
-            return await self._send_internal_deploy_request(payload, correlation_id)
-
-        change_type = self._resolve_change_type(changes_data, task)
-        endpoint = self._resolve_patch_endpoint(change_type, task)
-
-        if not endpoint:
-            if self.internal_api_key:
-                logger.warning(
-                    "No HMAC PATCH endpoint for change type; falling back to internal deploy",
-                    extra={"task_id": task_id, "change_type": changes_data.get("change_type")},
-                )
-                payload = self._build_internal_payload(task_id, changes_data, correlation_id)
-                return await self._send_internal_deploy_request(payload, correlation_id)
-            raise ValueError("No HMAC PATCH endpoint available and internal deploy is disabled")
-
-        hmac_secret, key_id = self._resolve_hmac_credentials(changes_data, task)
-        if not hmac_secret:
-            if self.internal_api_key:
-                logger.warning(
-                    "HMAC secret missing; falling back to internal deploy",
-                    extra={"task_id": task_id, "project_id": changes_data.get("project_id")},
-                )
-                payload = self._build_internal_payload(task_id, changes_data, correlation_id)
-                return await self._send_internal_deploy_request(payload, correlation_id)
-            raise ValueError("HMAC secret not found and internal deploy is disabled")
-
-        patch_payload = self._build_patch_payload(
-            task_id=task_id,
-            changes_data=changes_data,
-            change_type=change_type,
-            task=task,
-            correlation_id=correlation_id,
-        )
-
-        return await self._send_hmac_patch_request(
-            endpoint=endpoint,
-            payload=patch_payload,
-            project_id=patch_payload["project_id"],
-            hmac_secret=hmac_secret,
-            key_id=key_id,
-            correlation_id=correlation_id,
-        )
+        raise ApprovalError("version_bound_executor_required")
 
     async def deploy_multiple_changes(
         self,
@@ -965,87 +909,7 @@ async def deploy_task_changes(
     task: Task,
     correlation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    if task.status != TaskStatus.APPROVED:
-        raise ValueError(f"Task {task.id} is not approved for deployment")
-
-    adapter = ClientAPIAdapter()
-
-    changes_data = {
-        "project_id": task.project_id,
-        "task_id": str(task.id),
-        "change_type": task.task_type.value,
-        "entity_id": task.url,
-        "entity_type": _get_entity_type(task.task_type),
-        "changes": _extract_changes_from_task(task),
-        "priority": _calculate_priority(task),
-        "metadata": task.meta,
-    }
-
-    try:
-        result = await adapter.deploy_changes(
-            str(task.id),
-            changes_data,
-            correlation_id,
-            task=task,
-        )
-
-        change_id = (
-            result.get("change_id")
-            or result.get("deployment_id")
-            or result.get("id")
-        )
-
-        task.status = TaskStatus.DEPLOYED
-        task.meta = {
-            **(task.meta or {}),
-            "deployment": {
-                "change_id": change_id,
-                "deployed_at": datetime.utcnow().isoformat(),
-                "status": result.get("status"),
-            },
-        }
-
-        db.add(task)
-        db.flush()
-
-        _log_to_changelog(db, task, change_id, result, correlation_id)
-
-        db.commit()
-
-        logger.info(
-            f"Task {task.id} deployed successfully",
-            extra={
-                "task_id": str(task.id),
-                "project_id": task.project_id,
-                "change_id": change_id,
-                "correlation_id": correlation_id,
-            },
-        )
-
-        return result
-
-    except Exception as exc:
-        task.status = TaskStatus.FAILED
-        task.meta = {
-            **(task.meta or {}),
-            "error": {
-                "message": str(exc),
-                "failed_at": datetime.utcnow().isoformat(),
-            },
-        }
-
-        db.add(task)
-        db.commit()
-
-        logger.error(
-            f"Failed to deploy task {task.id}: {exc}",
-            extra={
-                "task_id": str(task.id),
-                "project_id": task.project_id,
-                "correlation_id": correlation_id,
-            },
-        )
-        raise
+    raise ApprovalError("version_bound_executor_required")
 
 
 async def deploy_interlink_task(

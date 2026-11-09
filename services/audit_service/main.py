@@ -36,6 +36,7 @@ from services.audit_service.public_policy import (
     public_options,
 )
 from services.audit_service.public_view import build_public_view, is_expired
+from services.audit_service.page_evidence import attach_page_evidence
 from shared.projects.claims import hash_claim_token, new_claim_token
 
 logger = get_logger(__name__)
@@ -219,10 +220,15 @@ async def start_full_audit(payload: FullAuditRequest) -> FullAuditResponse:
 
 async def _update_row(audit_id: str, row_cls, **values) -> bool:
     async with get_session() as session:
-        res = await session.execute(select(row_cls).where(row_cls.audit_id == audit_id))
+        res = await session.execute(select(row_cls).where(row_cls.audit_id == audit_id).with_for_update())
         row = res.scalar_one_or_none()
-        if row is None:
+        if row is None or row.status in FINAL_STATUSES:
             return False
+        if row_cls is CrawlResult and "pages" in values:
+            values["pages"] = attach_page_evidence(
+                values["pages"], audit_id=audit_id, project_id=row.project_id,
+                recorded_at=datetime.now(timezone.utc).isoformat(),
+            )
         for name, value in values.items():
             setattr(row, name, value)
         row.updated_at = datetime.now(timezone.utc)
@@ -251,8 +257,8 @@ def _progress_writer(audit_id: str, row_cls):
     return _write
 
 
-async def _finalize(audit_id: str, row_cls, status: str, summary: dict, **extra) -> None:
-    await _update_row(audit_id, row_cls, status=status, summary=summary, **extra)
+async def _finalize(audit_id: str, row_cls, status: str, summary: dict, **extra) -> bool:
+    return await _update_row(audit_id, row_cls, status=status, summary=summary, **extra)
 
 
 async def _run_audit_background(
@@ -296,12 +302,12 @@ async def _run_audit_background(
         outcome = "completed"
     extra = {"crawled_at": datetime.now(timezone.utc)} if row_cls is CrawlResult else {}
     summary = {**result["summary"], "progress": {"stage": "done"}}
-    await _finalize(
+    saved = await _finalize(
         audit_id, row_cls, outcome, summary,
         findings=result["findings"], pages=result["pages"], **extra,
     )
 
-    if outcome in ("completed", "partial"):
+    if saved and outcome in ("completed", "partial"):
         try:
             await publish_crawl_completed(
                 audit_id=audit_id,

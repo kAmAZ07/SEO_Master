@@ -17,6 +17,7 @@ from services.management_service.config import settings
 from services.management_service.db.session import SessionLocal
 from services.management_service.events.crawl_completed_handler import handle_crawl_completed_event
 from services.management_service.events.ff_score_recalculated_handler import handle_ff_score_recalculated_event
+from services.management_service.events.hitl_inbox import CONSUMER as HITL_CONSUMER, process_notification
 
 logger = get_logger(__name__)
 
@@ -57,13 +58,17 @@ async def _consume(
 
     try:
         async with conn:
-            ch = await conn.channel()
+            ch = await conn.channel(publisher_confirms=True, on_return_raises=True)
             q = await declare_resilient_queue(ch, config)
+            retry_exchange = await ch.declare_exchange(f"{config.exchange_name}.retry", aio_pika.ExchangeType.TOPIC, durable=True)
             logger.info("Management Service event consumer started", extra={"consumer_name": config.consumer_name})
             started.set()
 
             async with q.iterator() as it:
                 async for msg in it:
+                    if config.consumer_name == HITL_CONSUMER:
+                        await process_notification(msg, config=config, factory=SessionLocal, retry_exchange=retry_exchange)
+                        continue
                     await process_resilient_message_sync_store(
                         msg,
                         config=config,
@@ -103,6 +108,12 @@ async def start_consumers() -> None:
 
     redis_url = str(settings.REDIS_URL) if settings.REDIS_URL else None
     consumer_specs = (
+        (
+            ResilientConsumerConfig(consumer_name=HITL_CONSUMER, queue_name=HITL_CONSUMER,
+                                   routing_key="hitl.approved", redis_url=redis_url),
+            lambda db, event: None,  # HITL has its own commit-before-ACK inbox, no runtime DDL.
+            ("HITLApproved",),
+        ),
         (
             ResilientConsumerConfig(
                 consumer_name="management.crawl_completed",

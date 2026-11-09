@@ -1,8 +1,7 @@
 from contextlib import asynccontextmanager
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine, async_sessionmaker
 from services.semantic_service.config import settings
-from services.semantic_service.db.models import Base
+from shared.schema_state import require_core_schema
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
@@ -31,7 +30,7 @@ async def get_session():
 
 async def init_db() -> None:
     engine = _get_engine()
-    async with engine.begin() as conn:
-        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS semantic_schema"))
-        if settings.auto_create_tables:
-            await conn.run_sync(Base.metadata.create_all)
+    async with engine.connect() as conn:
+        await conn.run_sync(lambda sync: require_core_schema(sync, (
+            "semantic_schema.ff_scores", "semantic_schema.eeat_scores", "semantic_schema.recommendation_versions",
+            "public.processed_events", "public.failed_events")))

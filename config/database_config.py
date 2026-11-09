@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 from sqlalchemy.pool import QueuePool
+from shared.schema_state import require_core_schema
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@postgres:5432/seo_platform")
 ASYNC_DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
@@ -57,16 +58,18 @@ def set_search_path(dbapi_conn, _connection_record):
     dbapi_conn.autocommit = True
     cursor = dbapi_conn.cursor()
     cursor.execute("SET TIME ZONE 'Europe/Moscow'")
+    cursor.execute("SET search_path=pg_catalog,public,pg_temp")
     cursor.close()
     dbapi_conn.autocommit = existing_autocommit
 
 
 def init_db():
-    Base.metadata.create_all(bind=engine)
+    with engine.connect() as connection:
+        require_core_schema(connection, ("public.users", "audit_schema.projects", "audit_schema.workspaces"))
 
 
 def drop_db():
-    Base.metadata.drop_all(bind=engine)
+    raise RuntimeError("RUNTIME_DDL_FORBIDDEN")
 
 
 class DatabaseConfig:

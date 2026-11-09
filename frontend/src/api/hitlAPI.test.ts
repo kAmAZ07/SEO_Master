@@ -25,13 +25,15 @@ describe('hitlAPI', () => {
             task_id: 'task-1',
             project_id: 'project-1',
             status: 'PENDING',
+            authorization_status: 'pending',
             diff_data: {
               before: { title: 'Old title' },
               after: { title: 'New title' },
+              recommendation_version: { version_id: 'visible-version', content_hash: 'a'.repeat(64) },
             },
             impact_score: '72.5',
             recommendation: 'Review title update',
-            metadata: { correlation_id: 'corr-1' },
+            metadata: { correlation_id: 'corr-1', recommendation_version_id: 'unrelated-metadata-version' },
             task: {
               id: 'task-1',
               title: 'Meta title update',
@@ -46,7 +48,7 @@ describe('hitlAPI', () => {
     const tasks = await fetchHITLTasks()
 
     expect(apiMock.get).toHaveBeenCalledWith('/hitl/tasks', {
-      params: { status_filter: 'pending', limit: 50 },
+      params: { status_filter: 'all', limit: 50 },
     })
     expect(tasks).toHaveLength(1)
     expect(tasks[0]).toMatchObject({
@@ -54,6 +56,9 @@ describe('hitlAPI', () => {
       taskId: 'task-1',
       projectId: 'project-1',
       status: 'pending',
+      authorizationStatus: 'pending',
+      recommendationVersionId: 'visible-version',
+      contentHash: 'a'.repeat(64),
       impactScore: 72.5,
       recommendation: 'Review title update',
       diffData: {
@@ -73,14 +78,27 @@ describe('hitlAPI', () => {
     const { approveTask, rejectTask } = await import('./hitlAPI')
     apiMock.post.mockResolvedValue({})
 
-    await approveTask({ taskId: 'task-1', approved: true, comment: 'Looks good' })
-    await rejectTask({ taskId: 'task-2', approved: false, comment: 'Needs rewrite' })
+    await approveTask({ taskId: 'task-1', approvalId: 'approval-1', recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64), approved: true, comment: 'Looks good' })
+    await rejectTask({ taskId: 'task-2', approvalId: 'approval-2', recommendationVersionId: 'version-2', contentHash: 'b'.repeat(64), approved: false, comment: 'Needs rewrite' })
 
     expect(apiMock.post).toHaveBeenNthCalledWith(1, '/hitl/tasks/task-1/approve', {
+      approval_id: 'approval-1', recommendation_version_id: 'version-1', content_hash: 'a'.repeat(64),
       comment: 'Looks good',
     })
     expect(apiMock.post).toHaveBeenNthCalledWith(2, '/hitl/tasks/task-2/reject', {
+      approval_id: 'approval-2', recommendation_version_id: 'version-2', content_hash: 'b'.repeat(64),
       comment: 'Needs rewrite',
+    })
+  })
+
+  it('applies references only with a stable operation ID and no mutable payload', async () => {
+    const { applyTask } = await import('./hitlAPI')
+    apiMock.post.mockResolvedValueOnce({})
+    await applyTask({ taskId: 'task-1', approvalId: 'approval-1', recommendationVersionId: 'version-1',
+      contentHash: 'a'.repeat(64), approved: true, comment: 'not a CMS payload' }, 'operation-1')
+    expect(apiMock.post).toHaveBeenCalledWith('/hitl/tasks/task-1/apply', {
+      operation_id: 'operation-1', task_id: 'task-1', approval_id: 'approval-1',
+      recommendation_version_id: 'version-1', content_hash: 'a'.repeat(64),
     })
   })
 })

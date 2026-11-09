@@ -1,10 +1,8 @@
 import hashlib
 import hmac
-import json
-import time
 from typing import Any, Dict, List, Optional
 
-import httpx
+from fastapi import HTTPException
 
 from config.logging_config import get_logger
 from services.client_api_gateway.config import settings
@@ -151,110 +149,8 @@ def _warnings_from_result(result: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
-async def _dispatch_to_wordpress(
-    *,
-    change_type: str,
-    project_id: str,
-    entity_id: str,
-    entity_type: str,
-    changes: List[Dict[str, Any]],
-    metadata: Optional[Dict[str, Any]],
-    correlation_id: Optional[str],
-    base_url: str,
-    hmac_secret: str,
-) -> Dict[str, Any]:
-    path = _wordpress_path(change_type)
-    payload = {
-        "project_id": project_id,
-        "entity_id": entity_id,
-        "entity_type": entity_type,
-        "changes": changes,
-        "metadata": metadata or {},
-    }
-    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    timestamp = str(int(time.time()))
-    signature = _build_wordpress_signature(
-        hmac_secret,
-        timestamp,
-        "PATCH",
-        path,
-        body,
-    )
-    headers = {
-        "Content-Type": "application/json",
-        "X-Project-ID": project_id,
-        "X-Timestamp": timestamp,
-        "X-Signature": signature,
-    }
-    if correlation_id:
-        headers["X-Correlation-ID"] = correlation_id
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.patch(
-            _join_url(base_url, path),
-            content=body,
-            headers=headers,
-        )
-        response.raise_for_status()
-        result = response.json()
-
-    return {
-        "status": result.get("status", "applied"),
-        "platform": "wordpress",
-        "target_path": path,
-        "response": result,
-        "warnings": _warnings_from_result(result),
-    }
 
 
-async def _dispatch_to_tilda(
-    *,
-    change_type: str,
-    project_id: str,
-    page_id: str,
-    changes: List[Dict[str, Any]],
-    metadata: Optional[Dict[str, Any]],
-    correlation_id: Optional[str],
-    credentials: Dict[str, Any],
-) -> Dict[str, Any]:
-    if not settings.TILDA_ADAPTER_URL:
-        raise ValueError("TILDA_ADAPTER_URL is not configured")
-    if not settings.TILDA_INTERNAL_API_KEY:
-        raise ValueError("TILDA_INTERNAL_API_KEY is not configured")
-
-    payload = {
-        "project_id": project_id,
-        "page_id": page_id,
-        "changes": changes,
-        "metadata": metadata or {},
-        "credentials": credentials,
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "X-Internal-API-Key": settings.TILDA_INTERNAL_API_KEY,
-    }
-    if correlation_id:
-        headers["X-Correlation-ID"] = correlation_id
-
-    path = f"/internal/tilda/{change_type}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            _join_url(settings.TILDA_ADAPTER_URL, path),
-            json=payload,
-            headers=headers,
-        )
-        response.raise_for_status()
-        result = response.json()
-
-    normalized_status = "applied" if result.get("status") in {"ok", "mock_applied", "applied"} else str(result.get("status") or "received")
-    return {
-        "status": normalized_status,
-        "platform": "tilda",
-        "target_path": path,
-        "page_id": page_id,
-        "response": result,
-        "warnings": _warnings_from_result(result),
-    }
 
 
 def _load_wordpress_credentials(db, project_id: str) -> Dict[str, Any]:
@@ -351,69 +247,7 @@ async def dispatch_change(
     metadata: Optional[Dict[str, Any]] = None,
     correlation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    normalized_change_type = (change_type or "").lower()
-    if normalized_change_type not in {"meta", "schema", "interlinks"}:
-        raise ValueError(f"Unsupported change_type: {change_type}")
-
-    patch_ops = _normalize_changes(normalized_change_type, changes)
-    rollback_ops = (metadata or {}).get("rollback_changes") or _build_reverse_patch_ops(patch_ops)
-    enriched_metadata = {
-        **(metadata or {}),
-        "normalized_change_type": normalized_change_type,
-        "rollback_changes": rollback_ops,
-    }
-
-    platform = _target_platform(entity_type, enriched_metadata)
-    logger.info(
-        "Dispatching client change",
-        extra={
-            "platform": platform,
-            "change_type": normalized_change_type,
-            "project_id": project_id,
-            "entity_id": entity_id,
-            "correlation_id": correlation_id,
-        },
-    )
-
-    if platform == "tilda":
-        tilda_credentials = _load_tilda_credentials(db, project_id)
-        page_id = _resolve_tilda_page_id_from_credentials(
-            credentials=tilda_credentials,
-            entity_id=entity_id,
-            metadata=enriched_metadata,
-        )
-        result = await _dispatch_to_tilda(
-            change_type=normalized_change_type,
-            project_id=project_id,
-            page_id=page_id,
-            changes=patch_ops,
-            metadata={
-                **enriched_metadata,
-                "external_project_id": tilda_credentials.get("project_id"),
-            },
-            correlation_id=correlation_id,
-            credentials={
-                "public_key": tilda_credentials["public_key"],
-                "secret_key": tilda_credentials["secret_key"],
-            },
-        )
-    else:
-        wordpress_credentials = _load_wordpress_credentials(db, project_id)
-        result = await _dispatch_to_wordpress(
-            change_type=normalized_change_type,
-            project_id=project_id,
-            entity_id=entity_id,
-            entity_type=entity_type,
-            changes=patch_ops,
-            metadata=enriched_metadata,
-            correlation_id=correlation_id,
-            base_url=wordpress_credentials["base_url"],
-            hmac_secret=wordpress_credentials["hmac_secret"],
-        )
-
-    result["changes"] = patch_ops
-    result["rollback_changes"] = rollback_ops
-    return result
+    raise HTTPException(409, "version_bound_execution_required")
 
 
 async def rollback_change(
@@ -422,29 +256,4 @@ async def rollback_change(
     deployment_log,
     correlation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    metadata = dict(deployment_log.meta or {})
-    rollback_changes = metadata.get("rollback_changes")
-    if not rollback_changes:
-        rollback_changes = _build_reverse_patch_ops(list(deployment_log.changes or []))
-
-    if not rollback_changes:
-        return {
-            "status": "skipped",
-            "reason": "rollback_not_available",
-            "deployment_id": str(deployment_log.id),
-        }
-
-    return await dispatch_change(
-        db=db,
-        change_type=deployment_log.change_type,
-        project_id=deployment_log.project_id,
-        entity_id=deployment_log.entity_id,
-        entity_type=deployment_log.entity_type,
-        changes=rollback_changes,
-        metadata={
-            **metadata,
-            "rollback_of": str(deployment_log.id),
-            "rollback_changes": _build_reverse_patch_ops(list(rollback_changes)),
-        },
-        correlation_id=correlation_id,
-    )
+    raise HTTPException(409, "version_bound_rollback_required")

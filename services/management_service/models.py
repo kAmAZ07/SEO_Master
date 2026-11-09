@@ -1,8 +1,6 @@
 # services/management_service/models.py
 
 import enum
-from datetime import datetime
-from typing import Optional, Dict, Any
 import uuid
 
 from sqlalchemy import (
@@ -15,13 +13,28 @@ from sqlalchemy import (
     Text,
     ForeignKey,
     Enum as SQLEnum,
-    Index
+    Index,
+    CheckConstraint,
+    UniqueConstraint,
+    Computed,
+    MetaData,
+    Table,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.orm import declarative_base, relationship, foreign
 from sqlalchemy.sql import func
 
 Base = declarative_base()
+
+# Reference-only Core column, outside owned metadata and the mapper registry.
+# Never import Core runtime models or create this table from Management metadata.
+_canonical_projects = Table("projects", MetaData(), Column("id", String(36), primary_key=True), schema="audit_schema")
+
+
+def _canonical_reference() -> Column[str]:
+    return Column("canonical_project_id", String(36), Computed("project_id::text", persisted=True),
+                  ForeignKey(_canonical_projects.c.id, ondelete="RESTRICT"), nullable=False)
 
 
 class TaskType(enum.Enum):
@@ -67,9 +80,10 @@ class Project(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
-    tasks = relationship("Task", back_populates="project", cascade="all, delete-orphan")
-    hitl_approvals = relationship("HITLApproval", back_populates="project", cascade="all, delete-orphan")
-    changelogs = relationship("Changelog", back_populates="project", cascade="all, delete-orphan")
+    # Archived legacy rows are not the owner/parent of canonical tasks.
+    tasks = relationship("Task", primaryjoin="Project.id == foreign(Task.project_id)", viewonly=True)
+    hitl_approvals = relationship("HITLApproval", primaryjoin="Project.id == foreign(HITLApproval.project_id)", viewonly=True)
+    changelogs = relationship("Changelog", primaryjoin="Project.id == foreign(Changelog.project_id)", viewonly=True)
 
     __table_args__ = (
         Index("idx_projects_domain", "domain"),
@@ -81,7 +95,8 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), nullable=False)
+    canonical_project_id = _canonical_reference()
 
     task_type = Column(SQLEnum(TaskType), nullable=False)
     status = Column(SQLEnum(TaskStatus), default=TaskStatus.PENDING, nullable=False)
@@ -104,7 +119,7 @@ class Task(Base):
     completed_at = Column(DateTime(timezone=True))
     deployed_at = Column(DateTime(timezone=True))
 
-    project = relationship("Project", back_populates="tasks")
+    project = relationship("Project", primaryjoin=foreign(project_id) == Project.id, viewonly=True)
     hitl_approval = relationship("HITLApproval", back_populates="task", uselist=False, cascade="all, delete-orphan")
     changelogs = relationship("Changelog", back_populates="task", cascade="all, delete-orphan")
 
@@ -127,7 +142,8 @@ class HITLApproval(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, unique=True)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), nullable=False)
+    canonical_project_id = _canonical_reference()
 
     status = Column(SQLEnum(HITLStatus), default=HITLStatus.PENDING, nullable=False)
 
@@ -148,7 +164,7 @@ class HITLApproval(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     task = relationship("Task", back_populates="hitl_approval")
-    project = relationship("Project", back_populates="hitl_approvals")
+    project = relationship("Project", primaryjoin=foreign(project_id) == Project.id, viewonly=True)
 
     __table_args__ = (
         Index("idx_hitl_approvals_task_id", "task_id"),
@@ -162,7 +178,8 @@ class Changelog(Base):
     __tablename__ = "management_changelog"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), nullable=False)
+    canonical_project_id = _canonical_reference()
     task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
 
     entity_id = Column(String(2048), nullable=False)
@@ -182,7 +199,7 @@ class Changelog(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
-    project = relationship("Project", back_populates="changelogs")
+    project = relationship("Project", primaryjoin=foreign(project_id) == Project.id, viewonly=True)
     task = relationship("Task", back_populates="changelogs")
 
     __table_args__ = (
@@ -192,4 +209,57 @@ class Changelog(Base):
         Index("idx_management_changelog_applied", "applied"),
         Index("idx_management_changelog_created_at", "created_at"),
         Index("idx_management_changelog_project_entity", "project_id", "entity_id"),
+    )
+
+
+class HITLHistory(Base):
+    """Append-only snapshots; migrations additionally protect UPDATE/DELETE."""
+    __tablename__ = "hitl_history"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    approval_id = Column(UUID(as_uuid=True), ForeignKey("hitl_approvals.id", ondelete="RESTRICT"), nullable=False)
+    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="RESTRICT"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), nullable=False)
+    canonical_project_id = _canonical_reference()
+    version_id = Column(String(36), nullable=False)
+    entry_type = Column(String(16), nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    entry_hash = Column(String(64), nullable=False)
+    meta = Column("metadata", JSONB, default=dict, server_default=text("'{}'::jsonb"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("approval_id", "version_id", "entry_type", name="uq_hitl_history_entry"),
+        CheckConstraint("entry_type IN ('prepared','approve','reject','revoke')", name="ck_hitl_history_type"),
+        CheckConstraint("content_hash ~ '^[0-9a-f]{64}$' AND entry_hash ~ '^[0-9a-f]{64}$'", name="ck_hitl_history_hash"),
+        Index("idx_hitl_history_task_created", "task_id", "created_at", "id"),
+    )
+
+
+class ManagementOutbox(Base):
+    """Immutable event envelope with independently mutable delivery state."""
+    __tablename__ = "management_outbox"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    history_id = Column(UUID(as_uuid=True), ForeignKey("hitl_history.id", ondelete="RESTRICT"), nullable=False)
+    event_type = Column(String(100), nullable=False)
+    routing_key = Column(String(255), nullable=False)
+    status = Column(String(16), nullable=False, default="pending", server_default="pending")
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    available_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    lease_token = Column(UUID(as_uuid=True))
+    lease_expires_at = Column(DateTime(timezone=True))
+    published_at = Column(DateTime(timezone=True))
+    error_code = Column(String(64))
+    meta = Column("metadata", JSONB, default=dict, server_default=text("'{}'::jsonb"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("history_id", name="uq_management_outbox_history"),
+        CheckConstraint("status IN ('pending','leased','published')", name="ck_management_outbox_status"),
+        CheckConstraint("attempts >= 0", name="ck_management_outbox_attempts"),
+        CheckConstraint("(status = 'published') = (published_at IS NOT NULL)", name="ck_management_outbox_published"),
+        CheckConstraint("(status = 'leased' AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL) OR "
+                        "(status != 'leased' AND lease_token IS NULL AND lease_expires_at IS NULL)",
+                        name="ck_management_outbox_lease"),
+        Index("idx_management_outbox_delivery", "status", "available_at", "lease_expires_at"),
     )

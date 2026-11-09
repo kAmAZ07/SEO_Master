@@ -1,144 +1,47 @@
+"""Retired decision writers must fail before touching business state or CMS."""
 import asyncio
-import uuid
+from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
 
-pytest.importorskip("sqlalchemy")
-
-from services.management_service.db.models import HITLApproval, HITLStatus, Task, TaskStatus, TaskType
+from services.management_service.approval_policy import ApprovalError
+from services.management_service.hitl_handler import HITLHandler, handle_hitl_rejected_event
+from services.management_service.proposal_handoff import ProposalHandoffError
 from services.management_service.schemas.hitl import HITLApprovalCreate, HITLDecision
-from services.management_service import hitl_handler as hitl_module
 
 
-class QueryStub:
-    def __init__(self, result=None):
-        self._result = result
-
-    def filter(self, *args, **kwargs):
-        return self
-
-    def order_by(self, *args, **kwargs):
-        return self
-
-    def offset(self, *args, **kwargs):
-        return self
-
-    def limit(self, *args, **kwargs):
-        return self
-
-    def first(self):
-        return self._result
+def test_create_hitl_approval_requires_canonical_version_before_database_access():
+    db = Mock()
+    data = HITLApprovalCreate(task_id=uuid4(), diff_data={"before": {}, "after": {}}, impact_score=0.7)
+    with pytest.raises(ApprovalError, match="version_bound_preview_required"):
+        HITLHandler(db).create_hitl_approval(str(data.task_id), data)
+    assert db.mock_calls == []
 
 
-class DbStub:
-    def __init__(self, task=None, approval=None):
-        self._task = task
-        self._approval = approval
-        self.added = []
-        self.committed = False
-        self.refreshed = []
-
-    def query(self, model):
-        if model is Task:
-            return QueryStub(self._task)
-        if model is HITLApproval:
-            return QueryStub(self._approval)
-        return QueryStub(None)
-
-    def add(self, obj):
-        self.added.append(obj)
-
-    def commit(self):
-        self.committed = True
-
-    def refresh(self, obj):
-        self.refreshed.append(obj)
+def test_approve_task_requires_verified_actor_and_version_before_database_access():
+    db = Mock()
+    with pytest.raises(ApprovalError, match="verified_user_decision_required"):
+        asyncio.run(HITLHandler(db).approve_task(str(uuid4()), "forged-user", HITLDecision(auto_deploy=False)))
+    assert db.mock_calls == []
 
 
-def _make_task():
-    return Task(
-        id=uuid.uuid4(),
-        project_id=uuid.uuid4(),
-        task_type=TaskType.UPDATE_META,
-        status=TaskStatus.PENDING,
-        url="https://example.com",
-        metadata={},
-    )
+def test_reject_task_requires_verified_actor_and_version_before_database_access():
+    db = Mock()
+    with pytest.raises(ApprovalError, match="verified_user_decision_required"):
+        HITLHandler(db).reject_task(str(uuid4()), "forged-user", HITLDecision(rejection_reason="forged"))
+    assert db.mock_calls == []
 
 
-def test_create_hitl_approval_creates_record():
-    task = _make_task()
-    db = DbStub(task=task, approval=None)
-    handler = hitl_module.HITLHandler(db)
-
-    approval_data = HITLApprovalCreate(
-        task_id=task.id,
-        diff_data={"before": {}, "after": {}},
-        impact_score=0.7,
-    )
-
-    approval = handler.create_hitl_approval(
-        task_id=str(task.id),
-        approval_data=approval_data,
-        correlation_id="corr-1",
-    )
-
-    assert approval.status == HITLStatus.PENDING
-    assert db.committed is True
-    assert task.status == TaskStatus.PENDING
+def test_approval_cannot_implicitly_deploy():
+    db = Mock()
+    with pytest.raises(ProposalHandoffError, match="version_bound_executor_required"):
+        asyncio.run(HITLHandler(db).approve_task(str(uuid4()), "forged-user", HITLDecision(auto_deploy=True)))
+    assert db.mock_calls == []
 
 
-def test_approve_task_without_autodeploy(monkeypatch):
-    async def _run():
-        task = _make_task()
-        approval = HITLApproval(
-            task_id=task.id,
-            project_id=task.project_id,
-            status=HITLStatus.PENDING,
-            diff_data={"before": {}, "after": {}},
-        )
-        db = DbStub(task=task, approval=approval)
-        handler = hitl_module.HITLHandler(db)
-
-        async def fake_deploy(*args, **kwargs):
-            raise AssertionError("deploy_task_changes should not be called")
-
-        monkeypatch.setattr(hitl_module, "deploy_task_changes", fake_deploy)
-
-        decision = HITLDecision(auto_deploy=False)
-        result = await handler.approve_task(
-            task_id=str(task.id),
-            approved_by="user-1",
-            decision=decision,
-            correlation_id="corr-2",
-        )
-
-        assert result["status"] == "approved"
-        assert task.status == TaskStatus.APPROVED
-        assert approval.status == HITLStatus.APPROVED
-
-    asyncio.run(_run())
-
-
-def test_reject_task_sets_status():
-    task = _make_task()
-    approval = HITLApproval(
-        task_id=task.id,
-        project_id=task.project_id,
-        status=HITLStatus.PENDING,
-        diff_data={"before": {}, "after": {}},
-    )
-    db = DbStub(task=task, approval=approval)
-    handler = hitl_module.HITLHandler(db)
-
-    decision = HITLDecision(rejection_reason="not ok")
-    result = handler.reject_task(
-        task_id=str(task.id),
-        rejected_by="user-2",
-        decision=decision,
-        correlation_id="corr-3",
-    )
-
-    assert result["status"] == "rejected"
-    assert task.status == TaskStatus.REJECTED
-    assert approval.status == HITLStatus.REJECTED
+def test_rejection_event_cannot_impersonate_human_or_rewrite_inflight_task():
+    db = Mock()
+    with pytest.raises(ApprovalError, match="decision_notification_cannot_make_human_decision"):
+        handle_hitl_rejected_event(db, {"task_id": str(uuid4()), "rejected_by": "forged"})
+    assert db.mock_calls == []

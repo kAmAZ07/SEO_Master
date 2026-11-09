@@ -6,7 +6,13 @@ require __DIR__ . '/../../adapters/wordpress-plugin/includes/v2-protocol.php';
 require __DIR__ . '/../../adapters/wordpress-plugin/includes/v2-service.php';
 
 // Deliberately an in-memory contract double, NOT proof of WP/InnoDB/parallel/crash safety.
-final class MemoryStore implements SM_V2_Store {
+final class MemoryStore implements SM_V2_Target_Store {
+    public string $target_url = 'https://example.com/catalog';
+    public ?Closure $target_lock_callback = null;
+    public function assert_target_url(int $entity_id, string $url): void {
+        if ($this->target_lock_callback !== null) { ($this->target_lock_callback)(); }
+        if ($url !== $this->target_url) { throw new SM_V2_Error('target_url_conflict', 409); }
+    }
     public array $fields = ['title' => ['state' => 'missing'], 'description' => ['state' => 'missing'], 'jsonld' => ['state' => 'missing']];
     public array $operations = [];
     public array $nonces = [];
@@ -89,12 +95,13 @@ final class ContractFixture {
     public SM_V2_Service $service;
     public string $secret;
     public string $receipt_secret;
+    public int $now = 1793715600;
     public function __construct() {
         $this->secret = bin2hex(random_bytes(32));
         $this->receipt_secret = bin2hex(random_bytes(32));
         $this->store = new MemoryStore();
         $config = new SM_V2_Config(self::PROJECT, self::SITE, 'test-key', $this->secret, $this->receipt_secret, true);
-        $this->service = new SM_V2_Service($config, $this->store, '0.3.0-dev');
+        $this->service = new SM_V2_Service($config, $this->store, '0.3.0-dev', fn(): int => $this->now);
     }
     public function command(): array {
         $before = $this->store->snapshot(7);
@@ -136,6 +143,37 @@ function check(bool $condition, string $message): void {
     if (!$condition) { throw new RuntimeException($message); }
 }
 $tests = [
+    'target-bound command checks URL under the write transaction' => function (): void {
+        $fixture = new ContractFixture();
+        $command = $fixture->command();
+        $command['target_url'] = $fixture->store->target_url;
+        $command['authorization_deadline'] = $fixture->now + 60;
+        $command['proposal_hash'] = sm_v2_proposal_hash($command);
+        $fixture->store->target_url .= '/moved';
+        expect_error(fn() => $fixture->send($command, '/seo-master/v2/target-bound/apply'), 'target_url_conflict');
+        check($fixture->store->writes === 0 && $fixture->store->operations === [], 'URL drift wrote data');
+    },
+    'approval expiring while CMS locks wait never writes' => function (): void {
+        $fixture = new ContractFixture();
+        $command = $fixture->command();
+        $command['target_url'] = $fixture->store->target_url;
+        $command['authorization_deadline'] = $fixture->now + 60;
+        $command['proposal_hash'] = sm_v2_proposal_hash($command);
+        $fixture->store->target_lock_callback = function () use ($fixture): void { $fixture->now += 60; };
+        expect_error(fn() => $fixture->send($command, '/seo-master/v2/target-bound/apply'), 'authorization_expired');
+        check($fixture->store->writes === 0 && $fixture->store->operations === [], 'expired command wrote data');
+    },
+    'target-bound replay returns original receipt after deadline without another write' => function (): void {
+        $fixture = new ContractFixture();
+        $command = $fixture->command();
+        $command['target_url'] = $fixture->store->target_url;
+        $command['authorization_deadline'] = $fixture->now + 60;
+        $command['proposal_hash'] = sm_v2_proposal_hash($command);
+        $receipt = $fixture->send($command, '/seo-master/v2/target-bound/apply');
+        $fixture->now += 61;
+        check($fixture->send($command, '/seo-master/v2/target-bound/apply') === $receipt, 'replay changed receipt');
+        check($fixture->store->writes === 1, 'replay wrote twice');
+    },
     'ASCII numeric object guards preserve mixed Unicode empty and compound shapes without ctype' => function (): void {
         foreach (['0', '00', '01', '9', '1234567890', '18446744073709551616', str_repeat('9', 1024)] as $key) {
             $body = '{"' . $key . '":"value"}';

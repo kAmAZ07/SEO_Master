@@ -63,7 +63,7 @@ CORE_TABLES = frozenset(
 )
 MANAGEMENT_TABLES = frozenset(
     TableIdentity("public", name)
-    for name in ("projects", "tasks", "hitl_approvals", "management_changelog")
+    for name in ("projects", "tasks", "hitl_approvals", "management_changelog", "hitl_history", "management_outbox")
 )
 CLIENT_TABLES = frozenset(
     TableIdentity("public", name) for name in ("client_keys", "deployment_log")

@@ -11,12 +11,16 @@ const apiMocks = vi.hoisted(() => ({
   fetchHITLTasks: vi.fn(),
   approveTask: vi.fn(),
   rejectTask: vi.fn(),
+  fetchTaskDetails: vi.fn(),
+  applyTask: vi.fn(),
 }))
 
 vi.mock('../api/hitlAPI', () => ({
   fetchHITLTasks: apiMocks.fetchHITLTasks,
   approveTask: apiMocks.approveTask,
   rejectTask: apiMocks.rejectTask,
+  fetchTaskDetails: apiMocks.fetchTaskDetails,
+  applyTask: apiMocks.applyTask,
 }))
 
 vi.mock('react-diff-viewer-continued', () => ({
@@ -50,6 +54,8 @@ describe('HITL page', () => {
     apiMocks.fetchHITLTasks.mockReset()
     apiMocks.approveTask.mockReset()
     apiMocks.rejectTask.mockReset()
+    apiMocks.fetchTaskDetails.mockReset()
+    apiMocks.applyTask.mockReset()
   })
 
   it('renders pending diff data and approves a task', async () => {
@@ -59,6 +65,9 @@ describe('HITL page', () => {
         taskId: 'task-1',
         projectId: 'project-1',
         status: 'pending',
+        authorizationStatus: 'pending',
+        recommendationVersionId: 'version-1',
+        contentHash: 'a'.repeat(64),
         diffData: {
           before: { title: 'Old title' },
           after: { title: 'New title' },
@@ -82,6 +91,12 @@ describe('HITL page', () => {
       },
     ])
     apiMocks.approveTask.mockResolvedValueOnce(undefined)
+    apiMocks.fetchTaskDetails.mockResolvedValueOnce({
+      id: 'approval-1', taskId: 'task-1', projectId: 'project-1', status: 'approved',
+      authorizationStatus: 'approved', managedTarget: true,
+      recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64),
+      diffData: { before: { title: 'Old title' }, after: { title: 'New title' } }, metadata: {},
+    })
 
     renderHITL()
 
@@ -97,10 +112,15 @@ describe('HITL page', () => {
     await waitFor(() => {
       expect(apiMocks.approveTask).toHaveBeenCalledWith({
         taskId: 'task-1',
+        approvalId: 'approval-1',
+        recommendationVersionId: 'version-1',
+        contentHash: 'a'.repeat(64),
         approved: true,
         comment: 'Approved in test',
       })
     })
+    expect(apiMocks.applyTask).not.toHaveBeenCalled()
+    expect(await screen.findByRole('button', { name: 'Применить одобренные изменения' })).toBeEnabled()
   })
 
   it('shows empty state when there are no pending tasks', async () => {
@@ -109,5 +129,57 @@ describe('HITL page', () => {
     renderHITL()
 
     expect(await screen.findByText(/Нет ожидающих HITL/i)).toBeInTheDocument()
+  })
+
+  it('prevents a decision for an invalidated preview', async () => {
+    apiMocks.fetchHITLTasks.mockResolvedValueOnce([{
+      id: 'approval-1', taskId: 'task-1', projectId: 'project-1', status: 'pending',
+      authorizationStatus: 'invalidated', recommendationVersionId: 'old-version', contentHash: 'a'.repeat(64),
+      diffData: { before: { title: 'Old' }, after: { title: 'New' } }, metadata: {},
+    }])
+    renderHITL()
+    const button = await screen.findByRole('button', { name: /^Одобрить$/i })
+    expect(button).toBeDisabled()
+    await userEvent.click(button)
+    expect(apiMocks.approveTask).not.toHaveBeenCalled()
+    expect(await screen.findByText(/требуется актуальная проверенная версия/i)).toBeInTheDocument()
+  })
+
+  it('reconciles unknown publication using the original operation and never calls approve', async () => {
+    const task = {
+      id: 'approval-1', taskId: 'task-1', projectId: 'project-1', status: 'approved',
+      authorizationStatus: 'invalidated', managedTarget: true,
+      recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64),
+      diffData: { before: { title: 'Old' }, after: { title: 'New' } }, metadata: {},
+      execution: { operationId: 'same-operation', state: 'outcome_unknown', recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64) },
+    }
+    apiMocks.fetchHITLTasks.mockResolvedValueOnce([task])
+    apiMocks.applyTask.mockResolvedValueOnce(undefined)
+    apiMocks.fetchTaskDetails.mockResolvedValueOnce({ ...task, execution: { ...task.execution, state: 'applied_unverified' } })
+    renderHITL()
+    await userEvent.click(await screen.findByRole('button', { name: 'Проверить результат публикации' }))
+    await waitFor(() => expect(apiMocks.applyTask).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-1',
+      recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64) }), 'same-operation'))
+    expect(await screen.findByRole('status')).toHaveTextContent('Независимая проверка ещё не выполнена')
+    expect(apiMocks.approveTask).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Применить одобренные изменения' })).not.toBeInTheDocument()
+  })
+
+  it('keeps a new operation ID after lost response while an expired summary is still displayed', async () => {
+    apiMocks.fetchHITLTasks.mockResolvedValueOnce([{
+      id: 'approval-1', taskId: 'task-1', projectId: 'project-1', status: 'approved',
+      authorizationStatus: 'approved', managedTarget: true, recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64),
+      diffData: { before: { title: 'Old' }, after: { title: 'New' } }, metadata: {},
+      execution: { operationId: 'expired-operation', state: 'expired', recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64) },
+    }])
+    apiMocks.applyTask.mockRejectedValue(new Error('response lost'))
+    renderHITL()
+    const button = await screen.findByRole('button', { name: 'Применить одобренные изменения' })
+    await userEvent.click(button)
+    await waitFor(() => expect(button).toBeEnabled())
+    await userEvent.click(button)
+    await waitFor(() => expect(apiMocks.applyTask).toHaveBeenCalledTimes(2))
+    expect(apiMocks.applyTask.mock.calls[0][1]).not.toBe('expired-operation')
+    expect(apiMocks.applyTask.mock.calls[1][1]).toBe(apiMocks.applyTask.mock.calls[0][1])
   })
 })

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, UUID4
+from pydantic import BaseModel, ConfigDict, Field, UUID4, field_validator
 from typing_extensions import TypedDict
 
 from services.management_service.db.models import TaskStatus, TaskType
@@ -47,11 +47,25 @@ class TaskBase(BaseModel):
 
 
 class TaskCreate(TaskBase):
-    pass
+    model_config = ConfigDict(use_enum_values=True, extra="forbid")
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def user_metadata_only(cls, value: object) -> object:
+        if not isinstance(value, dict) or not value.keys() <= {"effort", "urgency"}:
+            raise ValueError("system task metadata is not client input")
+        return value
 
 
 class TaskUpdate(BaseModel):
-    model_config = ConfigDict(use_enum_values=True)
+    model_config = ConfigDict(use_enum_values=True, extra="forbid")
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def user_metadata_only(cls, value: object) -> object:
+        if value is not None and (not isinstance(value, dict) or not value.keys() <= {"effort", "urgency"}):
+            raise ValueError("system task metadata is not client input")
+        return value
 
     task_type: Optional[TaskType] = None
     status: Optional[TaskStatus] = None

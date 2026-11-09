@@ -9,4 +9,6 @@ from services.management_service.models import (
     HITLApproval as HITLApproval,
     Changelog as Changelog,
     Project as Project,
+    HITLHistory as HITLHistory,
+    ManagementOutbox as ManagementOutbox,
 )

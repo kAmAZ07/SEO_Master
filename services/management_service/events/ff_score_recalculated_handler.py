@@ -4,15 +4,10 @@ from typing import Any, Dict, Optional
 from sqlalchemy.orm import Session
 
 from services.management_service.db.models import Task, Project
+from services.management_service.score_contract import parse_score_event
 from config.logging_config import get_logger
 
 logger = get_logger(__name__)
-
-
-def _extract_payload(event: Dict[str, Any]) -> Dict[str, Any]:
-    if isinstance(event, dict) and "payload" in event:
-        return event.get("payload") or {}
-    return event or {}
 
 
 def handle_ff_score_recalculated_event(
@@ -20,18 +15,20 @@ def handle_ff_score_recalculated_event(
     event: Dict[str, Any],
     correlation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    payload = _extract_payload(event)
-
-    project_id = payload.get("project_id")
-    ff_score = payload.get("ff_score")
-    if ff_score is None:
-        ff_score = payload.get("ffscore")
-    eeat_score = payload.get("eeat_score")
-    if eeat_score is None:
-        eeat_score = payload.get("eeat")
-
-    if not project_id:
-        raise ValueError("project_id is required in event payload")
+    # Проверка до query/add/commit: невалидное событие не меняет состояние.
+    observation = parse_score_event(event)
+    project_id = observation.project_id
+    ff_score = observation.ff_score
+    eeat_score = observation.eeat_score
+    stamp = datetime.now(timezone.utc).isoformat()
+    score_meta = {
+        "ffscore": ff_score,
+        "ffscore_status": observation.status,
+        "ffscore_formula_version": observation.formula_version,
+        "ffscore_updated_at": stamp,
+    }
+    if observation.eeat_present:
+        score_meta.update(eeat_score=eeat_score, eeat_status=observation.eeat_status)
 
     updated_tasks = 0
     updated_project = False
@@ -40,20 +37,24 @@ def handle_ff_score_recalculated_event(
     if project:
         project.meta = {
             **(project.meta or {}),
-            "ffscore": ff_score,
-            "eeat_score": eeat_score,
-            "ffscore_updated_at": datetime.now(timezone.utc).isoformat(),
+            **score_meta,
         }
         db.add(project)
         updated_project = True
 
     tasks = db.query(Task).filter(Task.project_id == project_id).all()
     for task in tasks:
-        meta = task.meta or {}
-        if ff_score is not None:
-            meta["current_ffscore"] = ff_score
-        if eeat_score is not None:
-            meta["current_eeat"] = eeat_score
+        # Новое insufficient_data должно удалить устаревший полный балл.
+        # Новый dict также нужен для отслеживания JSONB SQLAlchemy.
+        meta = {
+            **(task.meta or {}),
+            "current_ffscore": ff_score,
+            "ffscore_status": observation.status,
+            "ffscore_formula_version": observation.formula_version,
+            "ffscore_updated_at": stamp,
+        }
+        if observation.eeat_present:
+            meta.update(current_eeat=eeat_score, eeat_status=observation.eeat_status)
         task.meta = meta
         if hasattr(task, "calculate_priority"):
             task.calculate_priority()
@@ -78,6 +79,8 @@ def handle_ff_score_recalculated_event(
     return {
         "project_id": project_id,
         "ff_score": ff_score,
+        "status": observation.status,
+        "formula_version": observation.formula_version,
         "eeat_score": eeat_score,
         "updated_tasks": updated_tasks,
         "updated_project": updated_project,

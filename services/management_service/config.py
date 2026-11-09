@@ -1,7 +1,7 @@
 import json
 from typing import List, Optional
 
-from pydantic import PostgresDsn, RedisDsn, field_validator
+from pydantic import Field, PostgresDsn, RedisDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,10 +33,14 @@ class Settings(BaseSettings):
     SEMANTIC_SERVICE_URL: str = 'http://localhost:8002'
     REPORTING_SERVICE_URL: str = 'http://localhost:8003'
     CLIENT_GATEWAY_URL: str = 'http://localhost:8005'
+    API_GATEWAY_URL: str = 'http://api-gateway:8000'
+    HITL_APPROVAL_TTL_HOURS: int = Field(default=24, ge=1, le=168)
 
     CORS_ORIGINS: str = 'http://localhost:3000,http://localhost:5173'
 
     INTERNAL_API_KEY: str
+    EXECUTOR_API_KEY: str | None = None
+    DOMAIN_VERIFICATION_FRESH_DAYS: int = Field(default=30, ge=1, le=365)
 
     DEFAULT_CRAWL_SCHEDULE: str = '0 2 * * *'
     DEFAULT_FFSCORE_SCHEDULE: str = '0 3 * * *'

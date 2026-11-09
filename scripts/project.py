@@ -2,6 +2,7 @@
 
 import argparse
 import base64
+import json
 from dataclasses import dataclass
 import os
 from pathlib import Path, PurePosixPath
@@ -20,9 +21,10 @@ ComposeAction = Literal["config", "build", "down"]
 BACKEND_PROFILES = ("management", "client", "api", "audit", "semantic", "reporting", "tilda")
 SECRET_NAMES = (
     "POSTGRES_PASSWORD", "RUNTIME_DATABASE_PASSWORD", "REDIS_PASSWORD", "RABBITMQ_PASSWORD",
-    "JWT_SECRET_KEY", "INTERNAL_API_KEY", "TILDA_INTERNAL_API_KEY",
+    "JWT_SECRET_KEY", "INTERNAL_API_KEY", "MANAGEMENT_EXECUTOR_API_KEY", "TILDA_INTERNAL_API_KEY",
     "TILDA_WEBHOOK_SECRET", "MASTER_ENCRYPTION_KEY",
 )
+OPTIONAL_CONFIGURATION_NAMES = frozenset(("WORDPRESS_V2_TARGETS_JSON", "SEO_MASTER_HMAC_SECRET", "SEO_MASTER_RECEIPT_SECRET", "DOMAIN_VERIFICATION_FRESH_DAYS"))
 CONFIGURATION_NAMES = frozenset(("COMPOSE_PROJECT_NAME", *SECRET_NAMES))
 FRONTEND_ROOT_FILES = frozenset((
     "package.json", "package-lock.json", "index.html", "vite.config.ts",
@@ -120,6 +122,20 @@ def bootstrap(root: Path, mode: Mode) -> Path:
     validate_owned_path(root, directory)
     validate_owned_path(root, environment_file)
     if environment_file.exists():
+        load_configuration(root, mode, _legacy_executor=True)
+        previous = environment_file.read_text(encoding="utf-8")
+        if not any(line.startswith("MANAGEMENT_EXECUTOR_API_KEY=") for line in previous.splitlines()):
+            # Only extend the validated private legacy config; never rotate its existing secrets.
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=directory,
+                                             prefix="executor-upgrade-", delete=False) as stream:
+                replacement = Path(stream.name)
+                restrict_permissions(replacement)
+                stream.write(previous.rstrip("\r\n") + "\nMANAGEMENT_EXECUTOR_API_KEY=" + secrets.token_urlsafe(32) + "\n")
+            try:
+                os.replace(replacement, environment_file)
+            finally:
+                if replacement.exists():
+                    replacement.unlink()
         return load_configuration(root, mode).environment_file
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     restrict_permissions(directory)
@@ -135,7 +151,7 @@ def bootstrap(root: Path, mode: Mode) -> Path:
     return load_configuration(root, mode).environment_file
 
 
-def load_configuration(root: Path, mode: Mode) -> Configuration:
+def load_configuration(root: Path, mode: Mode, *, _legacy_executor: bool = False) -> Configuration:
     environment_file = root.resolve(strict=True) / ".seo-local" / mode / "environment.env"
     validate_owned_path(root, environment_file)
     validate_private_permissions(environment_file.parent)
@@ -145,14 +161,29 @@ def load_configuration(root: Path, mode: Mode) -> Configuration:
     values: dict[str, str] = {}
     for line in environment_file.read_text(encoding="utf-8").splitlines():
         name, separator, value = line.partition("=")
-        if not separator or name not in CONFIGURATION_NAMES or name in values:
+        if not separator or name not in CONFIGURATION_NAMES | OPTIONAL_CONFIGURATION_NAMES or name in values:
             raise ValueError("Недопустимая структура локальной конфигурации")
         values[name] = value
-    if values.keys() != CONFIGURATION_NAMES:
+    required = CONFIGURATION_NAMES - {"MANAGEMENT_EXECUTOR_API_KEY"} if _legacy_executor else CONFIGURATION_NAMES
+    if not required <= values.keys():
         raise ValueError("Отсутствует обязательная локальная настройка")
     for name in SECRET_NAMES:
+        if name == "MANAGEMENT_EXECUTOR_API_KEY" and _legacy_executor and name not in values:
+            continue
         if re.fullmatch(r"[A-Za-z0-9_-]{43}=?", values[name]) is None:
             raise ValueError("Недопустимый формат локального ключа")
+    for name in ("SEO_MASTER_HMAC_SECRET", "SEO_MASTER_RECEIPT_SECRET"):
+        if name in values and (re.fullmatch(r"[0-9a-f]{64,128}", values[name]) is None or len(set(values[name])) < 8):
+            raise ValueError("Недопустимый формат CMS-ключа")
+    if "WORDPRESS_V2_TARGETS_JSON" in values:
+        try:
+            bindings = json.loads(values["WORDPRESS_V2_TARGETS_JSON"])
+        except ValueError:
+            raise ValueError("Недопустимый JSON привязок WordPress") from None
+        if not isinstance(bindings, dict):
+            raise ValueError("Ожидалась карта привязок WordPress")
+    if "DOMAIN_VERIFICATION_FRESH_DAYS" in values and re.fullmatch(r"(?:[1-9]|[1-9][0-9]|[12][0-9]{2}|3[0-5][0-9]|36[0-5])", values["DOMAIN_VERIFICATION_FRESH_DAYS"]) is None:
+        raise ValueError("Недопустимый срок подтверждения домена")
     return Configuration(
         environment_file, validate_project_name(values["COMPOSE_PROJECT_NAME"], mode),
     )

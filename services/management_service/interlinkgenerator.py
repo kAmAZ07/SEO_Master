@@ -9,8 +9,8 @@ from collections import defaultdict
 from urllib.parse import urlparse
 
 from services.management_service.config import settings
-from services.management_service.db.models import Project, Task, TaskType, TaskStatus
-from services.management_service.db.session import get_db
+from services.management_service.db.models import Task, TaskType, TaskStatus
+from services.management_service.canonical_projects import project_exists
 from services.management_service.events.task_created import publish_task_created_event
 from config.logging_config import get_logger
 
@@ -380,7 +380,7 @@ class InterlinkGenerator:
         correlation_id: Optional[str] = None
     ) -> List[InternalLink]:
         logger.info(
-            f"Generating interlinks for page",
+            "Generating interlinks for page",
             extra={"project_id": project_id, "url": source_url, "correlation_id": correlation_id}
         )
         
@@ -599,8 +599,7 @@ class InterlinkGenerator:
             extra={"correlation_id": correlation_id, "max_pages": max_pages}
         )
         
-        project = self.db.query(Project).filter(Project.id == project_id).first()
-        if not project:
+        if not project_exists(self.db, project_id):
             raise ValueError(f"Project {project_id} not found")
         
         self.link_graph.clear()

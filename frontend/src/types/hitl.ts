@@ -18,6 +18,11 @@ export interface HITLTask {
   taskId: string
   projectId: string
   status: 'pending' | 'approved' | 'rejected'
+  authorizationStatus?: string
+  recommendationVersionId?: string | null
+  contentHash?: string | null
+  managedTarget?: boolean
+  execution?: { operationId: string; state: string; recommendationVersionId: string; contentHash: string } | null
   diffData: HITLDiffData
   impactScore?: number | null
   recommendation?: string
@@ -34,6 +39,9 @@ export interface HITLTask {
 
 export interface HITLApproval {
   taskId: string
+  approvalId: string
+  recommendationVersionId: string
+  contentHash: string
   approved: boolean
   comment?: string
 }

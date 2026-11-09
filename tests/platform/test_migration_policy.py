@@ -12,7 +12,7 @@ class MigrationPolicyTests(unittest.TestCase):
         self.assertEqual(len(policy.owned_tables("core")), 33)
         self.assertEqual(policy.owned_tables("management"), frozenset(
             policy.TableIdentity("public", name)
-            for name in ("projects", "tasks", "hitl_approvals", "management_changelog")
+            for name in ("projects", "tasks", "hitl_approvals", "management_changelog", "hitl_history", "management_outbox")
         ))
         self.assertEqual(policy.owned_tables("client"), frozenset(
             policy.TableIdentity(None, name) for name in ("client_keys", "deployment_log")

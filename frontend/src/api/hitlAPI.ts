@@ -61,12 +61,22 @@ const normalizeHITLTask = (value: unknown): HITLTask => {
   const item = asObject(value)
   const task = normalizeTaskDetails(item.task)
   const taskId = asString(item.task_id || item.taskId || task?.id || item.id)
+  const version = asObject(asObject(item.diff_data || item.diffData).recommendation_version)
+  const execution = asObject(item.execution)
 
   return {
     id: asString(item.id || taskId),
     taskId,
     projectId: asString(item.project_id || item.projectId),
     status: normalizeStatus(item.status),
+    authorizationStatus: asString(item.authorization_status, 'invalidated'),
+    recommendationVersionId: asString(version.version_id) || null,
+    contentHash: asString(version.content_hash) || null,
+    managedTarget: version.execution_mode === 'managed' && !!asObject(version.target).entity,
+    execution: typeof execution.operation_id === 'string' ? {
+      operationId: execution.operation_id, state: asString(execution.state),
+      recommendationVersionId: asString(execution.recommendation_version_id), contentHash: asString(execution.content_hash),
+    } : null,
     diffData: normalizeDiffData(item.diff_data || item.diffData),
     impactScore: asNullableNumber(item.impact_score ?? item.impactScore),
     recommendation: asString(item.recommendation) || undefined,
@@ -85,7 +95,7 @@ const normalizeHITLTask = (value: unknown): HITLTask => {
 export const fetchHITLTasks = async (): Promise<HITLTask[]> => {
   const response = await api.get('/hitl/tasks', {
     params: {
-      status_filter: 'pending',
+      status_filter: 'all',
       limit: 50,
     },
   })
@@ -97,12 +107,18 @@ export const fetchHITLTasks = async (): Promise<HITLTask[]> => {
 
 export const approveTask = async (approval: HITLApproval): Promise<void> => {
   await api.post(`/hitl/tasks/${approval.taskId}/approve`, {
+    approval_id: approval.approvalId,
+    recommendation_version_id: approval.recommendationVersionId,
+    content_hash: approval.contentHash,
     comment: approval.comment,
   })
 }
 
 export const rejectTask = async (approval: HITLApproval): Promise<void> => {
   await api.post(`/hitl/tasks/${approval.taskId}/reject`, {
+    approval_id: approval.approvalId,
+    recommendation_version_id: approval.recommendationVersionId,
+    content_hash: approval.contentHash,
     comment: approval.comment,
   })
 }
@@ -110,4 +126,11 @@ export const rejectTask = async (approval: HITLApproval): Promise<void> => {
 export const fetchTaskDetails = async (taskId: string): Promise<HITLTask> => {
   const response = await api.get(`/hitl/tasks/${taskId}`)
   return normalizeHITLTask(response.data)
+}
+
+export const applyTask = async (approval: HITLApproval, operationId: string): Promise<void> => {
+  await api.post(`/hitl/tasks/${approval.taskId}/apply`, {
+    operation_id: operationId, task_id: approval.taskId, approval_id: approval.approvalId,
+    recommendation_version_id: approval.recommendationVersionId, content_hash: approval.contentHash,
+  })
 }

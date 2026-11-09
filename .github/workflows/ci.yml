@@ -87,6 +87,81 @@ jobs:
           scripts/migration_policy.py scripts/migration_context.py database/migrations/env.py
           tests/platform/test_migration_policy.py tests/platform/test_migration_context.py
 
+  management-postgres:
+    name: Management migrations and decisions (PostgreSQL 15)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:15-bookworm@sha256:daeac543477e189e334f159133f4be6dae739b005cec2dfb9d482509fed05465
+        env:
+          POSTGRES_PASSWORD: isolated-ci-only
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Установить Management test-lock
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all: -r locks/management-test.txt
+      - name: Проверить strict-типы и lint новой миграционной линии
+        run: |
+          python -B -m mypy --strict --explicit-package-bases services/management_service/migrations services/management_service/canonical_projects.py
+          python -B -m ruff check services/management_service/migrations services/management_service/canonical_projects.py tests/integration/test_management_migrations_postgres.py tests/integration/test_management_canonical_postgres.py
+      - name: Проверить миграции, legacy-данные, роли и транзакции на отдельной БД
+        env:
+          TEST_PG_ADMIN_URL: postgresql://postgres:isolated-ci-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
+        run: |
+          python -B - <<'PY'
+          import os
+          from pathlib import Path
+          import tempfile
+          from scripts.backend import build_test_environment
+          from scripts.pytest_required import RequiredTests
+          import pytest
+
+          dsn = os.environ["TEST_PG_ADMIN_URL"]
+          assert dsn
+          with tempfile.TemporaryDirectory(prefix="management-pg-ci-") as directory:
+              environment = build_test_environment(Path.cwd(), Path(directory))
+              environment["TEST_PG_ADMIN_URL"] = dsn
+              os.environ.clear()
+              os.environ.update(environment)
+              raise SystemExit(pytest.main([
+                  "-p", "pytest_asyncio.plugin", "-p", "no:cacheprovider", "--strict-config", "--strict-markers", "-q",
+                  "tests/integration/test_management_migrations_postgres.py",
+                  "tests/integration/test_management_canonical_postgres.py",
+                  "tests/integration/test_management_approvals_postgres.py",
+                  "tests/integration/test_management_outbox_postgres.py",
+                  "tests/integration/test_management_execution_postgres.py",
+                  "tests/integration/test_runtime_foundation_postgres.py",
+              ], plugins=[RequiredTests()]))
+          PY
+
+  hitl-native-wordpress:
+    name: HITL authority and real WordPress
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Install isolated test dependencies
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all: -r locks/management-test.txt
+      - name: Test migrated authority and actual CMS, without shared stack startup
+        run: python -B -m tests.wordpress.native_contract --docker-context default --with-management --with-apps
+
   image-builds:
     name: Linux image builds and UID (not stack E2E)
     runs-on: ubuntu-24.04

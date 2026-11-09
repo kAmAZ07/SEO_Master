@@ -34,6 +34,7 @@ x-management-environment: &management-environment
   CLIENT_GATEWAY_URL: http://client-api-gateway:8005
   API_GATEWAY_URL: http://api-gateway:8000
   INTERNAL_API_KEY: ${INTERNAL_API_KEY:?bootstrap required}
+  DOMAIN_VERIFICATION_FRESH_DAYS: ${DOMAIN_VERIFICATION_FRESH_DAYS:-30}
   CORS_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
   HITL_AUTO_APPROVE_LOW_RISK: 'false'
 
@@ -153,6 +154,10 @@ services:
     <<: *python
     build: {context: ., dockerfile: services/client_api_gateway/Dockerfile}
     environment:
+      MANAGEMENT_EXECUTOR_API_KEY: ${MANAGEMENT_EXECUTOR_API_KEY:?bootstrap required}
+      WORDPRESS_V2_TARGETS_JSON: ${WORDPRESS_V2_TARGETS_JSON:-}
+      SEO_MASTER_HMAC_SECRET: ${SEO_MASTER_HMAC_SECRET:-}
+      SEO_MASTER_RECEIPT_SECRET: ${SEO_MASTER_RECEIPT_SECRET:-}
       SERVICE_PORT: 8005
       ENVIRONMENT: production
       DATABASE_URL: postgresql://seo_runtime:${RUNTIME_DATABASE_PASSWORD:?bootstrap required}@postgres:5432/seo_local
@@ -173,7 +178,9 @@ services:
     build: &management-build
       context: .
       dockerfile: services/management_service/Dockerfile
-    environment: *management-environment
+    environment:
+      <<: *management-environment
+      EXECUTOR_API_KEY: ${MANAGEMENT_EXECUTOR_API_KEY:?bootstrap required}
     depends_on:
       <<: *infrastructure-ready
       audit-service: {condition: service_healthy}
@@ -216,6 +223,8 @@ services:
     <<: *python
     build: {context: ., dockerfile: services/api_gateway/Dockerfile}
     environment:
+      CLIENT_GATEWAY_URL: http://client-api-gateway:8005
+      DOMAIN_VERIFICATION_FRESH_DAYS: ${DOMAIN_VERIFICATION_FRESH_DAYS:-30}
       SERVICE_PORT: 8000
       ENVIRONMENT: production
       LOG_LEVEL: INFO

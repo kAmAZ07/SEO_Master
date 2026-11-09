@@ -3,7 +3,7 @@ import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Loader from '../components/ui/Loader'
-import { approveHITLTask, loadHITLTasks, rejectHITLTask } from '../store/slices/hitlSlice'
+import { applyHITLTask, approveHITLTask, loadHITLTasks, rejectHITLTask } from '../store/slices/hitlSlice'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import type { HITLTask } from '../types/hitl'
 
@@ -42,6 +42,7 @@ const HITL = () => {
   const { tasks, loading, error } = useAppSelector((state) => state.hitl)
   const [comments, setComments] = useState<Record<string, string>>({})
   const [processingTaskId, setProcessingTaskId] = useState<string | null>(null)
+  const [operationIds, setOperationIds] = useState<Record<string, string>>({})
 
   useEffect(() => {
     void dispatch(loadHITLTasks())
@@ -67,6 +68,29 @@ const HITL = () => {
       }
     } catch {
       // The thunk stores the server error, displayed by this page.
+      return
+    } finally {
+      setProcessingTaskId(null)
+    }
+  }
+
+  const handleApply = async (task: HITLTask) => {
+    if (!task.recommendationVersionId || !task.contentHash) return
+    const key = `${task.id}:${task.recommendationVersionId}`
+    const expired = task.execution && ['expired', 'cancelled'].includes(task.execution.state)
+    const remembered = operationIds[key]
+    const operationId = expired
+      ? (remembered && remembered !== task.execution?.operationId ? remembered : crypto.randomUUID())
+      : task.execution?.operationId || remembered || crypto.randomUUID()
+    setOperationIds(current => ({ ...current, [key]: operationId }))
+    setProcessingTaskId(task.taskId)
+    try {
+      await dispatch(applyHITLTask({ operationId, approval: {
+        taskId: task.taskId, approvalId: task.id, recommendationVersionId: task.recommendationVersionId,
+        contentHash: task.contentHash, approved: true,
+      } })).unwrap()
+    } catch {
+      // Keep operationId for status reconciliation; the thunk displays the failure.
       return
     } finally {
       setProcessingTaskId(null)
@@ -110,6 +134,16 @@ const HITL = () => {
             const taskUrl = getTaskUrl(task)
             const isProcessing = processingTaskId === task.taskId
             const canDecide = task.authorizationStatus === 'pending' && !!task.recommendationVersionId && !!task.contentHash
+            const reconcile = task.execution && ['applying', 'outcome_unknown'].includes(task.execution.state)
+            const canApply = task.authorizationStatus === 'approved' && task.managedTarget &&
+              (!task.execution || ['ready', 'expired', 'cancelled'].includes(task.execution.state))
+            const executionLabel: Record<string, string> = {
+              ready: 'Готово к публикации', applying: 'Результат публикации уточняется',
+              outcome_unknown: 'Результат неизвестен — требуется проверка статуса',
+              applied_unverified: 'Изменения записаны. Независимая проверка ещё не выполнена.',
+              no_op: 'Изменения не потребовались. Независимая проверка ещё не выполнена.', cancelled: 'Операция отменена',
+              expired: 'Время подготовки публикации истекло. Можно подготовить новую операцию.',
+            }
 
             return (
               <Card key={task.id} className="overflow-hidden p-0">
@@ -169,6 +203,10 @@ const HITL = () => {
                       </Button>
                     </div>
                     <p className="mt-2 text-sm text-gray-600">Одобрение сохраняет решение. Публикация выполняется отдельно.</p>
+                    {(canApply || reconcile) && <Button type="button" className="mt-3 w-full" disabled={isProcessing}
+                      onClick={() => void handleApply(task)}>{reconcile ? 'Проверить результат публикации' : 'Применить одобренные изменения'}</Button>}
+                    {task.execution && <p role="status" className="mt-2 text-sm text-gray-700">{executionLabel[task.execution.state] || 'Неизвестный статус операции'}</p>}
+                    {task.authorizationStatus === 'approved' && !task.managedTarget && <p className="mt-2 text-sm text-amber-700">Для этой версии доступна ручная публикация.</p>}
                     {!canDecide && <p className="mt-2 text-sm text-amber-700">Для решения требуется актуальная проверенная версия.</p>}
                   </aside>
 

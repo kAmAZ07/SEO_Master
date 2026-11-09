@@ -13,6 +13,7 @@ COPY locks/client.txt ./requirements.lock
 RUN python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.lock
 
 COPY config/ ./config/
+COPY shared/ ./shared/
 COPY services/client_api_gateway/ ./services/client_api_gateway/
 COPY services/project_integrations/ ./services/project_integrations/
 

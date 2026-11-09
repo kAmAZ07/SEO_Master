@@ -2,7 +2,7 @@
 
 ## Объём инкремента
 
-Стык Audit → AL-5 → Management, REQ-EVIDENCE §7, REQ-SEMANTIC §9.1/9.4 и REQ-HITL §10; AR-4 по декомпозиции. Реализованы приём баллов, подготовка конкретной версии к согласованию и строгий путь пользовательского решения. Полный AR-4, AR-3 и AC-07/08/09 ещё не завершены.
+Стык Audit → AL-5 → Management, REQ-EVIDENCE §7, REQ-SEMANTIC §9.1/9.4 и REQ-HITL §10; AR-4 по декомпозиции. Реализованы приём баллов, подготовка версии, строгое решение, durable execution authority и единственный Client Gateway executor. Текущее доказательство и границы приёмки: [AR4_ACCEPTANCE.md](AR4_ACCEPTANCE.md). Общий startup/migration gate AR-3, полные AC-08/09 и staging E2E остаются открытыми.
 
 Основа исследования — `ff6d75b` (PR #104, AL-5). В этой базе уже есть работа Александры: auth/session и сохранение error headers, SSRF client, публичный аудит, workspace/ownership AL-4, затем AL-5 — `RecommendationVersion`, nullable FF-Score/E-E-A-T и ограниченная последовательная политика LLM. Наличие исходников и merge не принимается за доказательство всех AC; полный кодовый контракт AL-5 описан в `docs/SEMANTIC.md`.
 
@@ -94,7 +94,7 @@ Runner не создаёт роли и не выдаёт runtime grants; адм�
 
 ### Канонический FK для новой установки — AR-3 / REQ-CORE §3.2, AC-03/12
 
-Management head теперь `20261109_002_canonical`. Сначала применяется Core-линия, затем Management. Четыре таблицы (`tasks`, `hitl_approvals`, `management_changelog`, `hitl_history`) ссылаются на `audit_schema.projects.id` с `ON DELETE RESTRICT`. Внешний `project_id` остаётся UUID. Core использует varchar(36), поэтому PostgreSQL вычисляет `canonical_project_id GENERATED ALWAYS AS (project_id::text) STORED NOT NULL`. Это техническое представление того же ID, не отдельный идентификатор или клиентское поле; INSERT/UPDATE с подменённым значением запрещены БД.
+Canonical revision — `20261109_002_canonical`; текущий Management head — `20261109_003_execution`. Сначала применяется Core-линия, затем Management. Четыре таблицы (`tasks`, `hitl_approvals`, `management_changelog`, `hitl_history`) ссылаются на `audit_schema.projects.id` с `ON DELETE RESTRICT`. Внешний `project_id` остаётся UUID. Core использует varchar(36), поэтому PostgreSQL вычисляет `canonical_project_id GENERATED ALWAYS AS (project_id::text) STORED NOT NULL`. Это техническое представление того же ID, не отдельный идентификатор или клиентское поле; INSERT/UPDATE с подменённым значением запрещены БД.
 
 В чистой metadata присутствует только reference-only Core `Table` с колонкой id, вне owned metadata и mapper registry. Runtime-модели Core не импортируются и не создаются Management. Контракт pure/native probe проверяет точный внешний FK, generated expression, шесть owned tables и отсутствие ORM cascade от legacy Project.
 
@@ -133,9 +133,9 @@ Downgrade canonical revision допускается только без зада
 Открытые задачи:
 
 - Durable crawl/checkpoint, полные сетевые provenance и budgets AL-8 этим узким стыком не завершаются. Снимок связывает факты с сохранённым аудитом, но не доказывает их свежесть к будущему apply; перед исполнением нужны preconditions/revalidation.
-- Весь AR-4/AC-07 ещё не принят. History/regeneration и outbox реализованы/проверены в описанном объёме; остаются миграционная стыковка AR-3, downstream inbox, единый Client Gateway executor с авторитетной проверкой перед первой CMS-мутацией и AR-6 DeploymentOperation. Закрытые старые adapter-входы не являются реализацией нового executor.
+- Текущий AR-4 включает inbox, frozen DeploymentOperation и Gateway executor; см. [матрицу приёмки](AR4_ACCEPTANCE.md). Полная эксплуатационная приёмка остаётся за migration/startup gate AR-3 и запуском приложений без DDL-прав. Native integration не подменяет этот gate и не закрывает целиком AR-6/7/9.
 - Canonical FK новой установки реализован без shadow projects. Перенос непустых legacy-данных и runtime grants остаются AR-3; на произвольной рабочей БД этот инкремент не объявляется готовым к сквозному запуску.
-- Общие Task CRUD/status и internal optimization endpoints ещё требуют actor/object-scope policy и проверки допустимых переходов отдельно от защищённого HITL API. Текущая правка закрывает legacy project CRUD и защищает только internal exists; это не разрешение публиковать остальные legacy endpoints наружу. Проверка записывающего executor перед CMS-мутацией остаётся обязательной.
+- Task CRUD и internal optimization требуют original user session, object-scope/role и блокируют изменение подготовленной/исполняемой версии. Пользовательский PATCH не задаёт системный status/metadata. Старые apply/rollback dispatcher-входы возвращают 409 до CMS I/O; это не реализация нового rollback AR-7.
 - Приоритизация и формула unknown impact — AR-10, этот инкремент их не меняет.
 - Out-of-order/replay, атомарность inbox/business commit и freshness по времени источника не решены проверкой чисел; нужны последующие события/EDA задачи.
 - Management migration runner и read-only startup реализованы в указанном объёме; общий AR-3 schema/role/startup DDL и gates `up/e2e` остаются открыты. Этот инкремент не подключается к рабочей БД и не применяет миграции к ней.

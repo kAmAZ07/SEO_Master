@@ -12,6 +12,7 @@ from database.models import (
 )
 from services.api_gateway.config import settings
 from shared.projects.roles import Permission
+from shared.hitl_execution import ExecutionRequest
 from services.api_gateway.auth import (
     get_current_user,
 )
@@ -34,14 +35,14 @@ class ApprovalRequest(BaseModel):
     comment: Optional[str] = Field(default=None, max_length=1000)
 
 
-async def _hitl_json(method: str, path: str, request: Request, *, params=None, payload=None):
+async def _hitl_json(method: str, path: str, request: Request, *, params=None, payload=None, execution=False):
     if len(settings.INTERNAL_API_KEY) < 32:
         raise HTTPException(503, "service_identity_unconfigured")
     authorization = request.headers.get("authorization", "")
     try:
-        async with httpx.AsyncClient(timeout=10, trust_env=False, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=50 if execution else 10, trust_env=False, follow_redirects=False) as client:
             response = await client.request(
-                method, settings.MANAGEMENT_SERVICE_URL.rstrip("/") + path,
+                method, (settings.CLIENT_GATEWAY_URL if execution else settings.MANAGEMENT_SERVICE_URL).rstrip("/") + path,
                 params=params, json=payload,
                 headers={"Authorization": authorization, "X-Internal-API-Key": settings.INTERNAL_API_KEY},
             )
@@ -54,6 +55,30 @@ async def _hitl_json(method: str, path: str, request: Request, *, params=None, p
     if response.status_code >= 400:
         detail = data.get("detail", "hitl_request_failed") if isinstance(data, dict) else "hitl_request_failed"
         raise HTTPException(response.status_code, detail)
+    return data
+
+
+@router.post("/hitl/tasks/{task_id}/apply")
+async def apply_task(task_id: str, body: ExecutionRequest, request: Request,
+                     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if body.task_id != task_id:
+        raise HTTPException(409, "execution_task_mismatch")
+    await _get_owned_hitl_task(task_id, current_user, db, request, Permission.DEPLOY)
+    return await _hitl_json("POST", "/internal/executions", request, payload=body.model_dump(), execution=True)
+
+
+@router.get("/hitl/tasks/{task_id}/executions/{operation_id}")
+async def execution_status(task_id: str, operation_id: str, request: Request,
+                           current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from uuid import UUID
+    try:
+        UUID(operation_id)
+    except ValueError:
+        raise HTTPException(422, "execution_id_invalid") from None
+    await _get_owned_hitl_task(task_id, current_user, db, request)
+    data = await _hitl_json("GET", "/internal/executions/" + operation_id, request, execution=True)
+    if not isinstance(data, dict) or data.get("record", {}).get("task_id") != task_id:
+        raise HTTPException(404, "execution_not_found")
     return data
 
 

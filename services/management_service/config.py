@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = 'http://localhost:3000,http://localhost:5173'
 
     INTERNAL_API_KEY: str
+    EXECUTOR_API_KEY: str | None = None
+    DOMAIN_VERIFICATION_FRESH_DAYS: int = Field(default=30, ge=1, le=365)
 
     DEFAULT_CRAWL_SCHEDULE: str = '0 2 * * *'
     DEFAULT_FFSCORE_SCHEDULE: str = '0 3 * * *'

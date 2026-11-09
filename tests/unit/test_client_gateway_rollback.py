@@ -61,7 +61,7 @@ def test_target_platform_uses_metadata_then_entity_type():
 
 
 @pytest.mark.asyncio
-async def test_rollback_change_dispatches_saved_rollback_changes(monkeypatch):
+async def test_legacy_rollback_cannot_dispatch_even_saved_changes(monkeypatch):
     deployment_id = uuid4()
     calls = []
 
@@ -93,16 +93,77 @@ async def test_rollback_change_dispatches_saved_rollback_changes(monkeypatch):
         },
     )
 
-    result = await dispatcher.rollback_change(
-        db=object(),
-        deployment_log=deployment_log,
-        correlation_id="corr-1",
-    )
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as error:
+        await dispatcher.rollback_change(db=object(), deployment_log=deployment_log, correlation_id="corr-1")
+    assert error.value.status_code == 409
+    assert error.value.detail == "version_bound_rollback_required"
+    assert calls == []
 
-    assert result["status"] == "applied"
-    assert calls[0]["changes"] == [
-        {"op": "replace", "path": "/title", "value": "Old title"}
-    ]
-    assert calls[0]["metadata"]["rollback_of"] == str(deployment_id)
-    assert calls[0]["metadata"]["rollback_changes"] == []
-    assert calls[0]["correlation_id"] == "corr-1"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["applying", "outcome_unknown", "applied_unverified", "no_op"])
+async def test_repeated_execution_never_blindly_sends_apply(state):
+    from unittest.mock import AsyncMock
+    from services.client_api_gateway.hitl_executor import HITLExecutor
+    from shared.hitl_execution import ExecutionError, ExecutionRequest
+    refs = ExecutionRequest(operation_id=str(uuid4()), task_id=str(uuid4()), approval_id=str(uuid4()),
+                            recommendation_version_id=str(uuid4()), content_hash="a" * 64)
+    record = {**refs.model_dump(), "project_id": str(uuid4()), "binding": {
+        "base_url": "https://example.com", "site_id": str(uuid4()), "key_id": "current"}}
+    operation = {"state": state, "record": record}
+    authority = AsyncMock(return_value=operation)
+    target = SimpleNamespace(status=AsyncMock(side_effect=ExecutionError("cms_operation_not_found")),
+                             apply=AsyncMock(), preflight=AsyncMock())
+    executor = HITLExecutor("Bearer fixture", authority=authority, target_factory=lambda *args: target)
+    assert await executor.execute(refs) == operation
+    target.apply.assert_not_called()
+    target.preflight.assert_not_called()
+    assert target.status.call_count == (1 if state in {"applying", "outcome_unknown"} else 0)
+
+
+@pytest.mark.asyncio
+async def test_authority_rejection_after_preflight_leaves_cms_untouched():
+    from fastapi import HTTPException
+    from unittest.mock import AsyncMock
+    from services.client_api_gateway.hitl_executor import HITLExecutor
+    from shared.hitl_execution import ExecutionRequest
+    refs = ExecutionRequest(operation_id=str(uuid4()), task_id=str(uuid4()), approval_id=str(uuid4()),
+                            recommendation_version_id=str(uuid4()), content_hash="a" * 64)
+    record = {**refs.model_dump(), "project_id": str(uuid4()), "version": {}, "before": {"exact": "snapshot"},
+              "binding": {"base_url": "https://example.com", "site_id": str(uuid4()), "key_id": "current"}}
+    operation = {"state": "ready", "record": record}
+    authority = AsyncMock(side_effect=[operation, HTTPException(409, "execution_expired")])
+    target = SimpleNamespace(preflight=AsyncMock(return_value=record["before"]), dry_run=AsyncMock(), apply=AsyncMock())
+    executor = HITLExecutor("Bearer fixture", authority=authority, target_factory=lambda *args: target)
+    with pytest.raises(HTTPException) as error:
+        await executor.execute(refs)
+    assert error.value.detail == "execution_expired"
+    target.apply.assert_not_called()
+    assert authority.call_args.args == ("POST", "/" + refs.operation_id + "/begin")
+
+
+@pytest.mark.asyncio
+async def test_lost_apply_response_marks_unknown_and_retries_only_status():
+    from unittest.mock import AsyncMock
+    from services.client_api_gateway.hitl_executor import HITLExecutor
+    from shared.hitl_execution import ExecutionRequest
+    refs = ExecutionRequest(operation_id=str(uuid4()), task_id=str(uuid4()), approval_id=str(uuid4()),
+                            recommendation_version_id=str(uuid4()), content_hash="a" * 64)
+    record = {**refs.model_dump(), "project_id": str(uuid4()), "version": {}, "before": {},
+              "binding": {"base_url": "https://example.com", "site_id": str(uuid4()), "key_id": "current"}}
+    ready = {"state": "ready", "record": record}
+    applying = {**ready, "state": "applying"}
+    unknown = {**ready, "state": "outcome_unknown"}
+    final = {**ready, "state": "applied_unverified"}
+    receipt = {"signed": "receipt"}
+    authority = AsyncMock(side_effect=[ready, applying, unknown, unknown, final])
+    target = SimpleNamespace(preflight=AsyncMock(return_value={}), dry_run=AsyncMock(),
+                             apply=AsyncMock(side_effect=TimeoutError()), status=AsyncMock(return_value=receipt))
+    executor = HITLExecutor("Bearer fixture", authority=authority, target_factory=lambda *args: target)
+    with pytest.raises(TimeoutError):
+        await executor.execute(refs)
+    assert authority.call_args.args == ("POST", "/" + refs.operation_id + "/finish", {"receipt": None})
+    assert await executor.execute(refs) == final
+    assert target.apply.call_count == 1 and target.status.call_count == 1
+    assert authority.call_args.args == ("POST", "/" + refs.operation_id + "/finish", {"receipt": receipt})

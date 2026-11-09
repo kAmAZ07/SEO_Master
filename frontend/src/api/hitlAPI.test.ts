@@ -48,7 +48,7 @@ describe('hitlAPI', () => {
     const tasks = await fetchHITLTasks()
 
     expect(apiMock.get).toHaveBeenCalledWith('/hitl/tasks', {
-      params: { status_filter: 'pending', limit: 50 },
+      params: { status_filter: 'all', limit: 50 },
     })
     expect(tasks).toHaveLength(1)
     expect(tasks[0]).toMatchObject({
@@ -88,6 +88,17 @@ describe('hitlAPI', () => {
     expect(apiMock.post).toHaveBeenNthCalledWith(2, '/hitl/tasks/task-2/reject', {
       approval_id: 'approval-2', recommendation_version_id: 'version-2', content_hash: 'b'.repeat(64),
       comment: 'Needs rewrite',
+    })
+  })
+
+  it('applies references only with a stable operation ID and no mutable payload', async () => {
+    const { applyTask } = await import('./hitlAPI')
+    apiMock.post.mockResolvedValueOnce({})
+    await applyTask({ taskId: 'task-1', approvalId: 'approval-1', recommendationVersionId: 'version-1',
+      contentHash: 'a'.repeat(64), approved: true, comment: 'not a CMS payload' }, 'operation-1')
+    expect(apiMock.post).toHaveBeenCalledWith('/hitl/tasks/task-1/apply', {
+      operation_id: 'operation-1', task_id: 'task-1', approval_id: 'approval-1',
+      recommendation_version_id: 'version-1', content_hash: 'a'.repeat(64),
     })
   })
 })

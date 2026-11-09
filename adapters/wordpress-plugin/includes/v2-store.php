@@ -2,7 +2,7 @@
 declare(strict_types=1);
 if (!defined('ABSPATH')) { exit; }
 
-final class SM_V2_WPDB_Store implements SM_V2_Store {
+final class SM_V2_WPDB_Store implements SM_V2_Target_Store {
     private array $tables;
     private bool $in_transaction = false;
     private array $locked_entities = [];
@@ -76,7 +76,12 @@ final class SM_V2_WPDB_Store implements SM_V2_Store {
             if ($name === 'operations' || $name === 'nonces') {
                 $columns = $this->query('SHOW COLUMNS FROM %i', [$table]);
                 $types = [];
-                foreach ($columns as $column) { $types[$column['Field']] = strtolower($column['Type']); }
+                foreach ($columns as $column) {
+                    $type = strtolower($column['Type']);
+                    // MariaDB reports the integer display width; MySQL 8 omits it.
+                    // Both describe the same unsigned 64-bit storage, not a narrower/signed type.
+                    $types[$column['Field']] = $type === 'bigint(20) unsigned' ? 'bigint unsigned' : $type;
+                }
                 $expected = $name === 'operations' ?
                     ['operation_id' => 'char(36)', 'request_hash' => 'char(64)', 'receipt' => 'longtext'] :
                     ['nonce_hash' => 'char(64)', 'expires_at' => 'bigint unsigned'];
@@ -165,6 +170,14 @@ final class SM_V2_WPDB_Store implements SM_V2_Store {
         }
         $this->locked_entities[$entity_id] = true;
         return ['entity_id' => $entity_id, 'post_type' => $posts[0]['post_type'], 'post_status' => 'publish', 'fields' => $fields];
+    }
+
+    public function assert_target_url(int $entity_id, string $url): void {
+        $this->require_transaction();
+        if (!isset($this->locked_entities[$entity_id]) || !$this->database instanceof SM_V2_Target_SQL) {
+            throw new SM_V2_Error('unsupported_target_binding', 422);
+        }
+        $this->database->assert_target_url($entity_id, $url);
     }
 
     public function write_fields(int $entity_id, array $fields): void {

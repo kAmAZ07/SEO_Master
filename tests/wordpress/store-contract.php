@@ -17,6 +17,7 @@ final class ScriptedSQL implements SM_V2_SQL {
     public string $sql_mode = 'STRICT_TRANS_TABLES';
     public int $durable_commit = 1;
     public int $autocommit = 1;
+    public string $nonce_type = 'bigint unsigned';
     public bool $has_trigger_grant = true;
     public int $trigger_count = 0;
     public bool $has_primary_key = true;
@@ -76,7 +77,7 @@ final class ScriptedSQL implements SM_V2_SQL {
         if ($sql === 'SHOW COLUMNS FROM %i') {
             $types = $identifiers[0] === 'test_operations' ?
                 ['operation_id' => 'char(36)', 'request_hash' => 'char(64)', 'receipt' => 'longtext'] :
-                ['nonce_hash' => 'char(64)', 'expires_at' => 'bigint unsigned'];
+                ['nonce_hash' => 'char(64)', 'expires_at' => $this->nonce_type];
             $columns = [];
             foreach ($types as $field => $type) { $columns[] = ['Field' => $field, 'Type' => $type]; }
             return $columns;
@@ -758,6 +759,13 @@ $tests['no-op apply and rollback recovery do not invalidate cache for unrelated 
     $probe->require_original();
 };
 $failures = [];
+$tests['MariaDB display width preserves unsigned bigint contract'] = function (): void {
+    $fixture = new StoreFixture();
+    $fixture->sql->nonce_type = 'bigint(20) unsigned';
+    $fixture->store->check_storage();
+    $fixture->sql->nonce_type = 'bigint(20)';
+    require_store_error(fn() => $fixture->store->check_storage(), 'unsupported_storage');
+};
 foreach ($tests as $name => $test) {
     try { $test(); } catch (Throwable $error) { $failures[] = "$name: {$error->getMessage()}"; }
 }

@@ -1,6 +1,6 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit'
 import type { HITLTask, HITLApproval } from '@/types/hitl'
-import { fetchHITLTasks, approveTask, rejectTask } from '@/api/hitlAPI'
+import { fetchHITLTasks, fetchTaskDetails, approveTask, rejectTask, applyTask } from '@/api/hitlAPI'
 import { getApiErrorMessage } from '@/api/authAPI'
 
 interface HITLState {
@@ -31,11 +31,23 @@ export const approveHITLTask = createAsyncThunk(
   async (approval: HITLApproval, { rejectWithValue }) => {
     try {
       await approveTask(approval)
-      return approval.taskId
+      return await fetchTaskDetails(approval.taskId)
     } catch (error) {
       return rejectWithValue(getApiErrorMessage(error, 'Failed to approve HITL task.'))
     }
   }
+)
+
+export const applyHITLTask = createAsyncThunk(
+  'hitl/apply',
+  async ({ approval, operationId }: { approval: HITLApproval; operationId: string }, { rejectWithValue }) => {
+    try {
+      await applyTask(approval, operationId)
+      return await fetchTaskDetails(approval.taskId)
+    } catch (error) {
+      return rejectWithValue(getApiErrorMessage(error, 'Не удалось подтвердить результат публикации. Обновите статус операции.'))
+    }
+  },
 )
 
 export const rejectHITLTask = createAsyncThunk(
@@ -70,7 +82,7 @@ const hitlSlice = createSlice({
       })
       .addCase(approveHITLTask.fulfilled, (state, action) => {
         state.error = null
-        state.tasks = state.tasks.filter(task => task.id !== action.payload && task.taskId !== action.payload)
+        state.tasks = state.tasks.map(task => task.taskId === action.payload.taskId ? action.payload : task)
       })
       .addCase(approveHITLTask.rejected, (state, action) => {
         state.error = typeof action.payload === 'string' ? action.payload : action.error.message || 'Failed to approve task'
@@ -81,6 +93,13 @@ const hitlSlice = createSlice({
       })
       .addCase(rejectHITLTask.rejected, (state, action) => {
         state.error = typeof action.payload === 'string' ? action.payload : action.error.message || 'Failed to reject task'
+      })
+      .addCase(applyHITLTask.fulfilled, (state, action) => {
+        state.error = null
+        state.tasks = state.tasks.map(task => task.taskId === action.payload.taskId ? action.payload : task)
+      })
+      .addCase(applyHITLTask.rejected, (state, action) => {
+        state.error = typeof action.payload === 'string' ? action.payload : 'Не удалось получить результат операции'
       })
   },
 })

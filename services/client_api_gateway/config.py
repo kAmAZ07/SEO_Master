@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     TILDA_INTERNAL_API_KEY: Optional[str] = None
 
     MANAGEMENT_SERVICE_URL: str = 'http://localhost:8004'
+    MANAGEMENT_EXECUTOR_API_KEY: Optional[str] = None
+    WORDPRESS_V2_TARGETS_JSON: Optional[str] = None
 
     CORS_ORIGINS: str = '*'
     CORS_ALLOW_CREDENTIALS: bool = True

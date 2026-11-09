@@ -10,7 +10,7 @@ from services.management_service.config import settings
 from services.management_service.db.session import get_db_health, init_db
 from services.management_service.events.consumers import consumers_are_running, start_consumers, stop_consumers
 from services.management_service.events.publishers import check_rabbitmq_connection
-from services.management_service.api.endpoints import hitl, internal, projects, tasks
+from services.management_service.api.endpoints import executions, hitl, internal, projects, tasks
 from config.logging_config import setup_logging, get_logger
 
 
@@ -160,6 +160,7 @@ async def readiness_check():
 
 
 def _include_routers(fastapi_app: FastAPI) -> None:
+    fastapi_app.include_router(executions.router, prefix="/internal/executions", tags=["executions"])
     fastapi_app.include_router(projects.router, prefix="/api/v1/projects", tags=["projects"])
     fastapi_app.include_router(tasks.router, prefix="/api/v1/tasks", tags=["tasks"])
     fastapi_app.include_router(hitl.router, prefix="/api/v1/hitl", tags=["hitl"])

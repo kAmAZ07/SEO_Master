@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     
     AUDIT_SERVICE_URL: str = Field(default="http://localhost:8001", env="AUDIT_SERVICE_URL")
     MANAGEMENT_SERVICE_URL: str = Field(default="http://localhost:8004", env="MANAGEMENT_SERVICE_URL")
+    CLIENT_GATEWAY_URL: str = Field(default="http://localhost:8005", env="CLIENT_GATEWAY_URL")
     INTERNAL_API_KEY: str = Field(default="", env="INTERNAL_API_KEY")
     SEMANTIC_SERVICE_URL: str = Field(default="http://localhost:8002", env="SEMANTIC_SERVICE_URL")
     REPORTING_SERVICE_URL: str = Field(default="http://localhost:8003", env="REPORTING_SERVICE_URL")

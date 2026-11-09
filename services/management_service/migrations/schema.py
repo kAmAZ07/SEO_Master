@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 LEDGER_HEAD = "20261109_001_hitl_ledger"
-HEAD = "20261109_002_canonical"
+HEAD = "20261109_003_execution"
 TABLES = (
     "projects",
     "tasks",
@@ -55,6 +55,13 @@ def require_schema(connection: Connection, *, expected_head: str = HEAD) -> None
         )
         if canonical_fks != 4:
             raise RuntimeError("MANAGEMENT_SCHEMA_NOT_READY")
+        execution_index = connection.scalar(text(
+            "SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid "
+            "JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' "
+            "AND c.relname='uq_hitl_execution_version' AND i.indisunique AND i.indisvalid)"
+        ))
+        if execution_index is not True:
+            raise RuntimeError("MANAGEMENT_SCHEMA_NOT_READY")
     triggers = set(
         connection.execute(
             text(
@@ -70,6 +77,7 @@ def require_schema(connection: Connection, *, expected_head: str = HEAD) -> None
     }
     if expected_head == HEAD:
         expected_triggers.add(("projects", "management_legacy_project_read_only"))
+        expected_triggers.add(("management_changelog", "hitl_execution_immutable"))
     if not expected_triggers <= triggers:
         raise RuntimeError("MANAGEMENT_SCHEMA_NOT_READY")
 

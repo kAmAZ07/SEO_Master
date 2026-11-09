@@ -21,6 +21,8 @@ export interface HITLTask {
   authorizationStatus?: string
   recommendationVersionId?: string | null
   contentHash?: string | null
+  managedTarget?: boolean
+  execution?: { operationId: string; state: string; recommendationVersionId: string; contentHash: string } | null
   diffData: HITLDiffData
   impactScore?: number | null
   recommendation?: string

@@ -126,3 +126,30 @@ def test_history_forwards_bounded_pagination_and_authenticated_headers(stand):
     assert response.status_code == 200 and response.json() == []
     assert calls[-1].url.params["limit"] == "2" and calls[-1].url.params["offset"] == "4"
     assert calls[-1].headers["authorization"] == "Bearer fixture-access"
+
+
+def test_apply_requires_deploy_role_and_sends_only_original_references_to_client_gateway(stand):
+    import json
+    client, maker, calls = stand
+    body = {key: value for key, value in command().items() if key != "comment"}
+    body.update(task_id=TASK_ID, operation_id=BOB)
+    assert client.post(f"/api/hitl/tasks/{TASK_ID}/apply", json=body).status_code == 403
+    assert [call.method for call in calls] == ["GET"]
+    with maker() as db:
+        db.get(WorkspaceMember, (WORKSPACE, ALICE)).role = "deployer"
+        db.commit()
+    calls.clear()
+    response = client.post(f"/api/hitl/tasks/{TASK_ID}/apply", json=body, headers={"Authorization": "Bearer original-access"})
+    assert response.status_code == 200
+    assert calls[-1].url.path == "/internal/executions"
+    assert json.loads(calls[-1].content) == body
+    assert calls[-1].headers["authorization"] == "Bearer original-access"
+
+
+def test_apply_rejects_mutable_changes_and_path_task_mismatch_before_proxy(stand):
+    client, _, calls = stand
+    body = {key: value for key, value in command().items() if key != "comment"}
+    body.update(task_id=TASK_ID, operation_id=BOB)
+    assert client.post(f"/api/hitl/tasks/{TASK_ID}/apply", json={**body, "changes": {"title": "forged"}}).status_code == 422
+    assert client.post(f"/api/hitl/tasks/{TASK_ID}/apply", json={**body, "task_id": BOB}).status_code == 409
+    assert calls == []

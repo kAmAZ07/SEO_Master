@@ -17,8 +17,15 @@ interface SM_V2_Store {
     public function rollback(): void;
 }
 
+interface SM_V2_Target_Store extends SM_V2_Store {
+    public function assert_target_url(int $entity_id, string $url): void;
+}
+
 final class SM_V2_Service {
-    public function __construct(private SM_V2_Config $config, private SM_V2_Store $store, private string $plugin_version) {}
+    private Closure $clock;
+    public function __construct(private SM_V2_Config $config, private SM_V2_Store $store, private string $plugin_version, ?Closure $clock = null) {
+        $this->clock = $clock ?? static fn(): int => time();
+    }
 
     public function handle(string $method, string $route, string $body, array $headers, int $now): array {
         $status_operation = null;
@@ -27,9 +34,10 @@ final class SM_V2_Service {
         } elseif ($method !== 'POST' || !in_array($route, [
             '/seo-master/v2/challenge', '/seo-master/v2/snapshot', '/seo-master/v2/dry-run', '/seo-master/v2/apply',
             '/seo-master/v2/rollback', '/seo-master/v2/rollback/dry-run',
+            '/seo-master/v2/target-bound/apply', '/seo-master/v2/target-bound/dry-run',
         ], true)) { throw new SM_V2_Error('invalid_route', 400); }
         if (strlen($body) > 16384) { throw new SM_V2_Error('request_too_large', 413); }
-        $is_command = in_array($route, ['/seo-master/v2/dry-run', '/seo-master/v2/apply', '/seo-master/v2/rollback', '/seo-master/v2/rollback/dry-run'], true);
+        $is_command = in_array($route, ['/seo-master/v2/dry-run', '/seo-master/v2/apply', '/seo-master/v2/rollback', '/seo-master/v2/rollback/dry-run', '/seo-master/v2/target-bound/apply', '/seo-master/v2/target-bound/dry-run'], true);
         $operation = $headers['x-seo-operation-id'] ?? '';
         $this->authenticate($method, $route, $body, $headers, $now, $is_command || $status_operation !== null);
         if ($status_operation !== null) {
@@ -73,10 +81,17 @@ final class SM_V2_Service {
         if (in_array($route, ['/seo-master/v2/rollback', '/seo-master/v2/rollback/dry-run'], true)) {
             return $this->reverse($route, $payload, $operation, hash('sha256', $body), $now);
         }
-        sm_v2_keys($payload, [
+        $target_bound = str_starts_with($route, '/seo-master/v2/target-bound/');
+        $required = [
             'project_id', 'site_id', 'entity_id', 'operation_id', 'task_id', 'proposal_version',
             'proposal_hash', 'approval_ref', 'before_digest', 'expected_after_digest', 'changes',
-        ]);
+        ];
+        if ($target_bound) {
+            $required = array_merge($required, ['target_url', 'authorization_deadline']);
+            if (!is_string($payload['target_url'] ?? null) || strlen($payload['target_url']) > 2048 ||
+                !is_int($payload['authorization_deadline'] ?? null)) { throw new SM_V2_Error('invalid_schema', 400); }
+        }
+        sm_v2_keys($payload, $required);
         foreach (['operation_id', 'task_id', 'proposal_version', 'approval_ref'] as $field) {
             if (!sm_v2_uuid($payload[$field])) { throw new SM_V2_Error('invalid_schema', 400); }
         }
@@ -89,10 +104,11 @@ final class SM_V2_Service {
         $fields = sm_v2_validate_changes($payload['changes']);
         if (isset($fields['jsonld']) && !$this->config->can_write_jsonld()) { throw new SM_V2_Error('unsupported_field', 422); }
         if (!hash_equals(sm_v2_proposal_hash($payload), $payload['proposal_hash'])) { throw new SM_V2_Error('proposal_hash_conflict', 409); }
-        if ($route === '/seo-master/v2/apply' && !$this->config->can_publish()) { throw new SM_V2_Error('trusted_gateway_required', 503); }
+        $apply = in_array($route, ['/seo-master/v2/apply', '/seo-master/v2/target-bound/apply'], true);
+        if ($apply && !$this->config->can_publish()) { throw new SM_V2_Error('trusted_gateway_required', 503); }
         $request_hash = hash('sha256', $body);
-        return $this->transaction(function () use ($route, $payload, $fields, $request_hash, $now): array {
-            if ($route === '/seo-master/v2/apply') {
+        return $this->transaction(function () use ($route, $payload, $fields, $request_hash, $now, $apply, $target_bound): array {
+            if ($apply) {
                 $existing = $this->store->lock_operation($payload['operation_id'], $request_hash);
                 if ($existing !== null) {
                     $existing = $this->checked_receipt($existing, $payload['operation_id'], $request_hash);
@@ -102,11 +118,17 @@ final class SM_V2_Service {
             }
             $before = $this->store->snapshot($payload['entity_id']);
             sm_v2_validate_snapshot($before, true);
+            if ($target_bound) {
+                if (!$this->store instanceof SM_V2_Target_Store) { throw new SM_V2_Error('unsupported_target_binding', 422); }
+                $this->store->assert_target_url($payload['entity_id'], $payload['target_url']);
+                $now = ($this->clock)();
+                if ($now >= $payload['authorization_deadline']) { throw new SM_V2_Error('authorization_expired', 409); }
+            }
             if (!hash_equals(sm_v2_digest($before), $payload['before_digest'])) { throw new SM_V2_Error('precondition_conflict', 409); }
             $after = $before;
             foreach ($fields as $field => $value) { $after['fields'][$field] = $value; }
             if (!hash_equals(sm_v2_digest($after), $payload['expected_after_digest'])) { throw new SM_V2_Error('after_digest_conflict', 409); }
-            if ($route === '/seo-master/v2/dry-run') {
+            if (!$apply) {
                 return [
                     'outcome' => 'ready', 'before' => $before, 'after' => $after,
                     'before_digest' => sm_v2_digest($before), 'after_digest' => sm_v2_digest($after),
@@ -117,6 +139,7 @@ final class SM_V2_Service {
             foreach ($fields as $field => $value) {
                 if ($before['fields'][$field] !== $value) { $changed[$field] = $value; }
             }
+            if ($target_bound && ($this->clock)() >= $payload['authorization_deadline']) { throw new SM_V2_Error('authorization_expired', 409); }
             if ($changed !== []) { $this->store->write_fields($payload['entity_id'], $changed); }
             // Read back under the same locks. Silent truncation, escaping, triggers or mixed state cannot be called applied.
             if (!hash_equals(sm_v2_digest($this->store->snapshot($payload['entity_id'])), $payload['expected_after_digest'])) {

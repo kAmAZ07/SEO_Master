@@ -1,6 +1,5 @@
 import hmac
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
@@ -14,8 +13,8 @@ from services.client_api_gateway.auth.access_control import require_patch_ip_whi
 from services.client_api_gateway.config import is_development, settings
 from services.client_api_gateway.db import get_db, init_db
 from services.client_api_gateway.db.models import DeploymentLog
-from services.client_api_gateway.deployment_dispatcher import dispatch_change, rollback_change
-from services.client_api_gateway.logging.changelog_logger import log_deployment
+from services.client_api_gateway.hitl_executor import HITLExecutor
+from shared.hitl_execution import ExecutionError, ExecutionRequest
 from services.client_api_gateway.routes import (
     health_router,
     key_management_router,
@@ -55,7 +54,7 @@ class InternalRollbackResponse(BaseModel):
 def _require_internal_api_key(
     x_internal_api_key: str = Header(..., alias='X-Internal-API-Key'),
 ):
-    if not settings.INTERNAL_API_KEY:
+    if not settings.INTERNAL_API_KEY or len(settings.INTERNAL_API_KEY) < 32:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail='INTERNAL_API_KEY not configured',
@@ -94,6 +93,21 @@ app.include_router(health_router)
 app.include_router(patch_router)
 app.include_router(key_management_router)
 app.include_router(tilda_webhook_router)
+
+
+@app.post('/internal/executions')
+async def execute_approved_operation(payload: ExecutionRequest, request: Request,
+                                     _auth: None = Depends(_require_internal_api_key)):
+    try:
+        return await HITLExecutor(request.headers.get('authorization', '')).execute(payload)
+    except ExecutionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.get('/internal/executions/{operation_id}')
+async def read_approved_operation(operation_id: uuid.UUID, request: Request,
+                                  _auth: None = Depends(_require_internal_api_key)):
+    return await HITLExecutor(request.headers.get('authorization', '')).read(str(operation_id))
 
 
 @app.on_event('startup')
@@ -181,66 +195,7 @@ async def internal_deploy(
     db: Session = Depends(get_db),
     _auth: None = Depends(_require_internal_api_key),
 ):
-    log_entry = log_deployment(
-        db=db,
-        project_id=payload.project_id,
-        task_id=payload.task_id,
-        change_type=payload.change_type,
-        entity_id=payload.entity_id,
-        entity_type=payload.entity_type,
-        changes=payload.changes,
-        metadata=payload.metadata,
-        request=request,
-        correlation_id=payload.correlation_id,
-        status=payload.status or 'received',
-    )
-
-    try:
-        dispatch_result = await dispatch_change(
-            db=db,
-            change_type=payload.change_type,
-            project_id=payload.project_id,
-            entity_id=payload.entity_id,
-            entity_type=payload.entity_type,
-            changes=payload.changes,
-            metadata=payload.metadata,
-            correlation_id=payload.correlation_id,
-        )
-
-        dispatch_status = str(dispatch_result.get('status') or '').lower()
-        if dispatch_status == 'applied':
-            log_entry.status = 'applied'
-            log_entry.applied_at = datetime.now(timezone.utc)
-        elif dispatch_status == 'failed':
-            log_entry.status = 'failed'
-            log_entry.error_message = str(dispatch_result.get('error') or 'deployment_failed')
-        else:
-            log_entry.status = 'received'
-
-        merged_metadata = dict(log_entry.meta or {})
-        merged_metadata['dispatch'] = dispatch_result
-        log_entry.meta = merged_metadata
-
-        db.add(log_entry)
-        db.commit()
-        db.refresh(log_entry)
-    except Exception as exc:
-        log_entry.status = 'failed'
-        log_entry.error_message = str(exc)
-        db.add(log_entry)
-        db.commit()
-
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f'Deployment dispatch failed: {exc}',
-        ) from exc
-
-    return InternalDeployResponse(
-        change_id=str(log_entry.id),
-        deployment_id=str(log_entry.id),
-        status=log_entry.status,
-        warnings=dispatch_result.get('warnings') or [],
-    )
+    raise HTTPException(409, "version_bound_execution_required")
 
 
 @app.get('/changes/pending/{project_id}')
@@ -290,32 +245,7 @@ async def rollback_internal_deploy(
     db: Session = Depends(get_db),
     _auth: None = Depends(_require_internal_api_key),
 ):
-    log_entry = db.query(DeploymentLog).filter(DeploymentLog.id == deployment_id).first()
-    if log_entry is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Deployment not found')
-
-    rollback_result = await rollback_change(
-        db=db,
-        deployment_log=log_entry,
-        correlation_id=getattr(request.state, 'correlation_id', None),
-    )
-
-    rollback_status = str(rollback_result.get('status') or 'unknown')
-    if rollback_status == 'applied':
-        log_entry.status = 'rolled_back'
-        merged_metadata = dict(log_entry.meta or {})
-        merged_metadata['rollback'] = rollback_result
-        log_entry.meta = merged_metadata
-        db.add(log_entry)
-        db.commit()
-    elif rollback_status == 'failed':
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail='Rollback failed')
-
-    return InternalRollbackResponse(
-        deployment_id=str(log_entry.id),
-        rollback_status=rollback_status,
-        status=log_entry.status,
-    )
+    raise HTTPException(409, "version_bound_rollback_required")
 
 
 if __name__ == '__main__':

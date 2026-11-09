@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from typing import Any, Optional
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from services.management_service.db.models import HITLApproval, HITLStatus, Task
+from services.management_service.db.models import Changelog, HITLApproval, HITLStatus, Task
 from services.management_service.db.session import get_db
 from services.management_service.approval_identity import authenticated_actor
 from services.management_service.approval_policy import ApprovalError, DecisionRequest, UserActor
@@ -22,7 +22,7 @@ def _service(db: Session) -> ApprovalService:
 
 
 def _status_from_query(value: Optional[str]) -> HITLStatus | None:
-    if not value:
+    if not value or value.lower() == "all":
         return None
     normalized = value.upper()
     try:
@@ -65,6 +65,20 @@ def _serialize_approval(approval: HITLApproval, task: Optional[Task] = None) -> 
     }
 
 
+def _execution_summary(db: Session, task_id: UUID, diff: dict[str, Any]) -> dict[str, Any] | None:
+    version_id = (diff.get("recommendation_version") or {}).get("version_id")
+    row = db.query(Changelog).filter(Changelog.task_id == task_id, Changelog.source == "hitl_executor_v1",
+        Changelog.meta["record"]["recommendation_version_id"].astext == version_id).order_by(Changelog.created_at.desc()).first()
+    if row is None:
+        return None
+    record = row.meta["record"]
+    state = row.meta["state"]
+    if state == "ready" and record["command"]["authorization_deadline"] <= int(datetime.now(timezone.utc).timestamp()):
+        state = "expired"
+    return {"operation_id": str(row.id), "state": state,
+            "recommendation_version_id": record["recommendation_version_id"], "content_hash": record["content_hash"]}
+
+
 @router.get("/tasks")
 def list_hitl_tasks(
     status: Optional[str] = Query(None),
@@ -100,6 +114,7 @@ def list_hitl_tasks(
         for task in db.query(Task).filter(Task.id.in_(task_ids)).all()
     } if task_ids else {}
     return [{**_serialize_approval(approval, tasks_by_id.get(approval.task_id)),
+             "execution": _execution_summary(db, approval.task_id, approval.diff_data),
              "authorization_status": service.authorization_status(approval, tasks_by_id[approval.task_id], actor)}
             for approval in approvals if approval.task_id in tasks_by_id]
 
@@ -111,6 +126,7 @@ def get_hitl_task(task_id: UUID, actor: UserActor = Depends(authenticated_actor)
     try:
         approval, task = service.readable(str(task_id), actor)
         return {**_serialize_approval(approval, task),
+                "execution": _execution_summary(db, task.id, approval.diff_data),
                 "authorization_status": service.authorization_status(approval, task, actor)}
     except ApprovalError as exc:
         raise HTTPException(exc.http_status, exc.code) from exc

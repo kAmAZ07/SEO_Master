@@ -14,7 +14,11 @@ from alembic.config import Config
 from sqlalchemy import create_engine, pool, text
 from sqlalchemy.engine import Connection, make_url
 
-from services.management_service.migrations.schema import require_schema
+from services.management_service.migrations.schema import (
+    HEAD,
+    LEDGER_HEAD,
+    require_schema,
+)
 
 
 def migrate(
@@ -22,6 +26,7 @@ def migrate(
     *,
     expected_role: str,
     direction: Literal["upgrade", "downgrade"] = "upgrade",
+    target: Literal["head", "20261109_001_hitl_ledger"] = "head",
 ) -> None:
     if connection.dialect.name != "postgresql" or connection.in_transaction():
         raise RuntimeError("MANAGEMENT_EXPLICIT_IDLE_POSTGRES_CONNECTION_REQUIRED")
@@ -31,7 +36,11 @@ def migrate(
         connection.connection.dbapi_connection, "autocommit", False
     ):
         raise RuntimeError("MANAGEMENT_MIGRATION_TRANSACTION_REQUIRED")
-    if not expected_role or direction not in {"upgrade", "downgrade"}:
+    if (
+        not expected_role
+        or direction not in {"upgrade", "downgrade"}
+        or target not in {"head", LEDGER_HEAD}
+    ):
         raise RuntimeError("MANAGEMENT_MIGRATION_ACTOR_REQUIRED")
     with connection.begin():
         actor = connection.scalar(text("SELECT current_user"))
@@ -50,8 +59,10 @@ def migrate(
         )
         config.attributes.update(connection=connection, management_runner_verified=True)
         if direction == "upgrade":
-            command.upgrade(config, "head")
-            require_schema(connection)
+            command.upgrade(config, target)
+            require_schema(
+                connection, expected_head=HEAD if target == "head" else LEDGER_HEAD
+            )
         else:
             command.downgrade(config, "base")
 
@@ -65,6 +76,7 @@ def main() -> int:
         help="Name of the explicit migration DSN environment variable",
     )
     parser.add_argument("--expected-role", required=True)
+    parser.add_argument("--target", choices=("head", LEDGER_HEAD), default="head")
     arguments = parser.parse_args()
     engine = None
     try:
@@ -83,15 +95,26 @@ def main() -> int:
         )
         with engine.connect() as connection:
             if arguments.action == "upgrade":
-                migrate(connection, expected_role=arguments.expected_role)
+                migrate(
+                    connection,
+                    expected_role=arguments.expected_role,
+                    target=arguments.target,
+                )
             else:
                 if (
                     connection.scalar(text("SELECT current_user"))
                     != arguments.expected_role
                 ):
                     raise RuntimeError("MANAGEMENT_MIGRATION_ACTOR_MISMATCH")
-                require_schema(connection)
-        print("MANAGEMENT_SCHEMA_READY")
+                require_schema(
+                    connection,
+                    expected_head=HEAD if arguments.target == "head" else LEDGER_HEAD,
+                )
+        print(
+            "MANAGEMENT_SCHEMA_READY"
+            if arguments.target == "head"
+            else "MANAGEMENT_LEDGER_READY_APPLICATION_BLOCKED"
+        )
         return 0
     except Exception as exc:
         # Vendor connection/DDL errors may contain the explicit DSN or data values.

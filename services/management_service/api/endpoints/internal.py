@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
-from services.management_service.db.models import Project
+from services.management_service.canonical_projects import project_exists as canonical_project_exists
+from services.management_service.approval_identity import require_service_identity
 from services.management_service.db.session import get_db
 from services.management_service.tasks.orchestration_tasks import (
     reprioritize_all_projects,
@@ -68,8 +69,8 @@ def enqueue_all_projects_reprioritization() -> dict[str, Any]:
 
 
 @router.get("/projects/{project_id}/exists")
-def project_exists(project_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    project = db.query(Project.id).filter(Project.id == project_id).first()
-    if not project:
+def project_exists(project_id: str, db: Session = Depends(get_db),
+                   _: None = Depends(require_service_identity)) -> dict[str, Any]:
+    if not canonical_project_exists(db, project_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project_not_found")
     return {"project_id": project_id, "exists": True}

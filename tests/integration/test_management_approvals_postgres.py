@@ -18,7 +18,7 @@ from services.audit_service.db.models import CrawlResult
 from services.management_service.approval_policy import ApprovalError, DecisionRequest, UserActor
 from services.management_service.approval_service import ApprovalService
 from services.management_service.migrations.runner import migrate
-from services.management_service.models import Base, HITLApproval, HITLStatus, Project, Task, TaskStatus, TaskType
+from services.management_service.models import HITLApproval, HITLStatus, Task, TaskStatus, TaskType
 from services.management_service.proposal_handoff import version_diff
 from services.semantic_service.db.models import RecommendationVersionRow
 from services.semantic_service.proposals.repository import row_from_version
@@ -41,8 +41,6 @@ def stand():
             conn.execute(text("CREATE SCHEMA semantic_schema"))
             for table in (User.__table__, Workspace.__table__, WorkspaceMember.__table__, CanonicalProject.__table__):
                 table.create(conn)
-            for name in ("projects", "tasks", "hitl_approvals", "management_changelog"):
-                Base.metadata.tables[name].create(conn)
             RecommendationVersionRow.__table__.create(conn)
             CrawlResult.__table__.create(conn)
             for remainder in range(8):
@@ -66,8 +64,6 @@ def stand():
             session.add(CanonicalProject(id=PROJECT_ID, name="Canonical", url="https://example.com/",
                                          status="active", owner_id=ALICE, workspace_id=WORKSPACE,
                                          origin="https://example.com", path_prefix="/"))
-            # Explicitly equal UUIDs in this fixture; no domain-based legacy mapping is used.
-            session.add(Project(id=uuid.UUID(PROJECT_ID), name="Legacy FK fixture", domain="example.com"))
             session.flush()
             session.add(Task(id=uuid.UUID(TASK_ID), project_id=uuid.UUID(PROJECT_ID), url=TARGET_URL,
                              task_type=TaskType.UPDATE_META, status=TaskStatus.PENDING))

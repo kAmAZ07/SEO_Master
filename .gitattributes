@@ -7,3 +7,4 @@
 /tests/unit/test_hitl_handler.py text eol=crlf
 /frontend/src/pages/Dashboard.tsx text eol=crlf
 /services/management_service/tasks/periodic_tasks.py text eol=crlf
+/services/management_service/interlinkgenerator.py whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from services.management_service.db.session import SessionLocal
-from services.management_service.db.models import Project
+from services.management_service.canonical_projects import active_project_targets
 from services.management_service.orchestrator import run_optimization_cycle
 from services.management_service.prioritizer import prioritize_project_tasks
 from config.logging_config import get_logger
@@ -102,7 +102,7 @@ def reprioritize_all_projects(
 ) -> Dict[str, Any]:
     db = SessionLocal()
     try:
-        projects = db.query(Project).filter(Project.is_active.is_(True)).all()
+        projects = active_project_targets(db)
         results = []
         for project in projects:
             try:

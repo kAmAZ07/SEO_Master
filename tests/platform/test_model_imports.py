@@ -126,21 +126,25 @@ with (
                 "created_at", "updated_at",
             },
             "tasks": {
+                "canonical_project_id",
                 "id", "project_id", "task_type", "status", "url", "title", "description",
                 "impact_score", "effort_score", "priority_score", "metadata", "assigned_to",
                 "created_at", "updated_at", "started_at", "completed_at", "deployed_at",
             },
             "hitl_approvals": {
+                "canonical_project_id",
                 "id", "task_id", "project_id", "status", "diff_data", "impact_score",
                 "recommendation", "approved_by", "approved_at", "rejected_by",
                 "rejected_at", "rejection_reason", "metadata", "created_at", "updated_at",
             },
             "management_changelog": {
+                "canonical_project_id",
                 "id", "project_id", "task_id", "entity_id", "entity_type", "change_type",
                 "before_value", "after_value", "applied", "applied_at", "source",
                 "metadata", "created_at",
             },
             "hitl_history": {
+                "canonical_project_id",
                 "id", "approval_id", "task_id", "project_id", "version_id", "entry_type",
                 "content_hash", "entry_hash", "metadata", "created_at",
             },
@@ -150,6 +154,7 @@ with (
             },
         }
         expected_lengths = {
+            **{(name, "canonical_project_id"): 36 for name in ("tasks", "hitl_approvals", "management_changelog", "hitl_history")},
             ("projects", "name"): 255, ("projects", "domain"): 255, ("projects", "platform"): 50,
             ("tasks", "url"): 2048, ("tasks", "title"): 500, ("tasks", "assigned_to"): 255,
             ("hitl_approvals", "approved_by"): 255, ("hitl_approvals", "rejected_by"): 255,
@@ -163,10 +168,11 @@ with (
             ("management_outbox", "status"): 16, ("management_outbox", "error_code"): 64,
         }
         expected_foreign_keys = {
-            ("tasks", "project_id", "projects.id", "CASCADE"),
+            ("tasks", "canonical_project_id", "audit_schema.projects.id", "RESTRICT"),
             ("hitl_approvals", "task_id", "tasks.id", "CASCADE"),
-            ("hitl_approvals", "project_id", "projects.id", "CASCADE"),
-            ("management_changelog", "project_id", "projects.id", "CASCADE"),
+            ("hitl_approvals", "canonical_project_id", "audit_schema.projects.id", "RESTRICT"),
+            ("management_changelog", "canonical_project_id", "audit_schema.projects.id", "RESTRICT"),
+            ("hitl_history", "canonical_project_id", "audit_schema.projects.id", "RESTRICT"),
             ("management_changelog", "task_id", "tasks.id", "SET NULL"),
             ("hitl_history", "approval_id", "hitl_approvals.id", "RESTRICT"),
             ("hitl_history", "task_id", "tasks.id", "RESTRICT"),
@@ -225,6 +231,13 @@ with (
         for table in metadata.tables.values() for reference in table.foreign_keys
     }
     assert actual_foreign_keys == expected_foreign_keys, "FOREIGN_KEY_ACTION_DRIFT"
+    if profile == "management":
+        for name in ("tasks", "hitl_approvals", "management_changelog", "hitl_history"):
+            generated = metadata.tables[name].c.canonical_project_id
+            assert generated.computed is not None and generated.computed.persisted is True, "CANONICAL_BINDING_NOT_GENERATED"
+            assert str(generated.computed.sqltext) == "project_id::text" and not generated.nullable, "CANONICAL_BINDING_SUBSTITUTABLE"
+        for name in ("tasks", "hitl_approvals", "changelogs"):
+            assert inspect(models.Project).relationships[name].viewonly, "LEGACY_PROJECT_CAN_DELETE_CANONICAL_DATA"
     new_tables = {"hitl_history", "management_outbox"} if profile == "management" else set()
     json_defaults = [(table.name, "metadata") for table in metadata.tables.values() if table.name not in new_tables]
     if profile == "management":
@@ -275,7 +288,11 @@ with (
         for reference in table.foreign_keys:
             referred_table = reference.column.table
             assert isinstance(referred_table, Table), "UNRESOLVED_FOREIGN_KEY"
-            assert referred_table.metadata is metadata, "UNRESOLVED_FOREIGN_KEY"
+            if profile == "management" and reference.parent.name == "canonical_project_id":
+                assert referred_table.key == "audit_schema.projects" and reference.column.name == "id", "FOREIGN_CORE_REFERENCE_DRIFT"
+                assert set(referred_table.columns.keys()) == {"id"} and referred_table not in metadata.tables.values(), "CORE_REFERENCE_BECAME_OWNED"
+            else:
+                assert referred_table.metadata is metadata, "UNRESOLVED_FOREIGN_KEY"
         assert getattr(mapper.attrs["meta"], "columns")[0] is table.c.metadata, "META_ATTRIBUTE_DRIFT"
 
     if profile == "management":
@@ -286,10 +303,10 @@ with (
         )
         approval = models.HITLApproval(task=task, project=project, diff_data={})
         changelog = models.Changelog(task=task, project=project)
-        assert task in project.tasks and task.project is project, "PROJECT_TASK_RELATIONSHIP"
+        assert task.project is project and project.tasks == [], "LEGACY_RELATIONSHIP_WRITES_OWNERSHIP"
         assert task.hitl_approval is approval and approval.task is task, "APPROVAL_RELATIONSHIP"
-        assert approval in project.hitl_approvals, "PROJECT_APPROVAL_RELATIONSHIP"
-        assert changelog in project.changelogs and changelog in task.changelogs, "CHANGELOG_RELATIONSHIP"
+        assert approval.project is project and project.hitl_approvals == [], "LEGACY_RELATIONSHIP_WRITES_OWNERSHIP"
+        assert changelog.project is project and project.changelogs == [] and changelog in task.changelogs, "CHANGELOG_RELATIONSHIP"
         assert math.isclose(task.calculate_priority(), 0.68), "PRIORITY_BEHAVIOR_DRIFT"
         enum_contracts = {
             "TaskType": (

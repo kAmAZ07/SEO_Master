@@ -16,13 +16,25 @@ from sqlalchemy import (
     Index,
     CheckConstraint,
     UniqueConstraint,
+    Computed,
+    MetaData,
+    Table,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.orm import declarative_base, relationship, foreign
 from sqlalchemy.sql import func
 
 Base = declarative_base()
+
+# Reference-only Core column, outside owned metadata and the mapper registry.
+# Never import Core runtime models or create this table from Management metadata.
+_canonical_projects = Table("projects", MetaData(), Column("id", String(36), primary_key=True), schema="audit_schema")
+
+
+def _canonical_reference() -> Column[str]:
+    return Column("canonical_project_id", String(36), Computed("project_id::text", persisted=True),
+                  ForeignKey(_canonical_projects.c.id, ondelete="RESTRICT"), nullable=False)
 
 
 class TaskType(enum.Enum):
@@ -68,9 +80,10 @@ class Project(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
-    tasks = relationship("Task", back_populates="project", cascade="all, delete-orphan")
-    hitl_approvals = relationship("HITLApproval", back_populates="project", cascade="all, delete-orphan")
-    changelogs = relationship("Changelog", back_populates="project", cascade="all, delete-orphan")
+    # Archived legacy rows are not the owner/parent of canonical tasks.
+    tasks = relationship("Task", primaryjoin="Project.id == foreign(Task.project_id)", viewonly=True)
+    hitl_approvals = relationship("HITLApproval", primaryjoin="Project.id == foreign(HITLApproval.project_id)", viewonly=True)
+    changelogs = relationship("Changelog", primaryjoin="Project.id == foreign(Changelog.project_id)", viewonly=True)
 
     __table_args__ = (
         Index("idx_projects_domain", "domain"),
@@ -82,7 +95,8 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), nullable=False)
+    canonical_project_id = _canonical_reference()
 
     task_type = Column(SQLEnum(TaskType), nullable=False)
     status = Column(SQLEnum(TaskStatus), default=TaskStatus.PENDING, nullable=False)
@@ -105,7 +119,7 @@ class Task(Base):
     completed_at = Column(DateTime(timezone=True))
     deployed_at = Column(DateTime(timezone=True))
 
-    project = relationship("Project", back_populates="tasks")
+    project = relationship("Project", primaryjoin=foreign(project_id) == Project.id, viewonly=True)
     hitl_approval = relationship("HITLApproval", back_populates="task", uselist=False, cascade="all, delete-orphan")
     changelogs = relationship("Changelog", back_populates="task", cascade="all, delete-orphan")
 
@@ -128,7 +142,8 @@ class HITLApproval(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, unique=True)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), nullable=False)
+    canonical_project_id = _canonical_reference()
 
     status = Column(SQLEnum(HITLStatus), default=HITLStatus.PENDING, nullable=False)
 
@@ -149,7 +164,7 @@ class HITLApproval(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     task = relationship("Task", back_populates="hitl_approval")
-    project = relationship("Project", back_populates="hitl_approvals")
+    project = relationship("Project", primaryjoin=foreign(project_id) == Project.id, viewonly=True)
 
     __table_args__ = (
         Index("idx_hitl_approvals_task_id", "task_id"),
@@ -163,7 +178,8 @@ class Changelog(Base):
     __tablename__ = "management_changelog"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), nullable=False)
+    canonical_project_id = _canonical_reference()
     task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
 
     entity_id = Column(String(2048), nullable=False)
@@ -183,7 +199,7 @@ class Changelog(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
-    project = relationship("Project", back_populates="changelogs")
+    project = relationship("Project", primaryjoin=foreign(project_id) == Project.id, viewonly=True)
     task = relationship("Task", back_populates="changelogs")
 
     __table_args__ = (
@@ -204,6 +220,7 @@ class HITLHistory(Base):
     approval_id = Column(UUID(as_uuid=True), ForeignKey("hitl_approvals.id", ondelete="RESTRICT"), nullable=False)
     task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="RESTRICT"), nullable=False)
     project_id = Column(UUID(as_uuid=True), nullable=False)
+    canonical_project_id = _canonical_reference()
     version_id = Column(String(36), nullable=False)
     entry_type = Column(String(16), nullable=False)
     content_hash = Column(String(64), nullable=False)

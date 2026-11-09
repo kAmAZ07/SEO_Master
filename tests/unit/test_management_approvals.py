@@ -207,3 +207,38 @@ def test_management_runner_never_prints_vendor_errors_or_dsn(monkeypatch, capsys
     assert runner.main() == 1
     output = capsys.readouterr().out
     assert "MANAGEMENT_MIGRATION_FAILED" in output and secret not in output
+
+
+@pytest.mark.parametrize("method,path", [("GET", ""), ("POST", "/"), ("GET", "/old-id"),
+                                        ("PATCH", "/old-id"), ("DELETE", "/old-id")])
+def test_legacy_management_project_crud_is_retired_without_database_access(method, path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from services.management_service.api.endpoints import projects
+
+    app = FastAPI()
+    app.include_router(projects.router, prefix="/api/v1/projects")
+    response = TestClient(app).request(method, "/api/v1/projects" + path, json={"domain": "example.com"})
+    assert response.status_code == 410
+    assert response.json()["detail"] == "canonical_projects_are_managed_by_api_gateway"
+
+
+def test_internal_project_lookup_requires_service_identity_and_uses_core():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from services.management_service.api.endpoints import internal
+    from services.management_service.db.session import get_db
+    from services.management_service.config import settings
+
+    db = SimpleNamespace(scalar=Mock(return_value=True))
+    app = FastAPI()
+    app.include_router(internal.router, prefix="/internal")
+    app.dependency_overrides[get_db] = lambda: db
+    client = TestClient(app)
+    assert client.get("/internal/projects/project-id/exists").status_code == 401
+    db.scalar.assert_not_called()
+    headers = {"X-Internal-API-Key": settings.INTERNAL_API_KEY}
+    assert client.get("/internal/projects/project-id/exists", headers=headers).status_code == 200
+    assert "audit_schema.projects" in str(db.scalar.call_args.args[0])
+    db.scalar.return_value = False
+    assert client.get("/internal/projects/project-id/exists", headers=headers).status_code == 404

@@ -115,8 +115,8 @@ jobs:
           python -m pip install --require-hashes --only-binary=:all: -r locks/management-test.txt
       - name: Проверить strict-типы и lint новой миграционной линии
         run: |
-          python -B -m mypy --strict --explicit-package-bases services/management_service/migrations
-          python -B -m ruff check services/management_service/migrations tests/integration/test_management_migrations_postgres.py
+          python -B -m mypy --strict --explicit-package-bases services/management_service/migrations services/management_service/canonical_projects.py
+          python -B -m ruff check services/management_service/migrations services/management_service/canonical_projects.py tests/integration/test_management_migrations_postgres.py tests/integration/test_management_canonical_postgres.py
       - name: Проверить миграции, legacy-данные, роли и транзакции на отдельной БД
         run: |
           python -B - <<'PY'
@@ -137,6 +137,7 @@ jobs:
               raise SystemExit(pytest.main([
                   "-p", "pytest_asyncio.plugin", "-p", "no:cacheprovider", "--strict-config", "--strict-markers", "-q",
                   "tests/integration/test_management_migrations_postgres.py",
+                  "tests/integration/test_management_canonical_postgres.py",
                   "tests/integration/test_management_approvals_postgres.py",
                   "tests/integration/test_management_outbox_postgres.py",
               ], plugins=[RequiredTests()]))

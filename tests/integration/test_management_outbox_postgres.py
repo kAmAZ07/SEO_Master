@@ -15,6 +15,11 @@ import pytest
 from sqlalchemy import event, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
+from database.models import Project as CanonicalProject, Workspace
+from tests.integration.test_migrations_postgres import TempDatabase
+from tests.integration.test_management_migrations_postgres import legacy
+from services.management_service.migrations.runner import migrate
+from services.management_service.migrations.schema import LEDGER_HEAD
 
 from tests.integration.test_management_approvals_postgres import (
     ADMIN_URL, ALICE, BOB, APPROVAL, NOW, TASK_ID, decide, stand as approval_stand, state,
@@ -125,6 +130,11 @@ def test_history_does_not_expose_foreign_project_tagged_rows(stand):
     decide(engine, command)
     foreign = {"private": "foreign imported data"}
     with Session(engine) as db:
+        db.add(Workspace(id=BOB, owner_id=BOB, name="Foreign workspace", kind="personal"))
+        db.flush()
+        db.add(CanonicalProject(id=BOB, owner_id=BOB, workspace_id=BOB, name="Foreign project",
+                                url="https://example.com/", origin="https://example.com", path_prefix="/", status="active"))
+        db.flush()
         db.add(HITLHistory(id=uuid.uuid4(), approval_id=uuid.UUID(APPROVAL), task_id=uuid.UUID(TASK_ID),
                            project_id=uuid.UUID(BOB), version_id=version.version_id, entry_type="prepared",
                            content_hash=version.content_hash, entry_hash=snapshot_hash(foreign), meta=foreign))
@@ -151,14 +161,19 @@ def test_notification_replay_only_reads_existing_human_decision(stand):
         assert db.get(Task, uuid.UUID(TASK_ID)).status == TaskStatus.APPROVED
 
 
-def test_empty_revision_round_trip_preserves_old_task(stand):
-    engine, _, _ = stand
-    with engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
-        revision()["downgrade"]()
-        assert conn.scalar(text("SELECT to_regclass('public.hitl_history')")) is None
-        assert conn.scalar(text("SELECT count(*) FROM public.tasks")) == 1
-        revision()["upgrade"]()
-    assert state(engine) == "pending"
+def test_empty_revision_round_trip_preserves_old_task():
+    # Exercise the ledger revision at its own head, not beneath a newer FK graph.
+    with TempDatabase() as database:
+        original = legacy(database)
+        with database.engine.connect() as conn:
+            migrate(conn, expected_role="postgres", target=LEDGER_HEAD)
+        with database.engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
+            revision()["downgrade"]()
+            assert conn.scalar(text("SELECT to_regclass('public.hitl_history')")) is None
+            assert conn.scalar(text("SELECT count(*) FROM public.tasks")) == 1
+            revision()["upgrade"]()
+        assert database.rows("SELECT row_to_json(p) FROM public.projects p") == original[0]
+        assert database.rows("SELECT row_to_json(t) FROM public.tasks t") == original[1]
 
 
 def test_two_dispatchers_cannot_hold_the_same_active_lease(stand):

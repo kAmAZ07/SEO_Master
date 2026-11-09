@@ -6,7 +6,7 @@ import httpx
 
 from services.management_service.config import settings
 from services.management_service.db.session import SessionLocal
-from services.management_service.db.models import Project
+from services.management_service.canonical_projects import active_project_targets
 from config.logging_config import get_logger
 
 from services.management_service.tasks.celery_app import celery_app
@@ -34,24 +34,17 @@ def daily_ff_score_recalculation() -> Dict[str, Any]:
 
     db = SessionLocal()
     try:
-        projects = db.query(Project).filter(Project.is_active.is_(True)).all()
+        projects = active_project_targets(db)
         total = len(projects)
         succeeded = 0
         failed = 0
         errors = []
 
         for project in projects:
-            metadata = project.meta or {}
-
-            root_url = metadata.get("root_url") or metadata.get("url")
-            if not root_url:
-                domain = project.domain or ""
-                root_url = domain if "://" in domain else f"https://{domain}"
-
             payload: Dict[str, Any] = {
                 "project_id": str(project.id),
-                "root_url": root_url,
-                "content_text": metadata.get("last_crawl_text", ""),
+                "root_url": project.url,
+                "content_text": "",  # Missing content is not fabricated from archived project metadata.
             }
 
             correlation_id = f"ffscore-recalc-{project.id}"

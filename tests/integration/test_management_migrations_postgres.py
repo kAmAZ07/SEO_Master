@@ -13,17 +13,16 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.dialects.postgresql import ENUM
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.orm import Session
 
 from services.management_service.migrations.runner import migrate
 from services.management_service.migrations.schema import (
-    HEAD,
+    LEDGER_HEAD as HEAD,
     TABLES,
     require_runtime_role,
-    require_schema,
+    require_schema as require_current_schema,
 )
-from services.management_service.models import Base, Project, Task, TaskType
 from tests.integration.test_migrations_postgres import ADMIN_URL, TempDatabase
 
 pytestmark = pytest.mark.skipif(not ADMIN_URL, reason="TEST_PG_ADMIN_URL is not set")
@@ -38,7 +37,11 @@ def database():
 
 def run(database, direction="upgrade"):
     with database.engine.connect() as connection:
-        migrate(connection, expected_role="postgres", direction=direction)
+        migrate(connection, expected_role="postgres", direction=direction, target=HEAD)
+
+
+def require_schema(connection):
+    require_current_schema(connection, expected_head=HEAD)
 
 
 @contextmanager
@@ -55,34 +58,21 @@ def acting_as(database, role):
 
 
 def legacy(database):
+    frozen = runpy.run_path(str(ROOT / "services/management_service/migrations/versions/20261109_000_management_base.py"))
     with database.engine.begin() as connection:
-        for name in TABLES[:4]:
-            Base.metadata.tables[name].create(connection)
+        for name, values in frozen["ENUMS"].items():
+            ENUM(*values, name=name, schema="public").create(connection)
+        frozen["_snapshot"]().create_all(connection)
         connection.execute(
             text(
                 "CREATE VIEW public.retained_project_names AS SELECT id,name FROM public.projects"
             )
         )
     project, task = uuid.uuid4(), uuid.uuid4()
-    with Session(database.engine) as session:
-        session.add(
-            Project(
-                id=project,
-                name="Preserve",
-                domain="example.test",
-                settings={"keep": None},
-            )
-        )
-        session.flush()
-        session.add(
-            Task(
-                id=task,
-                project_id=project,
-                task_type=TaskType.UPDATE_META,
-                url="https://example.test/",
-            )
-        )
-        session.commit()
+    database.run("INSERT INTO public.projects (id,name,domain,platform,is_active,settings) "
+                 "VALUES (:id,'Preserve','example.test','wordpress',true,CAST(:settings AS jsonb))", id=project, settings='{"keep":null}')
+    database.run("INSERT INTO public.tasks (id,project_id,task_type,status,url) "
+                 "VALUES (:id,:project,'UPDATE_META','PENDING','https://example.test/')", id=task, project=project)
     return database.rows("SELECT row_to_json(p) FROM public.projects p"), database.rows(
         "SELECT row_to_json(t) FROM public.tasks t"
     )
@@ -322,7 +312,7 @@ def test_dedicated_non_superuser_migration_actor_owns_only_its_new_objects(datab
     )
     try:
         with acting_as(database, role) as connection:
-            migrate(connection, expected_role=role)
+            migrate(connection, expected_role=role, target=HEAD)
             require_schema(connection)
         assert (
             database.scalar(
@@ -392,6 +382,8 @@ def test_cli_status_does_not_create_missing_schema_and_upgrade_reaches_head(data
         "MANAGEMENT_FIXTURE_DSN",
         "--expected-role",
         "postgres",
+        "--target",
+        HEAD,
     ]
     result = subprocess.run(
         arguments, cwd=ROOT, env=environment, capture_output=True, text=True, timeout=30
@@ -405,7 +397,7 @@ def test_cli_status_does_not_create_missing_schema_and_upgrade_reaches_head(data
     result = subprocess.run(
         arguments, cwd=ROOT, env=environment, capture_output=True, text=True, timeout=30
     )
-    assert result.returncode == 0 and result.stdout.strip() == "MANAGEMENT_SCHEMA_READY"
+    assert result.returncode == 0 and result.stdout.strip() == "MANAGEMENT_LEDGER_READY_APPLICATION_BLOCKED"
     assert (
         database.scalar("SELECT version_num FROM public.management_alembic_version")
         == HEAD

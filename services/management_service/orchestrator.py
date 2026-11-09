@@ -11,7 +11,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.logging_config import get_logger
 from services.management_service.config import settings
-from services.management_service.db.models import HITLStatus, Task, TaskStatus
+from services.management_service.db.models import HITLApproval, HITLStatus, Task, TaskStatus
 from services.management_service.approval_policy import ApprovalError
 from services.management_service.approval_service import ApprovalRow, ApprovalService
 from services.management_service.events.publishers import publish_event
@@ -423,8 +423,11 @@ class OptimizationSaga:
         if not self.task_id:
             return
 
-        task = db.query(Task).filter(Task.id == self.task_id).first()
+        task = db.query(Task).filter(Task.id == self.task_id).populate_existing().with_for_update().first()
         if task:
+            if db.query(HITLApproval.id).filter(HITLApproval.task_id == task.id).first() is not None:
+                db.rollback()
+                return
             task.status = status
             task.updated_at = datetime.utcnow()
             db.commit()
@@ -433,7 +436,7 @@ class OptimizationSaga:
         if not self.task_id:
             return
 
-        task = db.query(Task).filter(Task.id == self.task_id).first()
+        task = db.query(Task).filter(Task.id == self.task_id).populate_existing().with_for_update().first()
         if not task:
             return
 

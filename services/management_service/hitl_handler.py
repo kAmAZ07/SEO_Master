@@ -1,12 +1,11 @@
 # services/management_service/hitl_handler.py (ДОПОЛНЕННАЯ ВЕРСИЯ)
 
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from services.management_service.approval_policy import ApprovalError
 from sqlalchemy.orm import Session
 
 from services.management_service.db.models import (
     Task,
-    TaskStatus,
     HITLApproval,
     HITLStatus
 )
@@ -52,49 +51,7 @@ class HITLHandler:
         correlation_id: Optional[str] = None
     ) -> HITLApproval:
 
-        task = self.db.query(Task).filter(Task.id == task_id).first()
-
-        if not task:
-            raise ValueError(f"Task {task_id} not found")
-
-        existing_approval = self.db.query(HITLApproval).filter(
-            HITLApproval.task_id == task_id
-        ).first()
-
-        if existing_approval:
-            raise ValueError(f"HITL approval already exists for task {task_id}")
-
-        hitl_approval = HITLApproval(
-            task_id=task_id,
-            project_id=task.project_id,
-            status=HITLStatus.PENDING,
-            diff_data=approval_data.diff_data,
-            impact_score=approval_data.impact_score,
-            recommendation=approval_data.recommendation,
-            meta={
-                "correlation_id": correlation_id,
-                "created_by": "management_service"
-            }
-        )
-
-        task.status = TaskStatus.PENDING
-
-        self.db.add(hitl_approval)
-        self.db.add(task)
-        self.db.commit()
-        self.db.refresh(hitl_approval)
-
-        logger.info(
-            f"Created HITL approval for task {task_id}",
-            extra={
-                "task_id": task_id,
-                "project_id": task.project_id,
-                "impact_score": approval_data.impact_score,
-                "correlation_id": correlation_id
-            }
-        )
-
-        return hitl_approval
+        raise ApprovalError("version_bound_preview_required")
 
     async def approve_task(
         self,
@@ -105,73 +62,7 @@ class HITLHandler:
     ) -> Dict[str, Any]:
         if decision.auto_deploy:
             raise ProposalHandoffError("version_bound_executor_required")
-        with hitl_processing_duration.time():
-            task = self.db.query(Task).filter(Task.id == task_id).first()
-
-            if not task:
-                hitl_errors_total.labels(error_type='task_not_found').inc()
-                raise ValueError(f"Task {task_id} not found")
-
-            hitl_approval = self.db.query(HITLApproval).filter(
-                HITLApproval.task_id == task_id
-            ).first()
-
-            if not hitl_approval:
-                hitl_errors_total.labels(error_type='approval_not_found').inc()
-                raise ValueError(f"HITL approval not found for task {task_id}")
-
-            if "recommendation_version" in hitl_approval.diff_data:
-                # Нельзя одобрить новую версию через старый маршрут, который
-                # доверяет user_id и не проверяет version/hash/role/expiry.
-                raise ProposalHandoffError("version_bound_authorization_required")
-
-            if hitl_approval.status != HITLStatus.PENDING:
-                hitl_errors_total.labels(error_type='already_processed').inc()
-                raise ValueError(f"HITL approval already processed with status {hitl_approval.status.value}")
-
-            hitl_approval.status = HITLStatus.APPROVED
-            hitl_approval.approved_by = approved_by
-            hitl_approval.approved_at = datetime.utcnow()
-
-            if decision.notes:
-                hitl_approval.meta = {
-                    **(hitl_approval.meta or {}),
-                    "approval_notes": decision.notes
-                }
-
-            task.status = TaskStatus.APPROVED
-            task.meta = {
-                **(task.meta or {}),
-                "approved_by": approved_by,
-                "approved_at": datetime.utcnow().isoformat()
-            }
-
-            self.db.add(hitl_approval)
-            self.db.add(task)
-            self.db.commit()
-
-            hitl_approvals_total.labels(status='approved').inc()
-
-            logger.info(
-                f"Task {task_id} approved by {approved_by}",
-                extra={
-                    "task_id": task_id,
-                    "project_id": task.project_id,
-                    "approved_by": approved_by,
-                    "correlation_id": correlation_id
-                }
-            )
-
-            return {
-                "task_id": str(task.id),
-                "project_id": str(task.project_id),
-                "status": "approved",
-                "approved_by": approved_by,
-                "approved_at": hitl_approval.approved_at.isoformat(),
-                "auto_deployed": False,
-                "notes": decision.notes,
-                "deployment_result": None
-            }
+        raise ApprovalError("verified_user_decision_required")
 
     def reject_task(
         self,
@@ -181,67 +72,7 @@ class HITLHandler:
         correlation_id: Optional[str] = None
     ) -> Dict[str, Any]:
 
-        task = self.db.query(Task).filter(Task.id == task_id).first()
-
-        if not task:
-            hitl_errors_total.labels(error_type='task_not_found').inc()
-            raise ValueError(f"Task {task_id} not found")
-
-        hitl_approval = self.db.query(HITLApproval).filter(
-            HITLApproval.task_id == task_id
-        ).first()
-
-        if not hitl_approval:
-            hitl_errors_total.labels(error_type='approval_not_found').inc()
-            raise ValueError(f"HITL approval not found for task {task_id}")
-
-        if hitl_approval.status != HITLStatus.PENDING:
-            hitl_errors_total.labels(error_type='already_processed').inc()
-            raise ValueError(f"HITL approval already processed with status {hitl_approval.status.value}")
-
-        hitl_approval.status = HITLStatus.REJECTED
-        hitl_approval.rejected_by = rejected_by
-        hitl_approval.rejected_at = datetime.utcnow()
-        hitl_approval.rejection_reason = decision.rejection_reason or "No reason provided"
-
-        if decision.notes:
-            hitl_approval.meta = {
-                **(hitl_approval.meta or {}),
-                "rejection_notes": decision.notes
-            }
-
-        task.status = TaskStatus.REJECTED
-        task.meta = {
-            **(task.meta or {}),
-            "rejected_by": rejected_by,
-            "rejected_at": datetime.utcnow().isoformat(),
-            "rejection_reason": decision.rejection_reason
-        }
-
-        self.db.add(hitl_approval)
-        self.db.add(task)
-        self.db.commit()
-
-        hitl_approvals_total.labels(status='rejected').inc()
-
-        logger.info(
-            f"Task {task_id} rejected by {rejected_by}",
-            extra={
-                "task_id": task_id,
-                "project_id": task.project_id,
-                "rejected_by": rejected_by,
-                "reason": decision.rejection_reason,
-                "correlation_id": correlation_id
-            }
-        )
-
-        return {
-            "task_id": str(task.id),
-            "status": "rejected",
-            "rejected_by": rejected_by,
-            "rejected_at": hitl_approval.rejected_at.isoformat(),
-            "rejection_reason": decision.rejection_reason
-        }
+        raise ApprovalError("verified_user_decision_required")
 
     async def batch_approve_tasks(
         self,
@@ -427,42 +258,7 @@ def handle_hitl_rejected_event(
     correlation_id: Optional[str] = None
 ) -> Dict[str, Any]:
 
-    payload = event.get("payload", {})
-    task_id = payload.get("task_id")
-    rejected_by = payload.get("rejected_by")
-    rejection_reason = payload.get("rejection_reason")
-    notes = payload.get("notes")
-
-    if not task_id:
-        raise ValueError("task_id is required in event payload")
-
-    if not rejected_by:
-        raise ValueError("rejected_by is required in event payload")
-
-    handler = HITLHandler(db)
-
-    decision = HITLDecision(
-        rejection_reason=rejection_reason,
-        notes=notes
-    )
-
-    result = handler.reject_task(
-        task_id=task_id,
-        rejected_by=rejected_by,
-        decision=decision,
-        correlation_id=correlation_id
-    )
-
-    logger.info(
-        f"HITLRejected event processed for task {task_id}",
-        extra={
-            "task_id": task_id,
-            "rejected_by": rejected_by,
-            "correlation_id": correlation_id
-        }
-    )
-
-    return result
+    raise ApprovalError("decision_notification_cannot_make_human_decision")
 
 
 def create_hitl_approval_for_task(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -11,8 +10,20 @@ from services.management_service.db.session import get_db
 from services.management_service.events.task_created import publish_task_created_event
 from services.management_service.prioritizer import prioritize_project_tasks
 from services.management_service.schemas.task import TaskCreate, TaskUpdate
+from services.management_service.approval_identity import authenticated_actor
+from services.management_service.approval_policy import ApprovalError, UserActor
+from services.management_service.approval_service import ApprovalService, TaskRow
+from services.management_service.task_access import accessible_task, check_target, check_user_metadata, require_editable
+from shared.projects.roles import Permission
 
 router = APIRouter()
+
+
+def _task(db: Session, task_id: str, actor: UserActor, permission: Permission, *, lock: bool = False) -> TaskRow:
+    try:
+        return accessible_task(db, task_id, actor, permission, lock=lock)
+    except ApprovalError as exc:
+        raise HTTPException(exc.http_status, exc.code) from exc
 
 
 def _status_from_query(value: Optional[str]) -> TaskStatus | None:
@@ -57,9 +68,15 @@ def list_tasks(
     status_filter: Optional[str] = Query(None, alias="status"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    actor: UserActor = Depends(authenticated_actor),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    query = db.query(Task)
+    projects = ApprovalService(db).accessible_projects(actor)
+    if project_id and project_id not in projects:
+        raise HTTPException(404, "task_not_found")
+    if not projects:
+        return []
+    query = db.query(Task).filter(Task.project_id.in_(projects))
     if project_id:
         query = query.filter(Task.project_id == project_id)
     status_value = _status_from_query(status_filter)
@@ -71,7 +88,13 @@ def list_tasks(
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 @router.post("/", status_code=status.HTTP_201_CREATED)
-async def create_task(payload: TaskCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
+async def create_task(payload: TaskCreate, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        scope = ApprovalService(db).project_scope(str(payload.project_id), actor, Permission.MANAGE)
+        check_target(scope, payload.url)
+        check_user_metadata(dict(payload.metadata))
+    except ApprovalError as exc:
+        raise HTTPException(exc.http_status, exc.code) from exc
     task_type = payload.task_type if isinstance(payload.task_type, TaskType) else TaskType(payload.task_type)
     task = Task(
         project_id=payload.project_id,
@@ -101,18 +124,23 @@ async def create_task(payload: TaskCreate, db: Session = Depends(get_db)) -> dic
 
 
 @router.get("/{task_id}")
-def get_task(task_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if not task:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task_not_found")
+def get_task(task_id: str, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
+    task = _task(db, task_id, actor, Permission.READ)
     return _serialize_task(task)
 
 
 @router.patch("/{task_id}")
-def update_task(task_id: str, payload: TaskUpdate, db: Session = Depends(get_db)) -> dict[str, Any]:
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if not task:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task_not_found")
+def update_task(task_id: str, payload: TaskUpdate, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
+    task = _task(db, task_id, actor, Permission.MANAGE, lock=True)
+    try:
+        if "status" in payload.model_fields_set:
+            raise ApprovalError("task_transition_requires_authoritative_command")
+        require_editable(db, task)
+        check_user_metadata(dict(payload.metadata) if payload.metadata is not None else None)
+        if payload.url is not None:
+            check_target(ApprovalService(db).project_scope(str(task.project_id), actor, Permission.MANAGE), payload.url)
+    except ApprovalError as exc:
+        raise HTTPException(exc.http_status, exc.code) from exc
 
     updates = payload.model_dump(exclude_unset=True)
     metadata = updates.pop("metadata", None)
@@ -123,10 +151,8 @@ def update_task(task_id: str, payload: TaskUpdate, db: Session = Depends(get_db)
             value = TaskType(value)
         setattr(task, field_name, value)
     if metadata is not None:
-        task.meta = metadata
+        task.meta = {**(task.meta or {}), **metadata}
     task.calculate_priority()
-    if task.status == TaskStatus.COMPLETED and task.completed_at is None:
-        task.completed_at = datetime.now(timezone.utc)
     db.add(task)
     db.commit()
     db.refresh(task)
@@ -134,9 +160,7 @@ def update_task(task_id: str, payload: TaskUpdate, db: Session = Depends(get_db)
 
 
 @router.post("/{task_id}/prioritize")
-def reprioritize_task_project(task_id: str, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if not task:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task_not_found")
+def reprioritize_task_project(task_id: str, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    task = _task(db, task_id, actor, Permission.MANAGE, lock=True)
     tasks = prioritize_project_tasks(db, str(task.project_id))
     return [_serialize_task(item) for item in tasks]

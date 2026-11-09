@@ -165,6 +165,9 @@ class ApprovalService:
             "AND m.role IN ('owner','admin','reviewer','deployer','viewer')"
         ), {"actor_id": actor.user_id}).scalars())
 
+    def project_scope(self, project_id: str, actor: UserActor, permission: Permission) -> Mapping[str, Any]:
+        return self._scope(project_id, actor, permission)
+
     def readable(self, task_id: str, actor: UserActor) -> tuple[ApprovalRow, TaskRow]:
         task = cast(TaskRow | None, self.db.query(Task).filter(Task.id == task_id).first())
         if task is None:
@@ -238,6 +241,8 @@ class ApprovalService:
                 | {"pages": [evidence["page"]]}, project_id=version.project_id,
                 task_id=str(task.id), url=task.url, operation=version.operation_type.value,
             )
+            # Preserve the reviewed entity binding; fresh page facts/evidence still come only from Audit.
+            request = type(request).model_validate({**request.model_dump(mode="json"), "entity": version.target.entity})
             proposal_result({"project_id": version.project_id, "target_url": request.target_url,
                              "items": [{"operation_type": version.operation_type.value, "status": "existing",
                                         "version": version.model_dump(mode="json")}]}, request)

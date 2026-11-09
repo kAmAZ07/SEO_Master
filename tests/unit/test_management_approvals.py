@@ -242,3 +242,20 @@ def test_internal_project_lookup_requires_service_identity_and_uses_core():
     assert "audit_schema.projects" in str(db.scalar.call_args.args[0])
     db.scalar.return_value = False
     assert client.get("/internal/projects/project-id/exists", headers=headers).status_code == 404
+
+
+def test_task_api_rejects_unauthenticated_reads_before_querying_data():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from services.management_service.api.endpoints import tasks
+    from services.management_service.db.session import get_db
+    from unittest.mock import MagicMock
+
+    db = MagicMock()
+    db.query.return_value.filter.return_value.order_by.return_value.offset.return_value.limit.return_value.all.return_value = []
+    app = FastAPI()
+    app.include_router(tasks.router, prefix="/api/v1/tasks")
+    app.dependency_overrides[get_db] = lambda: db
+    response = TestClient(app, raise_server_exceptions=False).get("/api/v1/tasks")
+    assert response.status_code == 401
+    db.query.assert_not_called()

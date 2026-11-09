@@ -266,6 +266,7 @@ def test_saved_saga_context_does_not_mutate_previous_jsonb_or_follow_live_change
     db = Mock()
     db.query.return_value.filter.return_value.first.return_value = task
     saga = orchestrator.OptimizationSaga(PROJECT_ID, TARGET_URL, TASK_ID)
+    db.query.return_value.filter.return_value.populate_existing.return_value.with_for_update.return_value.first.return_value = task
     saga.context = {"evidence": {"hash": "captured"}}
     asyncio.run(saga._save_saga_state(db))
     assert original == {"saga_state": "initiated", "saga_context": {"previous": True}}
@@ -333,8 +334,10 @@ def test_bound_version_cannot_be_approved_by_legacy_user_id_only_call():
         diff_data={"recommendation_version": {"version_id": "fixture"}},
     )
     db.query.side_effect = [task_query, approval_query]
-    with pytest.raises(ProposalHandoffError, match="version_bound_authorization_required"):
+    from services.management_service.approval_policy import ApprovalError
+    with pytest.raises(ApprovalError, match="verified_user_decision_required"):
         asyncio.run(HITLHandler(db).approve_task(TASK_ID, "untrusted-body-user", HITLDecision()))
+    db.query.assert_not_called()
     db.add.assert_not_called()
     db.commit.assert_not_called()
 

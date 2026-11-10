@@ -1,7 +1,10 @@
+import { useEffect, useRef } from 'react';
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom';
 import { Provider } from 'react-redux';
 import { store } from './store/store';
-import { useAppSelector } from './store/hooks';
+import { useAppDispatch, useAppSelector } from './store/hooks';
+import { loadUser } from './store/slices/authSlice';
+import { PENDING_PROJECT_SAVE_KEY } from './api/session';
 import Dashboard from './pages/Dashboard';
 import Login from './pages/auth/Login';
 import Register from './pages/auth/Register';
@@ -14,15 +17,37 @@ import ContentOptimization from './pages/ContentOptimization';
 import Backlinks from './pages/Backlinks';
 import HITL from './pages/HITL';
 import Settings from './pages/Settings';
+import NotFound from './pages/NotFound';
 import Layout from './components/Layout';
 import PrivateRoute from './components/PrivateRoute';
+import Loader from './components/ui/Loader';
+
+// При старте с сохранённым токеном профиль запрашивается заново: токен сам по себе входом не считается.
+const SessionBootstrap = () => {
+  const dispatch = useAppDispatch();
+  const sessionStatus = useAppSelector((state) => state.auth.sessionStatus);
+  const started = useRef(false);
+
+  useEffect(() => {
+    if (sessionStatus === 'restoring' && !started.current) {
+      started.current = true;
+      void dispatch(loadUser());
+    }
+  }, [dispatch, sessionStatus]);
+
+  return null;
+};
 
 const HomeRoute = () => {
-  const { isAuthenticated, token } = useAppSelector((state) => state.auth);
+  const sessionStatus = useAppSelector((state) => state.auth.sessionStatus);
 
-  if (isAuthenticated || token) {
+  if (sessionStatus === 'restoring') {
+    return <Loader />;
+  }
+
+  if (sessionStatus === 'authenticated') {
     try {
-      const pendingSave = JSON.parse(localStorage.getItem('seoMaster.pendingProjectSave') || 'null');
+      const pendingSave = JSON.parse(localStorage.getItem(PENDING_PROJECT_SAVE_KEY) || 'null');
       if (pendingSave?.uid) {
         return <Navigate to={`/audit/results/${pendingSave.uid}?saveProject=1`} replace />;
       }
@@ -98,11 +123,16 @@ const router = createBrowserRouter([
         element: <Settings />
       },
   ]},
+  {
+    path: '*',
+    element: <NotFound />,
+  },
 ]);
 
 function App() {
   return (
     <Provider store={store}>
+      <SessionBootstrap />
       <RouterProvider router={router} />
     </Provider>
   );

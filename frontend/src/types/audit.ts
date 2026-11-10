@@ -3,7 +3,17 @@ export interface AuditRequest {
   projectId?: string
 }
 
-export type AuditWorkflowStatus = 'queued' | 'pending' | 'processing' | 'in_progress' | 'completed' | 'failed'
+// Статусы жизненного цикла публичного аудита (services/audit_service/public_policy.py).
+// 'unknown' — клиентский статус для значения, которого фронтенд не знает: его нельзя выдавать за «в работе».
+export type AuditWorkflowStatus =
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'partial'
+  | 'failed'
+  | 'cancelled'
+  | 'expired'
+  | 'unknown'
 export type AuditFindingStatus = 'success' | 'warning' | 'error' | 'info'
 
 export interface AuditIssueSummary {
@@ -82,10 +92,14 @@ export interface AuditStatus {
   status: AuditWorkflowStatus
   progress: number
   createdAt: string
-  score: number
+  // null — сервер не вернул оценку (например, аудит не завершён): число не выдумывается на клиенте.
+  score: number | null
   issues: AuditIssueSummary
   details: AuditFinding[]
   summary?: AuditSummary
   pages?: AuditPage[]
   error?: string
+  // Причины неполного покрытия (partial) и код ошибки из результата сервера.
+  partialReasons?: string[]
+  errorCode?: string
 }

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../../store/hooks'
+import { PENDING_PROJECT_SAVE_KEY } from '../../api/session'
+import { safeRedirectPath } from '../../utils/safeRedirect'
 import { clearError, login } from '../../store/slices/authSlice'
 import Input from '../../components/ui/Input'
 import Button from '../../components/ui/Button'
 
-const PENDING_PROJECT_SAVE_KEY = 'seoMaster.pendingProjectSave'
 
 const getPendingSaveRedirect = () => {
   try {
@@ -16,11 +17,16 @@ const getPendingSaveRedirect = () => {
   }
 }
 
+const SESSION_NOTICES = {
+  session_expired: 'Сессия истекла или была завершена. Войдите снова.',
+  password_changed: 'Пароль изменён, все сессии завершены. Войдите с новым паролем.',
+} as const
+
 const Login = () => {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const dispatch = useAppDispatch()
-  const { loading, error } = useAppSelector((state) => state.auth)
+  const { loading, error, sessionNotice } = useAppSelector((state) => state.auth)
 
   const [formData, setFormData] = useState({
     email: '',
@@ -42,8 +48,7 @@ const Login = () => {
       }),
     )
     if (login.fulfilled.match(result)) {
-      const redirect = searchParams.get('redirect') || getPendingSaveRedirect()
-      navigate(redirect?.startsWith('/') ? redirect : '/')
+      navigate(safeRedirectPath(searchParams.get('redirect')) ?? getPendingSaveRedirect() ?? '/')
     }
   }
 
@@ -67,8 +72,14 @@ const Login = () => {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
+          {sessionNotice && !error && (
+            <div role="status" className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+              {SESSION_NOTICES[sessionNotice]}
+            </div>
+          )}
+
           {error && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
             </div>
           )}

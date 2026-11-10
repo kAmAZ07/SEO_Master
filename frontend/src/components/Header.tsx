@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { AlertTriangle, Bell, CheckCircle2, ClipboardCheck, FileCheck2, ListTodo, TrendingUp } from 'lucide-react'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import { logout } from '../store/slices/authSlice'
@@ -49,6 +49,7 @@ const NotificationIcon = ({ item }: { item: NotificationItem }) => {
 
 const Header = () => {
   const dispatch = useAppDispatch()
+  const navigate = useNavigate()
   const { user } = useAppSelector((state) => state.auth)
   const { items, readIds, loading, error } = useAppSelector((state) => state.notifications)
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false)
@@ -94,8 +95,10 @@ const Header = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  const handleLogout = () => {
-    dispatch(logout())
+  const handleLogout = async () => {
+    // Выход очищает все срезы (в том числе уведомления); на вход ведём явно, без возврата на закрытую страницу.
+    await dispatch(logout())
+    navigate('/login', { replace: true })
   }
 
   return (
@@ -213,7 +216,8 @@ const Header = () => {
             <div className="flex flex-col">
               <span className="text-sm font-medium text-gray-900">{user?.email || 'Пользователь'}</span>
               <button
-                onClick={handleLogout}
+                onClick={() => void handleLogout()}
+                type="button"
                 className="text-left text-xs text-gray-500 hover:text-gray-700"
               >
                 Выйти

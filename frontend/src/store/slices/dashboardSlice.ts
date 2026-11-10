@@ -9,6 +9,7 @@ import {
   type CreateProjectPayload,
 } from '@/api/dashboardAPI'
 import { getApiErrorMessage } from '@/api/authAPI'
+import { parseApiError } from '@/utils/apiError'
 
 interface DashboardState {
   projects: Project[]
@@ -16,6 +17,19 @@ interface DashboardState {
   stats: DashboardStats | null
   loading: boolean
   error: string | null
+  // Карточка проекта загружается отдельно от списков: её ошибки и ожидание не смешиваются с панелью.
+  detailsLoading: boolean
+  detailsError: string | null
+  detailsNotFound: boolean
+  // Запрос карточки, ответ которого ещё принимается; ответ по другому проекту/запросу отбрасывается.
+  detailsRequestId: string | null
+  projectsRequestId: string | null
+  statsRequestId: string | null
+}
+
+interface DetailsRejection {
+  message: string
+  notFound: boolean
 }
 
 const initialState: DashboardState = {
@@ -24,6 +38,12 @@ const initialState: DashboardState = {
   stats: null,
   loading: false,
   error: null,
+  detailsLoading: false,
+  detailsError: null,
+  detailsNotFound: false,
+  detailsRequestId: null,
+  projectsRequestId: null,
+  statsRequestId: null,
 }
 
 export const loadProjects = createAsyncThunk<Project[], void, { rejectValue: string }>(
@@ -48,13 +68,16 @@ export const loadStats = createAsyncThunk<DashboardStats, void, { rejectValue: s
   },
 )
 
-export const loadProjectDetails = createAsyncThunk<Project, string, { rejectValue: string }>(
+export const loadProjectDetails = createAsyncThunk<Project, string, { rejectValue: DetailsRejection }>(
   'dashboard/loadProjectDetails',
   async (projectId, { rejectWithValue }) => {
     try {
       return await fetchProjectDetails(projectId)
     } catch (error) {
-      return rejectWithValue(getApiErrorMessage(error, 'Failed to load project details.'))
+      return rejectWithValue({
+        message: getApiErrorMessage(error, 'Не удалось загрузить проект.'),
+        notFound: parseApiError(error).status === 404,
+      })
     }
   },
 )
@@ -94,32 +117,85 @@ const setError = (state: DashboardState, message?: string | null) => {
 
 const dashboardSlice = createSlice({
   name: 'dashboard',
-  initialState,
-  reducers: {},
+  initialState: () => initialState,
+  reducers: {
+    // Экран проекта закрыт или открыт другой: прежняя карточка не должна мелькать на новом маршруте.
+    clearCurrentProject: (state) => {
+      state.currentProject = null
+      state.detailsLoading = false
+      state.detailsError = null
+      state.detailsNotFound = false
+      state.detailsRequestId = null
+    },
+  },
   extraReducers: (builder) => {
     builder
-      .addCase(loadProjects.pending, setLoading)
+      .addCase(loadProjects.pending, (state, action) => {
+        setLoading(state)
+        state.projectsRequestId = action.meta.requestId
+      })
       .addCase(loadProjects.fulfilled, (state, action) => {
+        if (state.projectsRequestId !== action.meta.requestId) {
+          return
+        }
         state.loading = false
         state.projects = action.payload
       })
-      .addCase(loadProjects.rejected, (state, action) => setError(state, action.payload ?? action.error.message))
-      .addCase(loadStats.pending, setLoading)
+      .addCase(loadProjects.rejected, (state, action) => {
+        if (state.projectsRequestId !== action.meta.requestId) {
+          return
+        }
+        setError(state, action.payload ?? action.error.message)
+      })
+      .addCase(loadStats.pending, (state, action) => {
+        setLoading(state)
+        state.statsRequestId = action.meta.requestId
+      })
       .addCase(loadStats.fulfilled, (state, action) => {
+        if (state.statsRequestId !== action.meta.requestId) {
+          return
+        }
         state.loading = false
         state.stats = action.payload
       })
-      .addCase(loadStats.rejected, (state, action) => setError(state, action.payload ?? action.error.message))
-      .addCase(loadProjectDetails.pending, setLoading)
+      .addCase(loadStats.rejected, (state, action) => {
+        if (state.statsRequestId !== action.meta.requestId) {
+          return
+        }
+        setError(state, action.payload ?? action.error.message)
+      })
+      .addCase(loadProjectDetails.pending, (state, action) => {
+        state.detailsRequestId = action.meta.requestId
+        state.detailsLoading = true
+        state.detailsError = null
+        state.detailsNotFound = false
+        if (state.currentProject?.id !== action.meta.arg) {
+          state.currentProject = null
+        }
+      })
       .addCase(loadProjectDetails.fulfilled, (state, action) => {
-        state.loading = false
+        if (state.detailsRequestId !== action.meta.requestId) {
+          return
+        }
+        state.detailsLoading = false
         state.currentProject = action.payload
       })
-      .addCase(loadProjectDetails.rejected, (state, action) => setError(state, action.payload ?? action.error.message))
+      .addCase(loadProjectDetails.rejected, (state, action) => {
+        if (state.detailsRequestId !== action.meta.requestId) {
+          return
+        }
+        state.detailsLoading = false
+        state.detailsError = action.payload?.message ?? action.error.message ?? 'Не удалось загрузить проект.'
+        state.detailsNotFound = Boolean(action.payload?.notFound)
+        if (action.payload?.notFound) {
+          state.currentProject = null
+        }
+      })
       .addCase(createProject.pending, setLoading)
       .addCase(createProject.fulfilled, (state, action) => {
         state.loading = false
-        state.projects = [action.payload, ...state.projects]
+        // Создание идемпотентно: для той же области сервер возвращает существующий проект, дубль в список не добавляем.
+        state.projects = [action.payload, ...state.projects.filter((project) => project.id !== action.payload.id)]
       })
       .addCase(createProject.rejected, (state, action) => setError(state, action.payload ?? action.error.message))
       .addCase(removeProject.pending, setLoading)
@@ -134,4 +210,5 @@ const dashboardSlice = createSlice({
   },
 })
 
+export const { clearCurrentProject } = dashboardSlice.actions
 export default dashboardSlice.reducer

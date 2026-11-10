@@ -23,7 +23,8 @@ pytestmark = pytest.mark.skipif(not ADMIN_URL, reason="TEST_PG_ADMIN_URL is not 
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = "20260414_001_crawl_partitions"
-HEAD = "20261109_001_hitl_barrier"
+PREVIOUS_HEAD = "20261109_001_hitl_barrier"
+HEAD = "20261110_001_legacy_map_unproven"
 AL4_TABLES = ("workspaces", "workspace_members", "projects", "domain_authorizations", "legacy_project_id_map", "public_audit_results")
 
 
@@ -175,12 +176,13 @@ def test_management_projects_are_mapped_without_merging_across_users(db):
 
     mapped = {
         r[0]: r[1:]
-        for r in db.rows("SELECT legacy_id, status, project_id FROM audit_schema.legacy_project_id_map")
+        for r in db.rows("SELECT legacy_id, status, project_id, candidate_project_id FROM audit_schema.legacy_project_id_map")
     }
-    assert mapped["11111111-1111-1111-1111-111111111111"] == ("matched", "p5")
-    assert mapped["22222222-2222-2222-2222-222222222222"] == ("ambiguous", None)  # example.com у двух пользователей
-    assert mapped["33333333-3333-3333-3333-333333333333"] == ("unmatched", None)
-    assert mapped["44444444-4444-4444-4444-444444444444"] == ("unmatched", None)
+    # Совпадение по host не доказывает владельца (в management нет владельца): только кандидат, без project_id.
+    assert mapped["11111111-1111-1111-1111-111111111111"] == ("candidate", None, "p5")
+    assert mapped["22222222-2222-2222-2222-222222222222"] == ("ambiguous", None, None)  # example.com у двух пользователей
+    assert mapped["33333333-3333-3333-3333-333333333333"] == ("unmatched", None, None)
+    assert mapped["44444444-4444-4444-4444-444444444444"] == ("unmatched", None, None)
     assert db.scalar("SELECT count(*) FROM public.projects") == 4  # таблица management не тронута
 
 
@@ -300,11 +302,11 @@ def test_deleting_a_project_removes_its_authorizations_and_unlinks_the_id_map(mi
     migrated.run(
         "INSERT INTO audit_schema.domain_authorizations (id, project_id, workspace_id, scope_origin, scope_path_prefix, challenge_hash, subject_user_id, issued_at, expires_at) "
         "VALUES ('d1', 'p1', 'w1', 'https://a.test', '/', 'h', 'u1', now(), now());"
-        "INSERT INTO audit_schema.legacy_project_id_map (id, source, legacy_id, project_id, status) VALUES ('l1', 's', '1', 'p1', 'matched')"
+        "INSERT INTO audit_schema.legacy_project_id_map (id, source, legacy_id, candidate_project_id, status) VALUES ('l1', 's', '1', 'p1', 'candidate')"
     )
     migrated.run("DELETE FROM audit_schema.projects WHERE id = 'p1'")
     assert migrated.scalar("SELECT count(*) FROM audit_schema.domain_authorizations") == 0
-    assert migrated.rows("SELECT project_id, status FROM audit_schema.legacy_project_id_map") == [(None, "matched")]
+    assert migrated.rows("SELECT candidate_project_id, status FROM audit_schema.legacy_project_id_map") == [(None, "candidate")]
 
 
 def test_workspace_with_projects_cannot_be_deleted(migrated):
@@ -351,3 +353,74 @@ def test_init_schema_sql_matches_the_migrated_schema(db):
         init_indexes = {r[0].split("ON ", 1)[-1] if False else r[0] for r in fresh.rows(indexes, tables=["workspaces", "workspace_members", "domain_authorizations", "legacy_project_id_map"])}
         migrated_indexes = {r[0] for r in db.rows(indexes, tables=["workspaces", "workspace_members", "domain_authorizations", "legacy_project_id_map"])}
         assert init_indexes == migrated_indexes
+
+
+# --- legacy_project_id_map: совпадение по host не доказывает владельца --------------------------------------------
+
+LEGACY_MAP_INSERT = (
+    "INSERT INTO audit_schema.legacy_project_id_map (id, source, legacy_id, project_id, candidate_project_id, status) "
+    "VALUES (:id, 's', :id, :project_id, :candidate, :status)"
+)
+
+
+@pytest.mark.parametrize(
+    "project_id, candidate, status",
+    [
+        ("p1", None, "candidate"),     # подтверждённого соответствия нет: project_id всегда пуст
+        ("p1", "p1", "candidate"),
+        (None, "p1", "unmatched"),     # кандидат только у статуса candidate
+        (None, "p1", "ambiguous"),
+        (None, None, "matched"),       # прежний автоматический статус больше недопустим
+        (None, None, "confirmed"),
+    ],
+)
+def test_legacy_map_rejects_unproven_matches_stored_as_proof(migrated, project_id, candidate, status):
+    with pytest.raises(sa.exc.IntegrityError):
+        migrated.run(LEGACY_MAP_INSERT, id="x1", project_id=project_id, candidate=candidate, status=status)
+
+
+@pytest.mark.parametrize("candidate, status", [("p1", "candidate"), (None, "candidate"), (None, "unmatched"), (None, "ambiguous")])
+def test_legacy_map_accepts_candidates_without_proof(migrated, candidate, status):
+    migrated.run(LEGACY_MAP_INSERT, id="x1", project_id=None, candidate=candidate, status=status)
+    assert migrated.rows("SELECT status, project_id, candidate_project_id FROM audit_schema.legacy_project_id_map") == [(status, None, candidate)]
+
+
+def test_legacy_map_candidate_must_be_an_existing_project(migrated):
+    with pytest.raises(sa.exc.IntegrityError):
+        migrated.run(LEGACY_MAP_INSERT, id="x1", project_id=None, candidate="no-such-project", status="candidate")
+
+
+def test_previous_automatic_matches_become_candidates_and_downgrade_restores_them(db):
+    db.alembic("upgrade", PREVIOUS_HEAD)
+    db.run(
+        """
+        INSERT INTO audit_schema.workspaces (id, name, kind, owner_id) VALUES ('w1', 'a', 'personal', 'u1');
+        INSERT INTO audit_schema.projects (id, name, url, owner_id, workspace_id, origin, path_prefix)
+            VALUES ('p1', 'A', 'https://a.test/', 'u1', 'w1', 'https://a.test', '/');
+        INSERT INTO audit_schema.legacy_project_id_map (id, source, legacy_id, project_id, status, reason) VALUES
+            ('m1', 'management.projects', 'a', 'p1', 'matched', 'single canonical project with the same host'),
+            ('m2', 'management.projects', 'b', NULL, 'unmatched', 'no canonical project with this host'),
+            ('m3', 'management.projects', 'c', NULL, 'ambiguous', '2 canonical projects share this host'),
+            ('m4', 'management.projects', 'd', NULL, 'matched', 'project deleted after matching');
+        """
+    )
+    select = "SELECT id, status, project_id, candidate_project_id FROM audit_schema.legacy_project_id_map ORDER BY id"
+    db.alembic("upgrade", "head")
+    assert db.rows(select) == [
+        ("m1", "candidate", None, "p1"),
+        ("m2", "unmatched", None, None),
+        ("m3", "ambiguous", None, None),
+        ("m4", "candidate", None, None),
+    ]
+    assert "owner not proven" in db.scalar("SELECT reason FROM audit_schema.legacy_project_id_map WHERE id = 'm1'")
+
+    db.alembic("downgrade", PREVIOUS_HEAD)
+    assert db.rows("SELECT id, status, project_id FROM audit_schema.legacy_project_id_map ORDER BY id") == [
+        ("m1", "matched", "p1"),
+        ("m2", "unmatched", None),
+        ("m3", "ambiguous", None),
+        ("m4", "matched", None),
+    ]
+    assert db.scalar("SELECT reason FROM audit_schema.legacy_project_id_map WHERE id = 'm1'") == "single canonical project with the same host"
+    db.alembic("upgrade", "head")  # повторный накат после отката
+    assert db.rows(select)[0] == ("m1", "candidate", None, "p1")

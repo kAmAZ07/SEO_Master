@@ -100,11 +100,15 @@ CREATE TABLE IF NOT EXISTS audit_schema.legacy_project_id_map (
     status VARCHAR(16) NOT NULL,
     reason VARCHAR(255) NOT NULL DEFAULT '',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    candidate_project_id VARCHAR(36),
     CONSTRAINT uq_legacy_project_id_map_source_id UNIQUE (source, legacy_id),
-    CONSTRAINT ck_legacy_project_id_map_status CHECK (status IN ('matched', 'unmatched', 'ambiguous'))
+    CONSTRAINT fk_legacy_project_id_map_candidate FOREIGN KEY (candidate_project_id) REFERENCES audit_schema.projects(id) ON DELETE SET NULL,
+    CONSTRAINT ck_legacy_project_id_map_status CHECK (status IN ('candidate', 'unmatched', 'ambiguous')),
+    CONSTRAINT ck_legacy_project_id_map_unproven CHECK (project_id IS NULL AND (candidate_project_id IS NULL OR status = 'candidate'))
 );
 
 CREATE INDEX idx_legacy_project_id_map_project ON audit_schema.legacy_project_id_map(project_id);
+CREATE INDEX idx_legacy_project_id_map_candidate ON audit_schema.legacy_project_id_map(candidate_project_id);
 
 CREATE TABLE IF NOT EXISTS audit_schema.project_integrations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

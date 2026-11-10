@@ -1,8 +1,24 @@
+export type FFScoreStatus = 'complete' | 'insufficient_data' | 'legacy_estimated'
+
+export interface FFScorePartial {
+  score?: number | null
+  coverage?: number | null
+  comparable_to_full_score?: boolean
+  [key: string]: unknown
+}
+
+// Полный балл и компоненты бывают null: недоступное значение не заменяется нулём.
 export interface FFScore {
-  total: number
-  freshness: number
-  familiarity: number
-  quality: number
+  total: number | null
+  status: FFScoreStatus
+  formulaVersion: string
+  heuristic: boolean
+  legacyEstimated: boolean
+  freshness: number | null
+  familiarity: number | null
+  quality: number | null
+  partial?: FFScorePartial | null
+  coverage?: Record<string, unknown> | null
   timestamp: string
 }
 
@@ -41,7 +57,8 @@ export interface DashboardStats {
   totalBacklinks: number
   pendingTasks: number
   completedTasks: number
-  avgFFScore: number
+  avgFFScore: number | null
+  ffScoreProjects: number
   recentProjects: Project[]
   recentAudits: DashboardAuditSummary[]
 }

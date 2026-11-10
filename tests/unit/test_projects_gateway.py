@@ -13,12 +13,12 @@ from sqlalchemy import select
 from starlette.testclient import TestClient
 
 from config.database_config import get_db
-from database.models import DomainAuthorization, Project, PublicAuditResult, WorkspaceMember
+from database.models import DomainAuthorization, FFScore, Project, PublicAuditResult, WorkspaceMember
 from services.api_gateway.auth import get_current_user
 from services.api_gateway.config import settings
 from services.api_gateway.projects.verification import DomainVerificationService, VerificationConfig
 from services.api_gateway.routes import integrations_routes
-from services.api_gateway.routes.protected import audit_routes, projects_routes
+from services.api_gateway.routes.protected import audit_routes, dashboard_routes, projects_routes
 from shared.netpolicy import FetchResult
 from shared.projects.claims import hash_claim_token
 from tests.fixtures.project_db import make_engine, make_sessionmaker
@@ -56,6 +56,7 @@ def stand(tmp_path, monkeypatch):
     app.include_router(projects_routes.router)
     app.include_router(audit_routes.router)
     app.include_router(integrations_routes.router)
+    app.include_router(dashboard_routes.router)
 
     def db_override():
         db = maker()
@@ -82,6 +83,11 @@ def stand(tmp_path, monkeypatch):
         return SimpleNamespace(json=lambda: {"audit_id": "a1", "status": "queued", "mode": "full"})
 
     monkeypatch.setattr(audit_routes, "_proxy_service", fake_proxy)
+
+    async def no_tasks(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(dashboard_routes, "_proxy_management_required_json", no_tasks)
     # Проверка свежести в /audit/full собирает свой сервис: подменяем сеть, чтобы тест не ходил наружу.
     monkeypatch.setattr(audit_routes, "make_fetch", lambda: site)
 
@@ -449,3 +455,164 @@ def test_claim_lost_to_a_concurrent_request_is_reported_as_already_claimed(stand
     response = create(stand, ALICE, sourceAuditId=AUDIT_ID, claimToken="secret-claim-token")
     assert response.json()["claim"] == {"status": "rejected", "reason": "already_claimed"}
     assert audit_row(stand)[0] == "someone-else"
+
+
+# --- FF-Score в API проектов и панели (последствия AL-5: балл бывает null) -------------------------------------------------------------
+
+def _component(score, status="available"):
+    return {"status": status, "score": score, "weight": 0.3, "inputs": [], "missing_inputs": [], "missing_reasons": {}}
+
+
+def add_ff_score(stand, project_id, *, score, status="complete", formula="ff_score_v1", components=None, inputs=None, minute=0):
+    with stand.maker() as db:
+        db.add(FFScore(
+            score_id=str(uuid.uuid4()), project_id=project_id, root_url="https://example.com", ff_score=score,
+            status=status, formula_version=formula, components=components or {}, inputs=inputs or {}, thresholds={},
+            created_at=datetime(2026, 11, 3, 12, minute, tzinfo=UTC),
+        ))
+        db.commit()
+
+
+def project_id_of(stand, user=ALICE, url="https://example.com"):
+    return create(stand, user, url).json()["id"]
+
+
+def ff_of(stand, project_id, user=ALICE):
+    response = call(stand, user, "GET", f"/api/projects/{project_id}")
+    assert response.status_code == 200
+    return response.json()["ffScore"]
+
+
+def test_complete_score_is_shown_with_component_values_and_the_heuristic_flag(stand):
+    pid = project_id_of(stand)
+    add_ff_score(stand, pid, score=81.07, components={"freshness": _component(70.0), "familiarity": _component(90.5), "quality": _component(81.0)})
+    view = ff_of(stand, pid)
+    assert view["total"] == 81.07 and view["status"] == "complete" and view["formulaVersion"] == "ff_score_v1"
+    assert (view["freshness"], view["familiarity"], view["quality"]) == (70.0, 90.5, 81.0)
+    assert view["heuristic"] is True and view["legacyEstimated"] is False
+
+
+def test_insufficient_data_score_is_null_and_does_not_break_the_project_card(stand):
+    pid = project_id_of(stand)
+    unavailable = _component(None, "unavailable")
+    add_ff_score(stand, pid, score=None, status="insufficient_data",
+                 components={"freshness": unavailable, "familiarity": _component(90.5), "quality": unavailable})
+    view = ff_of(stand, pid)
+    assert view["total"] is None and view["status"] == "insufficient_data"
+    assert view["freshness"] is None and view["quality"] is None and view["familiarity"] == 90.5
+
+
+def test_missing_component_is_null_not_zero(stand):
+    pid = project_id_of(stand)
+    add_ff_score(stand, pid, score=50.0, status="legacy_estimated", formula="legacy", components={"freshness": 40.0})
+    view = ff_of(stand, pid)
+    assert view["freshness"] == 40.0 and view["familiarity"] is None and view["quality"] is None
+
+
+def test_legacy_estimated_score_is_marked_and_still_readable(stand):
+    pid = project_id_of(stand)
+    add_ff_score(stand, pid, score=77.0, status="legacy_estimated", formula="legacy",
+                 components={"freshness": 70.0, "familiarity": 80.0, "quality": 81.0})
+    view = ff_of(stand, pid)
+    assert view["total"] == 77.0 and view["status"] == "legacy_estimated" and view["legacyEstimated"] is True
+
+
+def test_project_without_scores_has_no_ff_block(stand):
+    assert ff_of(stand, project_id_of(stand)) is None
+
+
+def test_partial_score_is_passed_on_separately_from_the_full_one(stand):
+    pid = project_id_of(stand)
+    partial = {"score": 64.0, "coverage": 0.7, "comparable_to_full_score": False}
+    add_ff_score(stand, pid, score=None, status="insufficient_data", components={},
+                 inputs={"partial": partial, "coverage": {"components_available": 1, "components_total": 3}})
+    view = ff_of(stand, pid)
+    assert view["total"] is None and view["partial"] == partial
+    assert view["coverage"] == {"components_available": 1, "components_total": 3}
+
+
+def dashboard(stand, user=ALICE):
+    response = call(stand, user, "GET", "/api/dashboard/stats")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_dashboard_average_skips_null_scores_instead_of_crashing(stand):
+    first, second = project_id_of(stand, url="https://one.example.com"), project_id_of(stand, url="https://two.example.com")
+    add_ff_score(stand, first, score=80.0)
+    add_ff_score(stand, second, score=None, status="insufficient_data")
+    stats = dashboard(stand)
+    assert stats["avgFFScore"] == 80.0 and stats["ffScoreProjects"] == 1
+
+
+def test_dashboard_average_is_null_when_no_project_has_a_full_score(stand):
+    pid = project_id_of(stand)
+    add_ff_score(stand, pid, score=None, status="insufficient_data")
+    stats = dashboard(stand)
+    assert stats["avgFFScore"] is None and stats["ffScoreProjects"] == 0
+    empty = dashboard(stand, BOB)
+    assert empty["avgFFScore"] is None and empty["ffScoreProjects"] == 0
+
+
+def test_dashboard_average_excludes_legacy_estimated_scores(stand):
+    first, second = project_id_of(stand, url="https://one.example.com"), project_id_of(stand, url="https://two.example.com")
+    add_ff_score(stand, first, score=60.0)
+    add_ff_score(stand, second, score=100.0, status="legacy_estimated", formula="legacy")
+    assert dashboard(stand)["avgFFScore"] == 60.0
+
+
+def test_dashboard_uses_only_the_latest_score_of_each_project(stand):
+    pid = project_id_of(stand)
+    add_ff_score(stand, pid, score=90.0, minute=1)
+    add_ff_score(stand, pid, score=None, status="insufficient_data", minute=2)
+    stats = dashboard(stand)
+    assert stats["avgFFScore"] is None and stats["ffScoreProjects"] == 0
+
+
+@pytest.mark.parametrize("raw", [float("nan"), float("inf"), True, "81", None, {}, {"status": "unavailable", "score": 50.0}, {"status": "available", "score": float("nan")}, {"status": "available"}])
+def test_component_value_never_invents_a_number(raw):
+    from services.api_gateway.score_view import component_value
+
+    assert component_value(raw) is None
+
+
+def test_component_value_accepts_plain_and_available_values():
+    from services.api_gateway.score_view import component_value
+
+    assert component_value(0) == 0.0 and component_value(42.5) == 42.5
+    assert component_value({"status": "available", "score": 0.0}) == 0.0
+
+
+def test_total_requires_a_status_that_carries_a_score():
+    from services.api_gateway.score_view import ff_score_view
+
+    row = SimpleNamespace(ff_score=70.0, status="insufficient_data", formula_version="ff_score_v1", components={}, inputs={})
+    assert ff_score_view(row, "t")["total"] is None          # противоречивая строка не маскируется числом
+    row.status, row.ff_score = "complete", float("nan")
+    assert ff_score_view(row, "t")["total"] is None
+
+
+def test_heuristic_flag_follows_the_stored_value_and_legacy_rows_have_no_partial_block():
+    from services.api_gateway.score_view import ff_score_view
+
+    row = SimpleNamespace(ff_score=70.0, status="complete", formula_version="ff_score_v1", components=None, inputs={"heuristic": False})
+    assert ff_score_view(row, "t")["heuristic"] is False and ff_score_view(row, "t")["freshness"] is None
+    row.status, row.inputs = "legacy_estimated", {"heuristic": False}
+    legacy = ff_score_view(row, "t")
+    assert legacy["heuristic"] is True and "partial" not in legacy and "coverage" not in legacy
+    assert ff_score_view(None, "t") is None
+
+
+def test_average_ignores_missing_rows_and_non_finite_scores():
+    from services.api_gateway.score_view import average_full_score
+
+    rows = [None, SimpleNamespace(status="complete", ff_score=float("nan")), SimpleNamespace(status="complete", ff_score=10.0), SimpleNamespace(status="complete", ff_score=21.0)]
+    assert average_full_score(rows) == (15.5, 2)
+    assert average_full_score([]) == (None, 0)
+
+
+def test_average_is_rounded_to_two_decimals():
+    from services.api_gateway.score_view import average_full_score
+
+    rows = [SimpleNamespace(status="complete", ff_score=value) for value in (10.0, 10.0, 10.01)]
+    assert average_full_score(rows) == (10.0, 3)

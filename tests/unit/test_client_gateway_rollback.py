@@ -102,7 +102,7 @@ async def test_legacy_rollback_cannot_dispatch_even_saved_changes(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("state", ["applying", "outcome_unknown", "applied_unverified", "no_op"])
+@pytest.mark.parametrize("state", ["applying", "outcome_unknown", "needs_reconciliation", "applied_unverified", "no_op"])
 async def test_repeated_execution_never_blindly_sends_apply(state):
     from unittest.mock import AsyncMock
     from services.client_api_gateway.hitl_executor import HITLExecutor
@@ -112,7 +112,8 @@ async def test_repeated_execution_never_blindly_sends_apply(state):
     record = {**refs.model_dump(), "project_id": str(uuid4()), "binding": {
         "base_url": "https://example.com", "site_id": str(uuid4()), "key_id": "current"}}
     operation = {"state": state, "record": record}
-    authority = AsyncMock(return_value=operation)
+    token = str(uuid4())
+    authority = AsyncMock(side_effect=[operation, {"operation": operation, "lease_id": token if state != "needs_reconciliation" else None}, operation])
     target = SimpleNamespace(status=AsyncMock(side_effect=ExecutionError("cms_operation_not_found")),
                              apply=AsyncMock(), preflight=AsyncMock())
     executor = HITLExecutor("Bearer fixture", authority=authority, target_factory=lambda *args: target)
@@ -157,7 +158,8 @@ async def test_lost_apply_response_marks_unknown_and_retries_only_status():
     unknown = {**ready, "state": "outcome_unknown"}
     final = {**ready, "state": "applied_unverified"}
     receipt = {"signed": "receipt"}
-    authority = AsyncMock(side_effect=[ready, applying, unknown, unknown, final])
+    token = str(uuid4())
+    authority = AsyncMock(side_effect=[ready, applying, unknown, unknown, {"operation": unknown, "lease_id": token}, final])
     target = SimpleNamespace(preflight=AsyncMock(return_value={}), dry_run=AsyncMock(),
                              apply=AsyncMock(side_effect=TimeoutError()), status=AsyncMock(return_value=receipt))
     executor = HITLExecutor("Bearer fixture", authority=authority, target_factory=lambda *args: target)
@@ -166,4 +168,4 @@ async def test_lost_apply_response_marks_unknown_and_retries_only_status():
     assert authority.call_args.args == ("POST", "/" + refs.operation_id + "/finish", {"receipt": None})
     assert await executor.execute(refs) == final
     assert target.apply.call_count == 1 and target.status.call_count == 1
-    assert authority.call_args.args == ("POST", "/" + refs.operation_id + "/finish", {"receipt": receipt})
+    assert authority.call_args.args == ("POST", "/recovery/" + refs.operation_id + "/report", {"lease_id": token, "receipt": receipt, "error_code": None})

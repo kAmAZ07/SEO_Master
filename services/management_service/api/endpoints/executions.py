@@ -12,7 +12,8 @@ from services.management_service.approval_policy import ApprovalError, UserActor
 from services.management_service.config import settings
 from services.management_service.db.session import get_db
 from services.management_service.execution_service import ExecutionService
-from shared.hitl_execution import ExecutionError, ExecutionRequest, WordPressBinding
+from shared.hitl_execution import ExecutionError, ExecutionRequest, RecoveryClaim, RecoveryReport, WordPressBinding
+from services.management_service.execution_recovery import ExecutionRecovery
 
 
 def executor_identity(x_executor_key: str | None = Header(default=None)) -> None:
@@ -62,6 +63,17 @@ def context(body: ExecutionRequest, actor: UserActor = Depends(authenticated_act
 def reserve(body: ReserveRequest, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
     references = ExecutionRequest.model_validate(body.model_dump(exclude={"binding", "before"}))
     return _call(_service(db).reserve, references, actor, body.binding, body.before)
+
+
+@router.post("/recovery/claim")
+def recovery_claim(body: RecoveryClaim, db: Session = Depends(get_db)) -> dict[str, Any]:
+    # Executor identity may only inspect an already-began operation. No actorless begin/apply.
+    return _call(ExecutionRecovery(db).claim, body.operation_id)
+
+
+@router.post("/recovery/{operation_id}/report")
+def recovery_report(operation_id: UUID, body: RecoveryReport, db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _call(ExecutionRecovery(db).report, str(operation_id), body)
 
 
 @router.get("/{operation_id}")

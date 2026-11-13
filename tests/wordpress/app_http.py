@@ -37,13 +37,24 @@ REDIS = "redis:7-alpine@sha256:7aec734b2bb298a1d769fd8729f13b8514a41bf90fcdd1f38
 RABBIT = "rabbitmq:3.12-management-alpine@sha256:0b44fbcc3a4bf22d00090f1353127577dbe1fcb109c41669733a9d7ecf6c3a78"
 CLIENT_ENTRY = """
 import os
+import asyncio
+from pathlib import Path
 assert os.environ['NETPOLICY_PROFILE']=='test'
 import services.client_api_gateway.hitl_executor as executor
 from shared.cms_http import CMSHttpClient
 from shared.netpolicy import NetPolicy
 original=executor.wordpress_target
 def target(project_id,binding=None):
-    return original(project_id,binding,http=CMSHttpClient(policy=NetPolicy(allow_private_hosts=frozenset({'wordpress.test'}))))
+    client=original(project_id,binding,http=CMSHttpClient(policy=NetPolicy(allow_private_hosts=frozenset({'wordpress.test'}))))
+    apply=client.apply
+    async def interrupted(record):
+        receipt=await apply(record)
+        if Path('/tmp/ar6-hold-receipt').exists():
+            Path('/tmp/ar6-receipt-received').write_text(record['operation_id'])
+            await asyncio.Event().wait()
+        return receipt
+    client.apply=interrupted
+    return client
 executor.wordpress_target=target
 import uvicorn
 uvicorn.run('services.client_api_gateway.main:app',host='0.0.0.0',port=8005)
@@ -255,8 +266,48 @@ def run_apps(wp: NativeWordPress) -> None:
             request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references, expected=403)
             database.run("UPDATE audit_schema.workspace_members SET role='owner' WHERE user_id=:id", id=actor)
             assert title() == "Мастерская обуви"
+            # Actual process loss AFTER WordPress commit/checked receipt and BEFORE
+            # Management completion. A restart must use status, never a second apply.
+            from concurrent.futures import ThreadPoolExecutor
+            client_name = wp.owner + "-client"
+            wp.run("exec", client_name, "python", "-c", "from pathlib import Path; Path('/tmp/ar6-hold-receipt').touch()")
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(request, api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references)
+                for _ in range(80):
+                    try:
+                        marker = wp.run("exec", client_name, "cat", "/tmp/ar6-receipt-received", timeout=5).strip()
+                        assert marker == references["operation_id"]
+                        break
+                    except RuntimeError:
+                        time.sleep(.25)
+                else:
+                    raise AssertionError("fault injection did not reach post-commit boundary")
+                assert title() == "Мастерская зимней обуви"
+                assert database.scalar("SELECT metadata->>'state' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == "applying"
+                frozen = database.scalar("SELECT metadata->'record' FROM public.management_changelog WHERE id=:id", id=references["operation_id"])
+                wp.run("kill", client_name)
+                try:
+                    pending.result(timeout=55)
+                except (AssertionError, httpx.RequestError):
+                    pass  # The original HTTP response is lost; CMS commit already proved.
+                else:
+                    raise AssertionError("interrupted Gateway unexpectedly delivered a receipt")
+            database.run("UPDATE public.users SET is_active=false WHERE id=:id", id=actor)
+            wp.run("start", client_name)
+            for _ in range(110):
+                if database.scalar("SELECT metadata->>'state' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == "applied_unverified":
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError("restarted status worker did not reconcile committed WordPress operation")
+            assert database.scalar("SELECT metadata->'record' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == frozen
+            assert database.scalar("SELECT jsonb_array_length(metadata->'recovery'->'attempts') FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == 1
+            assert database.scalar("SELECT metadata->'recovery'->'attempts'->0->>'status' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == "succeeded"
+            database.run("UPDATE public.users SET is_active=true WHERE id=:id", id=actor)
             result = request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references)
             assert result["state"] == "applied_unverified" and title() == "Мастерская зимней обуви"
+            count = wp.php("global $wpdb; echo $wpdb->get_var(\"SELECT count(*) FROM {$wpdb->prefix}seo_master_operations_v2 WHERE operation_id='" + references["operation_id"] + "'\");")
+            assert count.strip() == "1"
             assert request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references) == result
             assert database.scalar("SELECT count(*) FROM public.management_changelog WHERE source='hitl_executor_v1'") == 1
             # The actual publisher and live consumer run with the restricted Management role.
@@ -274,7 +325,7 @@ def run_apps(wp: NativeWordPress) -> None:
                     if service == "management":
                         assert conn.scalar(text("SELECT has_table_privilege(current_user,'audit_schema.workspace_members','UPDATE')")) is False
                 engine.dispose()
-            print("PASS actual HTTP apps: UID10001/read-only containers; migrated PG with distinct no-DDL roles; real Redis JWT sessions; viewed AL5 -> approve without apply -> guarded apply -> same operation; real RabbitMQ outbox/inbox; WordPress receipt and exact title. CMS transport test-private host only; verify/rollback/staging not claimed.")
+            print("PASS actual HTTP apps: UID10001/read-only containers; migrated PG with distinct no-DDL roles; real Redis JWT sessions; approve without apply; Gateway SIGKILL after actual WordPress commit; restarted service-only status recovery with inactive original user; same frozen operation/hash and one WordPress ledger entry; real RabbitMQ outbox/inbox. CMS transport test-private host only; public verify/rollback/staging not claimed.")
         finally:
             stand.stop_apps()
             for role, _local, _inside in credentials.values():

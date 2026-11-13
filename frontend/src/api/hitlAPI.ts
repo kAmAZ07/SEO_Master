@@ -63,6 +63,7 @@ const normalizeHITLTask = (value: unknown): HITLTask => {
   const taskId = asString(item.task_id || item.taskId || task?.id || item.id)
   const version = asObject(asObject(item.diff_data || item.diffData).recommendation_version)
   const execution = asObject(item.execution)
+  const recovery = asObject(execution.recovery)
 
   return {
     id: asString(item.id || taskId),
@@ -76,6 +77,10 @@ const normalizeHITLTask = (value: unknown): HITLTask => {
     execution: typeof execution.operation_id === 'string' ? {
       operationId: execution.operation_id, state: asString(execution.state),
       recommendationVersionId: asString(execution.recommendation_version_id), contentHash: asString(execution.content_hash),
+      recovery: typeof recovery.attempts === 'number' && typeof recovery.max_attempts === 'number' ? {
+        attempts: recovery.attempts, maxAttempts: recovery.max_attempts,
+        lastError: asString(recovery.last_error) || null, stopReason: asString(recovery.stop_reason) || null,
+      } : null,
     } : null,
     diffData: normalizeDiffData(item.diff_data || item.diffData),
     impactScore: asNullableNumber(item.impact_score ?? item.impactScore),

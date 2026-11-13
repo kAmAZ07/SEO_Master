@@ -140,9 +140,16 @@ const HITL = () => {
             const executionLabel: Record<string, string> = {
               ready: 'Готово к публикации', applying: 'Результат публикации уточняется',
               outcome_unknown: 'Результат неизвестен — требуется проверка статуса',
+              needs_reconciliation: 'Автоматическая сверка остановлена. Требуется ручной разбор; повторная публикация заблокирована.',
               applied_unverified: 'Изменения записаны. Независимая проверка ещё не выполнена.',
               no_op: 'Изменения не потребовались. Независимая проверка ещё не выполнена.', cancelled: 'Операция отменена',
               expired: 'Время подготовки публикации истекло. Можно подготовить новую операцию.',
+            }
+            const recoveryReason: Record<string, string> = {
+              cms_unavailable: 'CMS недоступна', operation_not_found: 'CMS пока не подтвердила операцию',
+              receipt_invalid: 'Подтверждение CMS не прошло проверку', integration_changed: 'Подключение CMS изменилось',
+              lease_expired: 'Процесс сверки был прерван', attempts_exhausted: 'Лимит попыток исчерпан',
+              deadline_exceeded: 'Время автоматической сверки истекло',
             }
 
             return (
@@ -206,6 +213,11 @@ const HITL = () => {
                     {(canApply || reconcile) && <Button type="button" className="mt-3 w-full" disabled={isProcessing}
                       onClick={() => void handleApply(task)}>{reconcile ? 'Проверить результат публикации' : 'Применить одобренные изменения'}</Button>}
                     {task.execution && <p role="status" className="mt-2 text-sm text-gray-700">{executionLabel[task.execution.state] || 'Неизвестный статус операции'}</p>}
+                    {task.execution?.recovery && <p className="mt-2 text-sm text-gray-600">
+                      Попытки сверки: {task.execution.recovery.attempts} из {task.execution.recovery.maxAttempts}.
+                      {task.execution.recovery.lastError && ` ${recoveryReason[task.execution.recovery.lastError] || 'Результат CMS требует проверки'}.`}
+                      {task.execution.recovery.stopReason && ` ${recoveryReason[task.execution.recovery.stopReason] || 'Автоматическая сверка остановлена'}.`}
+                    </p>}
                     {task.authorizationStatus === 'approved' && !task.managedTarget && <p className="mt-2 text-sm text-amber-700">Для этой версии доступна ручная публикация.</p>}
                     {!canDecide && <p className="mt-2 text-sm text-amber-700">Для решения требуется актуальная проверенная версия.</p>}
                   </aside>

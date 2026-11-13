@@ -182,4 +182,20 @@ describe('HITL page', () => {
     expect(apiMocks.applyTask.mock.calls[0][1]).not.toBe('expired-operation')
     expect(apiMocks.applyTask.mock.calls[1][1]).toBe(apiMocks.applyTask.mock.calls[0][1])
   })
+
+  it('shows spent recovery budget and never offers another publication after reconciliation stops', async () => {
+    apiMocks.fetchHITLTasks.mockResolvedValueOnce([{
+      id: 'approval-1', taskId: 'task-1', projectId: 'project-1', status: 'approved',
+      authorizationStatus: 'approved', managedTarget: true, recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64),
+      diffData: { before: { title: 'Old' }, after: { title: 'New' } }, metadata: {},
+      execution: { operationId: 'same-operation', state: 'needs_reconciliation', recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64),
+        recovery: { attempts: 4, maxAttempts: 4, lastError: 'operation_not_found', stopReason: 'attempts_exhausted' } },
+    }])
+    renderHITL()
+    expect(await screen.findByRole('status')).toHaveTextContent('Требуется ручной разбор')
+    expect(screen.getByText(/Попытки сверки: 4 из 4/)).toHaveTextContent('Лимит попыток исчерпан')
+    expect(screen.queryByRole('button', { name: 'Применить одобренные изменения' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Проверить результат публикации' })).not.toBeInTheDocument()
+    expect(apiMocks.applyTask).not.toHaveBeenCalled()
+  })
 })

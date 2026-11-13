@@ -21,6 +21,7 @@ from shared.projects.roles import Permission, has_permission
 from shared.projects.scope import parse_scope
 from shared.projects.authorization_state import is_fresh
 from services.semantic_service.proposals.model import RecommendationVersion
+from services.management_service.recovery_policy import RecoveryState
 
 SOURCE = "hitl_executor_v1"
 ENTITY = "deployment_operation"
@@ -109,7 +110,8 @@ class ExecutionService:
     @staticmethod
     def serialize(row: OperationRow) -> dict[str, Any]:
         return {"operation_id": str(row.id), "state": row.meta["state"], "record": row.meta["record"],
-                "record_hash": row.meta["record_hash"], "receipt": row.meta.get("receipt")}
+                "record_hash": row.meta["record_hash"], "receipt": row.meta.get("receipt"),
+                "recovery": RecoveryState.load(row.meta["recovery"]).summary() if "recovery" in row.meta else None}
 
     def read(self, operation_id: str, actor: UserActor) -> dict[str, Any]:
         row = self._row(operation_id)
@@ -176,7 +178,9 @@ class ExecutionService:
                 raise ApprovalError("execution_state_conflict")
             if self.clock() >= valid_until or int(self.clock().timestamp()) >= record["command"]["authorization_deadline"]:
                 raise ApprovalError("execution_expired")
-            row.meta = {**row.meta, "state": "applying", "began_at": self.clock().isoformat()}
+            now = self.clock()
+            row.meta = {**row.meta, "state": "applying", "began_at": now.isoformat(),
+                        "recovery": RecoveryState.initial(now, record["command"]["authorization_deadline"]).dump()}
             task.status = TaskStatus.IN_PROGRESS
             task.updated_at = self.clock()
             self.db.commit()
@@ -193,22 +197,34 @@ class ExecutionService:
             if task is None:
                 raise ApprovalError("execution_not_found", 404)
             row = self._row(operation_id, lock=True)
-            if receipt is not None and row.meta["state"] in {"applied_unverified", "no_op"} and row.meta.get("receipt") == receipt:
+            if row.meta["state"] in {"applied_unverified", "no_op"} and (receipt is None or row.meta.get("receipt") == receipt):
                 self.db.commit()
                 return self.serialize(row)
-            if row.meta["state"] not in {"applying", "outcome_unknown"}:
+            if row.meta["state"] not in {"applying", "outcome_unknown", "needs_reconciliation"}:
                 raise ApprovalError("execution_state_conflict")
-            record = row.meta["record"]
-            state = "outcome_unknown"
+            now = self.clock()
             if receipt is not None:
-                validate_receipt(receipt, record["command"], record["before"], record["after"])
-                state = receipt["outcome"]
-                row.applied = state == "applied_unverified"
-                task.status = TaskStatus.DEPLOYED
-                task.updated_at = self.clock()
-            row.meta = {**row.meta, "state": state, "receipt": receipt, "finished_at": self.clock().isoformat()}
+                self._complete_receipt(row, task, receipt, now)
+            elif row.meta["state"] == "applying":
+                recovery = RecoveryState.load(row.meta["recovery"])
+                recovery = recovery.model_copy(update={"next_attempt_at": min(recovery.next_attempt_at or now, now)})
+                row.meta = {**row.meta, "state": "outcome_unknown", "recovery": recovery.dump(), "finished_at": now.isoformat()}
             self.db.commit()
             return self.serialize(row)
         except Exception:
             self.db.rollback()
             raise
+
+    @staticmethod
+    def _complete_receipt(row: OperationRow, task: TaskRow, receipt: dict[str, Any], now: datetime) -> None:
+        record = row.meta["record"]
+        validate_receipt(receipt, record["command"], record["before"], record["after"])
+        metadata = dict(row.meta)
+        if "recovery" in metadata:
+            recovery = RecoveryState.load(metadata["recovery"])
+            if recovery.attempts and recovery.attempts[-1].status == "pending":
+                recovery = recovery.settled(now, "superseded")
+            metadata["recovery"] = recovery.model_copy(update={"next_attempt_at": None}).dump()
+        row.applied = receipt["outcome"] == "applied_unverified"
+        task.status, task.updated_at = TaskStatus.DEPLOYED, now
+        row.meta = {**metadata, "state": receipt["outcome"], "receipt": receipt, "finished_at": now.isoformat()}

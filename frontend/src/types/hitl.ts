@@ -22,7 +22,10 @@ export interface HITLTask {
   recommendationVersionId?: string | null
   contentHash?: string | null
   managedTarget?: boolean
-  execution?: { operationId: string; state: string; recommendationVersionId: string; contentHash: string } | null
+  execution?: {
+    operationId: string; state: string; recommendationVersionId: string; contentHash: string
+    recovery?: { attempts: number; maxAttempts: number; lastError: string | null; stopReason: string | null } | null
+  } | null
   diffData: HITLDiffData
   impactScore?: number | null
   recommendation?: string

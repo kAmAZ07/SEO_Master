@@ -14,6 +14,7 @@ from services.client_api_gateway.config import is_development, settings
 from services.client_api_gateway.db import get_db, init_db
 from services.client_api_gateway.db.models import DeploymentLog
 from services.client_api_gateway.hitl_executor import HITLExecutor
+from services.client_api_gateway import recovery
 from shared.hitl_execution import ExecutionError, ExecutionRequest
 from services.client_api_gateway.routes import (
     health_router,
@@ -119,6 +120,7 @@ async def startup_event():
     except Exception as exc:
         logger.error('Failed to initialize client gateway database', extra={'error': str(exc)})
         raise
+    app.state.execution_recovery_task = recovery.start()
     logger.info(
         f'Starting {settings.SERVICE_NAME}',
         extra={
@@ -130,6 +132,7 @@ async def startup_event():
 
 @app.on_event('shutdown')
 async def shutdown_event():
+    await recovery.stop(getattr(app.state, 'execution_recovery_task', None))
     logger.info(f'Shutting down {settings.SERVICE_NAME}')
 
 

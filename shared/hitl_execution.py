@@ -4,15 +4,36 @@ Dynamic JSON is validated at this boundary; no runtime settings or database impo
 """
 
 from copy import deepcopy
+from datetime import datetime
 import hashlib
 import hmac
 import json
-from typing import Any
+import re
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 HASH_PATTERN = r"^[0-9a-f]{64}$"
+RecoveryError = Literal["cms_unavailable", "operation_not_found", "receipt_invalid", "integration_changed"]
+
+
+class RecoveryClaim(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    operation_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+
+
+class RecoveryReport(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    lease_id: str = Field(pattern=UUID_PATTERN)
+    receipt: dict[str, Any] | None = None
+    error_code: RecoveryError | None = None
+
+    @model_validator(mode="after")
+    def one_result(self) -> Self:
+        if (self.receipt is None) == (self.error_code is None):
+            raise ValueError("one_recovery_result_required")
+        return self
 
 
 class ExecutionError(ValueError):
@@ -112,6 +133,23 @@ def validate_receipt(receipt: Any, command: dict[str, Any], before: dict[str, An
                 "before", "after", "plugin_version", "key_id", "applied_at", "applied_fields", "outcome", "warnings", "signature"}
     if not isinstance(receipt, dict) or set(receipt) != required:
         raise ExecutionError("cms_receipt_invalid")
+    if (not isinstance(receipt["entity_id"], int) or isinstance(receipt["entity_id"], bool)
+            or not isinstance(receipt["plugin_version"], str) or re.fullmatch(r"[A-Za-z0-9._-]{1,32}", receipt["plugin_version"]) is None
+            or not isinstance(receipt["key_id"], str) or re.fullmatch(r"[A-Za-z0-9._-]{1,64}", receipt["key_id"]) is None
+            or not isinstance(receipt["signature"], str) or re.fullmatch(HASH_PATTERN, receipt["signature"]) is None
+            or not isinstance(receipt["applied_at"], str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", receipt["applied_at"]) is None
+            or not isinstance(receipt["warnings"], list) or len(receipt["warnings"]) > 16
+            or any(not isinstance(item, str) or len(item.encode("utf-8")) > 128 or "\x00" in item for item in receipt["warnings"])):
+        raise ExecutionError("cms_receipt_invalid")
+    try:
+        datetime.strptime(receipt["applied_at"], "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as exc:
+        raise ExecutionError("cms_receipt_invalid") from exc
+    try:
+        snapshot(receipt["before"])
+        snapshot(receipt["after"])
+    except ExecutionError as exc:
+        raise ExecutionError("cms_receipt_invalid") from exc
     request_hash = hashlib.sha256(canonical(command).encode()).hexdigest()
     expected = {key: command[key] for key in ("operation_id", "project_id", "site_id", "entity_id", "task_id", "proposal_version", "proposal_hash", "approval_ref", "before_digest")}
     expected.update(protocol="seo-master/v2", kind="receipt", request_hash=request_hash,

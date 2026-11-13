@@ -17,21 +17,40 @@ type SessionListener = (event: SessionEvent) => void
 
 let refreshToken: string | null = null
 const listeners = new Set<SessionListener>()
+let generation = 0
+let observedAccessToken: string | null = null
+let memoryOnly = false
 
 export const getAccessToken = (): string | null => {
+  if (memoryOnly) return observedAccessToken
   try {
-    return localStorage.getItem(ACCESS_TOKEN_KEY)
+    const token = localStorage.getItem(ACCESS_TOKEN_KEY)
+    if (token !== observedAccessToken) {
+      // Another tab/storage writer replaced the principal; it is not our refresh rotation.
+      generation += 1
+      refreshToken = null
+      observedAccessToken = token
+    }
+    return token
   } catch {
-    return null
+    return observedAccessToken
   }
+}
+
+export const getSessionGeneration = (): number => {
+  getAccessToken()
+  return generation
 }
 
 export const getRefreshToken = (): string | null => refreshToken
 
 export const setSessionTokens = (tokens: { token: string; refreshToken?: string | null }): void => {
+  observedAccessToken = tokens.token
   try {
     localStorage.setItem(ACCESS_TOKEN_KEY, tokens.token)
+    memoryOnly = false
   } catch {
+    memoryOnly = true
     // Хранилище недоступно (приватный режим): сессия живёт до перезагрузки страницы.
   }
   if (tokens.refreshToken) {
@@ -39,12 +58,23 @@ export const setSessionTokens = (tokens: { token: string; refreshToken?: string 
   }
 }
 
+// A login is a new boundary, including login as the same user. Rotation is not.
+export const startSession = (tokens: { token: string; refreshToken?: string | null }): void => {
+  generation += 1
+  refreshToken = null
+  setSessionTokens(tokens)
+}
+
 export const clearSessionTokens = (): void => {
+  generation += 1
+  observedAccessToken = null
   refreshToken = null
   try {
     localStorage.removeItem(ACCESS_TOKEN_KEY)
     localStorage.removeItem(PENDING_PROJECT_SAVE_KEY)
+    memoryOnly = false
   } catch {
+    memoryOnly = true
     // Нечего очищать, если хранилище недоступно.
   }
 }

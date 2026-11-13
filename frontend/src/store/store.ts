@@ -5,7 +5,7 @@ import dashboardReducer from './slices/dashboardSlice'
 import authReducer, { login, register } from './slices/authSlice'
 import notificationsReducer from './slices/notificationsSlice'
 import { sessionEnded, tokenRefreshed } from './sessionActions'
-import { subscribeSession } from '@/api/session'
+import { getSessionGeneration, subscribeSession } from '@/api/session'
 
 const appReducer = combineReducers({
   audit: auditReducer,
@@ -21,6 +21,12 @@ type AppState = ReturnType<typeof appReducer>
 // Публичный отчёт (срез audit) не принадлежит аккаунту: при истёкшей сессии он остаётся,
 // а при явном выходе очищается вместе со всем остальным.
 export const rootReducer: Reducer<AppState, UnknownAction> = (state, action) => {
+  const meta = action.meta
+  if (action.type.startsWith('auth/') && meta && typeof meta === 'object' &&
+      'sessionGeneration' in meta && typeof meta.sessionGeneration === 'number' &&
+      meta.sessionGeneration !== getSessionGeneration()) {
+    return state ?? appReducer(undefined, { type: '@@session/ignored' })
+  }
   if (sessionEnded.match(action)) {
     const keepAudit = action.payload.reason !== 'logout' && state ? { audit: state.audit } : {}
     return appReducer({ ...keepAudit } as AppState | undefined, action)

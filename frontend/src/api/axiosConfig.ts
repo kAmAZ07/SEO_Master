@@ -1,5 +1,5 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios'
-import { endSession, emitSessionEvent, getAccessToken, getRefreshToken, setSessionTokens } from './session'
+import { endSession, emitSessionEvent, getAccessToken, getRefreshToken, getSessionGeneration, setSessionTokens } from './session'
 
 const api = axios.create({
   baseURL: '/api',
@@ -9,7 +9,7 @@ const api = axios.create({
   },
 })
 
-type RetriableConfig = InternalAxiosRequestConfig & { _retriedAfterRefresh?: boolean }
+type RetriableConfig = InternalAxiosRequestConfig & { _retriedAfterRefresh?: boolean; _sessionGeneration?: number }
 
 // Эти запросы сами работают с учётными данными: 401 на них не означает «токен устарел».
 const AUTH_ENDPOINTS = ['/auth/login', '/auth/register', '/auth/refresh', '/auth/logout']
@@ -21,9 +21,9 @@ const isAuthEndpoint = (url: string | undefined): boolean =>
 // Остальное (503 без Redis, сеть, таймаут) временно: сессию не рвём.
 const REFRESH_REJECTED_STATUSES = new Set([400, 401, 403, 422])
 
-let refreshInFlight: Promise<string> | null = null
+let refreshInFlight: { generation: number; promise: Promise<string> } | null = null
 
-const requestNewTokens = async (): Promise<string> => {
+const requestNewTokens = async (generation: number): Promise<string> => {
   const refreshToken = getRefreshToken()
   if (!refreshToken) {
     endSession('reauth_required')
@@ -33,6 +33,7 @@ const requestNewTokens = async (): Promise<string> => {
   try {
     // Отдельный вызов axios без перехватчиков: иначе 401 на refresh зациклит обновление.
     const response = await axios.post('/api/auth/refresh', { refresh_token: refreshToken }, { timeout: 30000 })
+    if (generation !== getSessionGeneration()) throw new Error('Session changed during refresh')
     const token: unknown = response.data?.token
     const nextRefresh: unknown = response.data?.refreshToken
     if (typeof token !== 'string' || !token || typeof nextRefresh !== 'string' || !nextRefresh) {
@@ -43,7 +44,7 @@ const requestNewTokens = async (): Promise<string> => {
     emitSessionEvent({ type: 'tokens_refreshed', token })
     return token
   } catch (error) {
-    if (axios.isAxiosError(error) && REFRESH_REJECTED_STATUSES.has(error.response?.status ?? 0)) {
+    if (generation === getSessionGeneration() && axios.isAxiosError(error) && REFRESH_REJECTED_STATUSES.has(error.response?.status ?? 0)) {
       endSession('reauth_required')
     }
     throw error
@@ -53,12 +54,14 @@ const requestNewTokens = async (): Promise<string> => {
 // Одновременные 401 ждут один общий запрос: refresh-токен одноразовый (ротация),
 // второй параллельный запрос с тем же токеном отозвал бы всю сессию.
 export const refreshAccessToken = (): Promise<string> => {
-  if (!refreshInFlight) {
-    refreshInFlight = requestNewTokens().finally(() => {
-      refreshInFlight = null
+  const generation = getSessionGeneration()
+  if (!refreshInFlight || refreshInFlight.generation !== generation) {
+    const promise = requestNewTokens(generation).finally(() => {
+      if (refreshInFlight?.promise === promise) refreshInFlight = null
     })
+    refreshInFlight = { generation, promise }
   }
-  return refreshInFlight
+  return refreshInFlight.promise
 }
 
 const bearerOf = (config: InternalAxiosRequestConfig): string | null => {
@@ -68,6 +71,12 @@ const bearerOf = (config: InternalAxiosRequestConfig): string | null => {
 
 api.interceptors.request.use(
   (config) => {
+    const request = config as RetriableConfig
+    const generation = getSessionGeneration()
+    if (request._sessionGeneration !== undefined && request._sessionGeneration !== generation) {
+      throw new axios.CanceledError('Session changed before request')
+    }
+    request._sessionGeneration = generation
     const token = getAccessToken()
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
@@ -75,12 +84,19 @@ api.interceptors.request.use(
     return config
   },
   (error) => {
-    return Promise.reject(error)
-  }
+    throw error
+  },
+  { synchronous: true },
 )
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const config = response.config as RetriableConfig
+    if (config._sessionGeneration !== undefined && config._sessionGeneration !== getSessionGeneration()) {
+      throw new axios.CanceledError('Session changed during request')
+    }
+    return response
+  },
   async (error: AxiosError) => {
     const config = error.config as RetriableConfig | undefined
     const sentToken = config ? bearerOf(config) : null
@@ -92,6 +108,7 @@ api.interceptors.response.use(
       error.response?.status !== 401 ||
       !config ||
       !sentToken ||
+      config._sessionGeneration !== getSessionGeneration() ||
       config._retriedAfterRefresh ||
       isAuthEndpoint(config.url)
     ) {
@@ -108,6 +125,7 @@ api.interceptors.response.use(
       // Обновить не удалось: вызывающий код видит исходный 401, а не ошибку refresh.
       return Promise.reject(error)
     }
+    if (config._sessionGeneration !== getSessionGeneration()) return Promise.reject(error)
     config.headers.Authorization = `Bearer ${nextToken}`
     return api.request(config)
   }

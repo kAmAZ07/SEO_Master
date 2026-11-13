@@ -9,8 +9,12 @@ import {
   updateProfile as updateProfileAPI,
   changePassword as changePasswordAPI,
   getApiErrorMessage,
+  type AuthResponse,
+  type UpdateProfilePayload,
+  type ChangePasswordPayload,
+  type ChangePasswordResponse,
 } from '@/api/authAPI'
-import { endSession, getAccessToken, setSessionTokens } from '@/api/session'
+import { endSession, getAccessToken, getSessionGeneration, startSession } from '@/api/session'
 import { sessionEnded, tokenRefreshed } from '../sessionActions'
 
 // anonymous       — токена нет;
@@ -44,6 +48,12 @@ interface LoadUserRejection {
   unauthorized: boolean
 }
 
+type SessionThunkConfig<Rejected = string> = {
+  rejectValue: Rejected
+  fulfilledMeta: { sessionGeneration: number }
+  rejectedMeta: { sessionGeneration: number }
+}
+
 // Начальное состояние читает localStorage в момент вызова: после сброса на выходе токена уже нет.
 export const createAuthInitialState = (): AuthState => {
   const token = getAccessToken()
@@ -58,38 +68,47 @@ export const createAuthInitialState = (): AuthState => {
   }
 }
 
-export const login = createAsyncThunk(
+export const login = createAsyncThunk<AuthResponse, LoginCredentials, SessionThunkConfig>(
   'auth/login',
-  async (credentials: LoginCredentials, { rejectWithValue }) => {
+  async (credentials, { rejectWithValue, fulfillWithValue }) => {
+    const generation = getSessionGeneration()
     try {
       const response = await loginAPI(credentials)
-      setSessionTokens({ token: response.token, refreshToken: response.refreshToken })
-      return response
+      if (generation !== getSessionGeneration()) return rejectWithValue('Session changed', { sessionGeneration: generation })
+      startSession({ token: response.token, refreshToken: response.refreshToken })
+      return fulfillWithValue(response, { sessionGeneration: getSessionGeneration() })
     } catch (error) {
-      return rejectWithValue(getApiErrorMessage(error, 'Unable to sign in.'))
+      return rejectWithValue(getApiErrorMessage(error, 'Unable to sign in.'), { sessionGeneration: generation })
     }
   },
 )
 
-export const register = createAsyncThunk(
+export const register = createAsyncThunk<AuthResponse, RegisterData, SessionThunkConfig>(
   'auth/register',
-  async (data: RegisterData, { rejectWithValue }) => {
+  async (data, { rejectWithValue, fulfillWithValue }) => {
+    const generation = getSessionGeneration()
     try {
       const response = await registerAPI(data)
-      setSessionTokens({ token: response.token, refreshToken: response.refreshToken })
-      return response
+      if (generation !== getSessionGeneration()) return rejectWithValue('Session changed', { sessionGeneration: generation })
+      startSession({ token: response.token, refreshToken: response.refreshToken })
+      return fulfillWithValue(response, { sessionGeneration: getSessionGeneration() })
     } catch (error) {
-      return rejectWithValue(getApiErrorMessage(error, 'Unable to create the account.'))
+      return rejectWithValue(getApiErrorMessage(error, 'Unable to create the account.'), { sessionGeneration: generation })
     }
   },
 )
 
-export const loadUser = createAsyncThunk<User, void, { rejectValue: LoadUserRejection }>(
+export const loadUser = createAsyncThunk<User, void, SessionThunkConfig<LoadUserRejection>>(
   'auth/loadUser',
-  async (_, { rejectWithValue }) => {
+  async (_, { rejectWithValue, fulfillWithValue }) => {
+    const generation = getSessionGeneration()
     try {
-      return await getCurrentUser()
+      const user = await getCurrentUser()
+      return fulfillWithValue(user, { sessionGeneration: generation })
     } catch (error) {
+      if (generation !== getSessionGeneration()) {
+        return rejectWithValue({ message: 'Session changed', unauthorized: false }, { sessionGeneration: generation })
+      }
       const status = axios.isAxiosError(error) ? error.response?.status : undefined
       const unauthorized = status === 401 || status === 403
       if (unauthorized && getAccessToken()) {
@@ -99,47 +118,52 @@ export const loadUser = createAsyncThunk<User, void, { rejectValue: LoadUserReje
       return rejectWithValue({
         message: getApiErrorMessage(error, 'Unable to load the current user.'),
         unauthorized,
-      })
+      }, { sessionGeneration: getSessionGeneration() })
     }
   },
 )
 
 // Выход: сервер отзывает сессию по возможности (best-effort), локальное состояние очищается всегда.
-export const logout = createAsyncThunk('auth/logout', async () => {
+export const logout = createAsyncThunk<void, void, SessionThunkConfig>('auth/logout', async (_, { rejectWithValue, fulfillWithValue }) => {
+  const generation = getSessionGeneration()
   try {
     if (getAccessToken()) {
       await logoutAPI()
     }
   } catch {
     // Токен мог уже истечь или сервер быть недоступен: локальный выход это не отменяет.
-  } finally {
-    endSession('logout')
   }
+  if (generation !== getSessionGeneration()) return rejectWithValue('Session changed', { sessionGeneration: generation })
+  endSession('logout')
+  return fulfillWithValue(undefined, { sessionGeneration: getSessionGeneration() })
 })
 
-export const updateProfile = createAsyncThunk(
+export const updateProfile = createAsyncThunk<User, UpdateProfilePayload, SessionThunkConfig>(
   'auth/updateProfile',
-  async (data: { name?: string; email?: string; company?: string }, { rejectWithValue }) => {
+  async (data, { rejectWithValue, fulfillWithValue }) => {
+    const generation = getSessionGeneration()
     try {
-      return await updateProfileAPI(data)
+      return fulfillWithValue(await updateProfileAPI(data), { sessionGeneration: generation })
     } catch (error) {
-      return rejectWithValue(getApiErrorMessage(error, 'Unable to update the profile.'))
+      return rejectWithValue(getApiErrorMessage(error, 'Unable to update the profile.'), { sessionGeneration: generation })
     }
   },
 )
 
-export const changePassword = createAsyncThunk(
+export const changePassword = createAsyncThunk<ChangePasswordResponse, ChangePasswordPayload, SessionThunkConfig>(
   'auth/changePassword',
-  async (data: { currentPassword: string; newPassword: string }, { rejectWithValue }) => {
+  async (data, { rejectWithValue, fulfillWithValue }) => {
+    const generation = getSessionGeneration()
     try {
       const response = await changePasswordAPI(data)
+      if (generation !== getSessionGeneration()) return rejectWithValue('Session changed', { sessionGeneration: generation })
       if (response.reauth_required) {
         // Все выпущенные токены отозваны сервером: продолжать с ними бессмысленно.
         endSession('password_changed')
       }
-      return response
+      return fulfillWithValue(response, { sessionGeneration: getSessionGeneration() })
     } catch (error) {
-      return rejectWithValue(getApiErrorMessage(error, 'Unable to change the password.'))
+      return rejectWithValue(getApiErrorMessage(error, 'Unable to change the password.'), { sessionGeneration: generation })
     }
   },
 )

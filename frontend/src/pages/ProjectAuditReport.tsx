@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, Download } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
-import { useAppDispatch, useAppSelector } from '../store/hooks'
-import { pollAuditStatus, setPolling } from '../store/slices/auditSlice'
+import { useAppSelector } from '../store/hooks'
+import { useAuditPolling } from '../hooks/useAuditPolling'
 import type { AuditCriterion, AuditFinding } from '../types/audit'
+import { describeAuditScore, hasAuditResults } from '../utils/auditStatus'
+import AuditStatePanel from '../components/audit/AuditStatePanel'
 import Card from '../components/ui/Card'
 import Loader from '../components/ui/Loader'
 
@@ -18,7 +20,16 @@ const severityRank: Record<string, number> = {
   success: 0,
 }
 
-const scoreTone = (score: number) => {
+const scoreTone = (score: number | null) => {
+  if (score === null) {
+    return {
+      text: 'text-gray-300',
+      bar: 'bg-gray-500',
+      border: 'border-gray-200',
+      bg: 'bg-gray-50',
+      label: 'Оценка недоступна',
+    }
+  }
   if (score >= 80) {
     return {
       text: 'text-emerald-700',
@@ -147,7 +158,7 @@ const exportAuditToCsv = (audit: import('../types/audit').AuditStatus) => {
   const rows: string[][] = []
   rows.push(['SEO Master — Отчёт расширенного аудита'])
   rows.push(['URL', audit.url])
-  rows.push(['Оценка', String(audit.score)])
+  rows.push(['Оценка', describeAuditScore(audit.score)])
   rows.push(['Дата', new Date(audit.createdAt).toLocaleString('ru-RU')])
   rows.push([])
   rows.push(['Критерий', 'Код проверки', 'Название замечания', 'Описание', 'Серьёзность', 'Статус', 'Рекомендация'])
@@ -197,39 +208,9 @@ const exportAuditToCsv = (audit: import('../types/audit').AuditStatus) => {
 
 const ProjectAuditReport = () => {
   const { projectId, uid } = useParams<{ projectId: string; uid: string }>()
-  const dispatch = useAppDispatch()
-  const { currentAudit, polling, error } = useAppSelector((state) => state.audit)
+  const { currentAudit, error, errorKind } = useAppSelector((state) => state.audit)
   const [expandedCriterion, setExpandedCriterion] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!uid) {
-      return
-    }
-
-    void dispatch(pollAuditStatus(uid)).then((result) => {
-      if (pollAuditStatus.fulfilled.match(result)) {
-        const status = result.payload.status
-        dispatch(setPolling(status !== 'completed' && status !== 'failed'))
-      }
-    })
-  }, [dispatch, uid])
-
-  useEffect(() => {
-    const status = currentAudit?.status
-    const shouldPoll = Boolean(uid && polling && status !== 'completed' && status !== 'failed')
-
-    if (!shouldPoll || !uid) {
-      return undefined
-    }
-
-    const timer = window.setInterval(() => {
-      void dispatch(pollAuditStatus(uid))
-    }, 2500)
-
-    return () => {
-      window.clearInterval(timer)
-    }
-  }, [dispatch, polling, currentAudit?.status, uid])
+  const { gaveUp, retry } = useAuditPolling(uid)
 
   const audit = currentAudit?.uid === uid ? currentAudit : null
   const criteria = useMemo(() => audit?.summary?.criteria ?? [], [audit?.summary?.criteria])
@@ -238,7 +219,7 @@ const ProjectAuditReport = () => {
     [criteria, audit?.details],
   )
   const topFindings = useMemo(() => getTopFindings(allFindings), [allFindings])
-  const verdict = audit ? scoreTone(audit.score) : scoreTone(0)
+  const verdict = scoreTone(audit ? audit.score : null)
   const projectPath = projectId ? `/dashboard/projects/${projectId}?tab=audit` : '/dashboard/projects'
 
   useEffect(() => {
@@ -259,36 +240,19 @@ const ProjectAuditReport = () => {
         </p>
       </div>
 
-      {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
+      <AuditStatePanel audit={audit} error={error} errorKind={errorKind} gaveUp={gaveUp} onRetry={retry} />
 
       {!audit && !error && (
         <Card className="p-8 text-center">
-          <Loader />
-          <h2 className="mt-5 text-lg font-semibold text-gray-900">Загружаем отчет</h2>
-          <p className="mt-2 text-sm text-gray-600">Получаем статус и результаты расширенного аудита.</p>
+          <div role="status">
+            <Loader />
+            <h2 className="mt-5 text-lg font-semibold text-gray-900">Загружаем отчет</h2>
+            <p className="mt-2 text-sm text-gray-600">Получаем статус и результаты расширенного аудита.</p>
+          </div>
         </Card>
       )}
 
-      {audit && audit.status !== 'completed' && audit.status !== 'failed' && (
-        <Card className="p-8 text-center">
-          <Loader />
-          <h2 className="mt-5 text-lg font-semibold text-gray-900">Аудит выполняется</h2>
-          <p className="mt-2 text-sm text-gray-600">Статус: {audit.status}</p>
-        </Card>
-      )}
-
-      {audit?.status === 'failed' && (
-        <Card className="border-red-200 bg-red-50 p-6">
-          <h2 className="text-xl font-semibold text-red-900">Аудит завершился с ошибкой</h2>
-          <p className="mt-2 text-sm text-red-700">{audit.error || 'Попробуйте запустить проверку еще раз.'}</p>
-        </Card>
-      )}
-
-      {audit?.status === 'completed' && (
+      {audit && hasAuditResults(audit.status) && (
         <>
           <div className="flex justify-end">
             <button
@@ -315,11 +279,11 @@ const ProjectAuditReport = () => {
               </div>
 
               <div className="bg-gray-950 p-6 text-white">
-                <p className="text-sm text-gray-300">Итоговая оценка</p>
-                <p className={`mt-2 text-5xl font-black ${verdict.text}`}>{audit.score}</p>
+                <p className="text-sm text-gray-300">Итоговая оценка (эвристика)</p>
+                <p className={`mt-2 text-5xl font-black ${verdict.text}`}>{audit.score === null ? '—' : audit.score}</p>
                 <p className="mt-2 text-sm text-gray-300">{verdict.label}</p>
                 <div className="mt-4 h-3 rounded-full bg-white/20">
-                  <div className={`h-3 rounded-full ${verdict.bar}`} style={{ width: `${audit.score}%` }} />
+                  <div className={`h-3 rounded-full ${verdict.bar}`} style={{ width: `${audit.score ?? 0}%` }} />
                 </div>
               </div>
             </div>
@@ -328,7 +292,7 @@ const ProjectAuditReport = () => {
           <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
             <Card className="p-5">
               <p className="text-xs uppercase tracking-wide text-gray-400">Оценка</p>
-              <p className="mt-2 text-3xl font-bold text-gray-900">{audit.score}/100</p>
+              <p className="mt-2 text-3xl font-bold text-gray-900">{describeAuditScore(audit.score)}</p>
             </Card>
             <Card className="p-5">
               <p className="text-xs uppercase tracking-wide text-gray-400">Ошибки</p>
@@ -363,6 +327,7 @@ const ProjectAuditReport = () => {
                       <button
                         type="button"
                         onClick={() => setExpandedCriterion(expanded ? null : criterion.key)}
+                        aria-expanded={expanded}
                         className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left"
                       >
                         <div className="min-w-0">

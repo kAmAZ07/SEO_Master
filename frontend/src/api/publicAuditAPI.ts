@@ -1,6 +1,8 @@
 import api from './axiosConfig'
 import axios from 'axios'
 import { storeAuditClaimToken } from './auditClaim'
+import { getAccessToken } from './session'
+import type { AuditLoadErrorKind } from '@/utils/auditStatus'
 import type { AuditRequest, AuditStatus, AuditFinding, AuditIssueSummary, AuditSummary, AuditPage, AuditCriterion } from '@/types/audit'
 
 const asObject = (value: unknown): Record<string, unknown> =>
@@ -37,12 +39,20 @@ const normalizeFindingStatus = (severity: string): AuditFinding['status'] => {
   return 'success'
 }
 
-const normalizeStatus = (status: string): AuditStatus['status'] => {
+// Незнакомый статус не превращается в «выполняется»: иначе опрос и индикатор загрузки не закончатся никогда.
+// Старые названия (pending/processing/in_progress) приводятся к текущим статусам жизненного цикла.
+export const normalizeStatus = (status: string): AuditStatus['status'] => {
   const value = status.toLowerCase()
-  if (value === 'queued' || value === 'pending' || value === 'processing' || value === 'in_progress' || value === 'completed' || value === 'failed') {
+  if (value === 'queued' || value === 'pending') {
+    return 'queued'
+  }
+  if (value === 'running' || value === 'processing' || value === 'in_progress') {
+    return 'running'
+  }
+  if (value === 'completed' || value === 'partial' || value === 'failed' || value === 'cancelled' || value === 'expired') {
     return value
   }
-  return 'processing'
+  return 'unknown'
 }
 
 const mapFindings = (findings: unknown): AuditFinding[] => {
@@ -110,14 +120,13 @@ const summarizeIssues = (details: AuditFinding[]): AuditIssueSummary => {
   return summary
 }
 
-const calculateScore = (summary: AuditSummary, issues: AuditIssueSummary): number => {
-  const directScore = asNumber(summary.score, -1)
-  if (directScore >= 0) {
-    return Math.max(0, Math.min(100, Math.round(directScore)))
+// Оценка берётся только из ответа сервера. Если её нет, возвращаем null: подставлять формулу на клиенте нельзя.
+const readScore = (summary: AuditSummary): number | null => {
+  const direct = summary.score
+  if (typeof direct !== 'number' || !Number.isFinite(direct)) {
+    return null
   }
-
-  const fallback = 100 - issues.errors * 18 - issues.warnings * 5
-  return Math.max(0, Math.min(100, Math.round(fallback)))
+  return Math.max(0, Math.min(100, Math.round(direct)))
 }
 
 const mapPages = (pages: unknown): AuditPage[] => {
@@ -140,7 +149,7 @@ const mapPages = (pages: unknown): AuditPage[] => {
   })
 }
 
-const normalizeAudit = (payload: unknown): AuditStatus => {
+export const normalizeAudit = (payload: unknown): AuditStatus => {
   const data = asObject(payload)
   const results = asObject(data.results)
   const rawSummary = Object.keys(results).length > 0 ? results.summary : data.summary
@@ -158,19 +167,23 @@ const normalizeAudit = (payload: unknown): AuditStatus => {
     id: asString(data.id || uid),
     url,
     createdAt: asString(data.created_at || data.createdAt || new Date().toISOString()),
-    status: normalizeStatus(asString(data.status, 'processing')),
+    status: normalizeStatus(asString(data.status, 'unknown')),
     progress: asNumber(data.progress, 0),
-    score: calculateScore(summary, issues),
+    score: readScore(summary),
     issues,
     details,
     summary,
     pages,
     error: asString(data.error),
+    errorCode: asString(results.error_code) || undefined,
+    partialReasons: Array.isArray(results.partial_reasons)
+      ? results.partial_reasons.map((reason) => asString(reason)).filter(Boolean)
+      : undefined,
   }
 }
 
 export const submitAuditRequest = async (request: AuditRequest): Promise<AuditStatus> => {
-  const token = localStorage.getItem('token')
+  const token = getAccessToken()
   if (request.projectId && token) {
     const response = await api.post('/audit/full', {
       projectId: request.projectId,
@@ -185,7 +198,7 @@ export const submitAuditRequest = async (request: AuditRequest): Promise<AuditSt
       status: normalizeStatus(asString(data.status, 'queued')),
       progress: 10,
       createdAt: new Date().toISOString(),
-      score: 0,
+      score: null,
       issues: { passed: 0, warnings: 0, errors: 0 },
       details: [],
       summary: undefined,
@@ -202,10 +215,10 @@ export const submitAuditRequest = async (request: AuditRequest): Promise<AuditSt
     uid: asString(data.uid || data.audit_id),
     id: asString(data.audit_id || data.uid || data.id),
     url: request.url,
-    status: normalizeStatus(asString(data.status, 'processing')),
+    status: normalizeStatus(asString(data.status, 'queued')),
     progress: 10,
     createdAt: new Date().toISOString(),
-    score: 0,
+    score: null,
     issues: { passed: 0, warnings: 0, errors: 0 },
     details: [],
     summary: undefined,
@@ -214,19 +227,56 @@ export const submitAuditRequest = async (request: AuditRequest): Promise<AuditSt
   }
 }
 
-export const getAuditStatus = async (uid: string): Promise<AuditStatus> => {
-  const token = localStorage.getItem('token')
-  if (token) {
+export const classifyAuditError = (error: unknown): AuditLoadErrorKind => {
+  if (!axios.isAxiosError(error)) {
+    return 'error'
+  }
+  if (axios.isCancel(error)) {
+    return 'aborted'
+  }
+  if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+    return 'timeout'
+  }
+  const status = error.response?.status
+  if (status === undefined) {
+    return 'network'
+  }
+  if (status === 404) {
+    return 'not_found'
+  }
+  if (status === 410) {
+    return 'expired'
+  }
+  if (status === 429) {
+    return 'rate_limited'
+  }
+  if (status >= 500) {
+    return 'unavailable'
+  }
+  return 'error'
+}
+
+// Приватный статус доступен только владельцу. Если он не подошёл (нет доступа, нет аудита, сессия
+// истекла), публичный отчёт по uid остаётся доступным: ошибка приватного запроса его не скрывает.
+const PRIVATE_FALLBACK_STATUSES = [401, 403, 404]
+
+export const getAuditStatus = async (uid: string, signal?: AbortSignal): Promise<AuditStatus> => {
+  if (getAccessToken()) {
     try {
-      const response = await api.get(`/audit/status/${uid}`)
+      const response = await api.get(`/audit/status/${uid}`, { signal })
       return normalizeAudit(response.data)
     } catch (error) {
-      if (!axios.isAxiosError(error) || ![403, 404].includes(error.response?.status ?? 0)) {
+      if (!axios.isAxiosError(error) || !PRIVATE_FALLBACK_STATUSES.includes(error.response?.status ?? 0)) {
         throw error
       }
     }
   }
 
-  const response = await api.get(`/public/audit-status/${uid}`)
+  const response = await api.get(`/public/audit-status/${uid}`, { signal })
+  return normalizeAudit(response.data)
+}
+
+export const cancelAudit = async (uid: string): Promise<AuditStatus> => {
+  const response = await api.post(`/public/audit/${uid}/cancel`)
   return normalizeAudit(response.data)
 }

@@ -724,7 +724,9 @@ class FFScoreResponse(BaseModel):
     score_id: str
     project_id: Optional[str]
     root_url: str
-    ff_score: float
+    ff_score: Optional[float]
+    status: str
+    formula_version: str
     components: Dict[str, Any]
     inputs: Dict[str, Any]
     thresholds: Dict[str, Any]
@@ -739,7 +741,9 @@ class EEATScoreResponse(BaseModel):
     score_id: str
     project_id: Optional[str]
     root_url: str
-    score: float
+    score: Optional[float]
+    status: str
+    formula_version: str
     breakdown: Dict[str, Any]
     signals: Dict[str, Any]
     created_at: datetime

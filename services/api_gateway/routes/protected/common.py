@@ -22,6 +22,7 @@ from services.api_gateway.projects import access
 from services.api_gateway.projects.errors import ProjectError
 from services.api_gateway.projects.http import to_http_exception
 from services.api_gateway.projects.verification import DomainVerificationService, VerificationConfig, VerificationState
+from services.api_gateway.score_view import ff_score_view
 from shared.projects.roles import Permission
 
 logger = get_logger(__name__)
@@ -184,17 +185,7 @@ def _latest_ff_score(db: Session, project_id: str) -> Optional[FFScore]:
 
 
 def _serialize_ff_score(row: Optional[FFScore]) -> Optional[Dict[str, Any]]:
-    if row is None:
-        return None
-
-    components = row.components if isinstance(row.components, dict) else {}
-    return {
-        "total": float(row.ff_score),
-        "freshness": float(components.get("freshness", 0) or 0),
-        "familiarity": float(components.get("familiarity", 0) or 0),
-        "quality": float(components.get("quality", 0) or 0),
-        "timestamp": _serialize_datetime(row.created_at) or "",
-    }
+    return ff_score_view(row, _serialize_datetime(row.created_at) or "") if row is not None else None
 
 
 def _count_project_backlinks(db: Session, project_ids: List[str]) -> int:

@@ -11,6 +11,7 @@ from services.api_gateway.auth import (
     get_current_user,
 )
 
+from services.api_gateway.score_view import average_full_score
 from services.api_gateway.routes.protected.common import (
     _collect_recent_audits,
     _count_project_backlinks,
@@ -69,12 +70,7 @@ async def get_dashboard_stats(current_user: User = Depends(get_current_user), db
 
     backlink_count = _count_project_backlinks(db, project_ids)
     tracked_keywords = _load_tracked_keywords(db, project_ids)
-    latest_scores = [
-        latest_score.ff_score
-        for project_id in project_ids
-        if (latest_score := _latest_ff_score(db, project_id)) is not None
-    ]
-    avg_ff_score = (sum(latest_scores) / len(latest_scores)) if latest_scores else 0.0
+    avg_ff_score, ff_score_projects = average_full_score(_latest_ff_score(db, project_id) for project_id in project_ids)
 
     return {
         "totalProjects": len(projects),
@@ -83,7 +79,8 @@ async def get_dashboard_stats(current_user: User = Depends(get_current_user), db
         "totalBacklinks": backlink_count,
         "pendingTasks": pending_tasks,
         "completedTasks": completed_tasks,
-        "avgFFScore": round(avg_ff_score, 2),
+        "avgFFScore": avg_ff_score,
+        "ffScoreProjects": ff_score_projects,
         "recentProjects": recent_projects,
         "recentAudits": recent_audits,
     }

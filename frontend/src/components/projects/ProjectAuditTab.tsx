@@ -1,8 +1,11 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import api from '../../api/axiosConfig'
+import { useAuditPolling } from '../../hooks/useAuditPolling'
 import { useAppDispatch, useAppSelector } from '../../store/hooks'
-import { pollAuditStatus, setPolling, startAudit } from '../../store/slices/auditSlice'
+import { resetAudit, startAudit } from '../../store/slices/auditSlice'
+import { describeAuditScore, formatAuditStatus, hasAuditResults, isTerminalAuditStatus } from '../../utils/auditStatus'
+import AuditStatePanel from '../audit/AuditStatePanel'
 import Card from '../ui/Card'
 import Button from '../ui/Button'
 import Input from '../ui/Input'
@@ -11,6 +14,10 @@ import Loader from '../ui/Loader'
 interface ProjectAuditTabProps {
   projectId: string
   projectUrl: string
+  // Проект без корректной области (scope_review): расширенный аудит недоступен.
+  scopeReview?: boolean
+  // Перейти к блоку подтверждения владения (вкладка «Обзор»).
+  onOpenOwnership?: () => void
 }
 
 interface AuditHistoryItem {
@@ -23,57 +30,62 @@ interface AuditHistoryItem {
   mode: string | null
 }
 
-const ProjectAuditTab = ({ projectId, projectUrl }: ProjectAuditTabProps) => {
+const ProjectAuditTab = ({ projectId, projectUrl, scopeReview = false, onOpenOwnership }: ProjectAuditTabProps) => {
   const dispatch = useAppDispatch()
-  const { currentAudit, loading, polling, error } = useAppSelector((state) => state.audit)
+  const { currentAudit, loading, error, errorKind, errorCode } = useAppSelector((state) => state.audit)
   const [url, setUrl] = useState(projectUrl)
   const [auditUid, setAuditUid] = useState<string | null>(null)
   const [history, setHistory] = useState<AuditHistoryItem[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const { gaveUp, retry } = useAuditPolling(auditUid ?? undefined)
 
-  const loadHistory = useCallback(async () => {
-    setHistoryLoading(true)
-    try {
-      const response = await api.get<AuditHistoryItem[]>('/audit/history', { params: { projectId } })
-      setHistory(response.data ?? [])
-    } catch {
-      // История необязательна: при ошибке остаётся прежний список.
-    } finally {
-      setHistoryLoading(false)
-    }
-  }, [projectId])
+  const loadHistory = useCallback(
+    async (isCurrent: () => boolean = () => true) => {
+      setHistoryLoading(true)
+      setHistoryError(null)
+      try {
+        const response = await api.get<AuditHistoryItem[]>('/audit/history', { params: { projectId } })
+        if (isCurrent()) {
+          setHistory(Array.isArray(response.data) ? response.data : [])
+        }
+      } catch {
+        if (isCurrent()) {
+          setHistoryError('Не удалось загрузить историю аудитов.')
+        }
+      } finally {
+        if (isCurrent()) {
+          setHistoryLoading(false)
+        }
+      }
+    },
+    [projectId],
+  )
 
   useEffect(() => {
     setUrl(projectUrl)
   }, [projectUrl])
 
+  // Вкладка открывается без чужого результата и чужой ошибки от предыдущего экрана.
   useEffect(() => {
-    void loadHistory()
+    dispatch(resetAudit())
+  }, [dispatch])
+
+  useEffect(() => {
+    // Ответ по предыдущему проекту (или после размонтирования) в историю не попадает.
+    let current = true
+    void loadHistory(() => current)
+    return () => {
+      current = false
+    }
   }, [loadHistory])
 
+  const finishedStatus = currentAudit && isTerminalAuditStatus(currentAudit.status) ? currentAudit.status : null
   useEffect(() => {
-    const activeUid = auditUid || currentAudit?.uid
-    const status = currentAudit?.status
-    const shouldPoll = Boolean(activeUid && polling && status !== 'completed' && status !== 'failed')
-
-    if (!shouldPoll || !activeUid) {
-      return undefined
-    }
-
-    const timer = window.setInterval(() => {
-      void dispatch(pollAuditStatus(activeUid))
-    }, 3000)
-
-    return () => {
-      window.clearInterval(timer)
-    }
-  }, [auditUid, currentAudit?.status, currentAudit?.uid, dispatch, polling])
-
-  useEffect(() => {
-    if (currentAudit?.status === 'completed' || currentAudit?.status === 'failed') {
+    if (finishedStatus) {
       void loadHistory()
     }
-  }, [currentAudit?.status, loadHistory])
+  }, [finishedStatus, loadHistory])
 
   const activeAudit = useMemo(() => {
     if (!currentAudit || (auditUid && currentAudit.uid !== auditUid)) {
@@ -87,7 +99,6 @@ const ProjectAuditTab = ({ projectId, projectUrl }: ProjectAuditTabProps) => {
     try {
       const audit = await dispatch(startAudit({ projectId, url: url.trim() || projectUrl })).unwrap()
       setAuditUid(audit.uid)
-      dispatch(setPolling(audit.status !== 'completed' && audit.status !== 'failed'))
     } catch {
       // Ошибка запуска уже сохранена в состоянии аудита (rejected-действие).
     }
@@ -119,39 +130,40 @@ const ProjectAuditTab = ({ projectId, projectUrl }: ProjectAuditTabProps) => {
             onChange={(event) => setUrl(event.target.value)}
             placeholder={projectUrl}
           />
-          <Button type="submit" disabled={loading}>
+          <Button type="submit" disabled={loading || scopeReview}>
             {loading ? 'Запускаем...' : 'Запустить аудит'}
           </Button>
         </form>
 
-        {error && (
-          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
+        {scopeReview && (
+          <p role="status" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            У проекта нет корректной области сайта, поэтому расширенный аудит недоступен.
+          </p>
+        )}
+
+        {errorCode === 'domain_not_verified' && onOpenOwnership && (
+          <div className="mt-3">
+            <Button type="button" variant="outline" onClick={onOpenOwnership}>
+              Перейти к подтверждению владения
+            </Button>
           </div>
         )}
       </Card>
 
-      {activeAudit && activeAudit.status !== 'completed' && activeAudit.status !== 'failed' && (
-        <Card className="p-8 text-center">
-          <Loader />
-          <h3 className="mt-5 text-lg font-semibold text-gray-900">Аудит выполняется</h3>
-          <p className="mt-2 text-sm text-gray-600">Статус: {activeAudit.status}</p>
-        </Card>
-      )}
+      <AuditStatePanel
+        audit={activeAudit}
+        error={error}
+        errorKind={errorKind}
+        gaveUp={gaveUp}
+        onRetry={retry}
+      />
 
-      {activeAudit?.status === 'failed' && (
-        <Card className="border-red-200 bg-red-50 p-6">
-          <h3 className="text-lg font-semibold text-red-900">Аудит завершился с ошибкой</h3>
-          <p className="mt-2 text-sm text-red-700">{activeAudit.error || 'Попробуйте запустить проверку еще раз.'}</p>
-        </Card>
-      )}
-
-      {activeAudit?.status === 'completed' && (
+      {activeAudit && hasAuditResults(activeAudit.status) && (
         <Card className="p-6">
           <div className="grid gap-4 md:grid-cols-4">
             <div>
               <p className="text-xs uppercase tracking-wide text-gray-400">Оценка</p>
-              <p className="mt-2 text-3xl font-bold text-gray-900">{activeAudit.score}/100</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">{describeAuditScore(activeAudit.score)}</p>
             </div>
             <div>
               <p className="text-xs uppercase tracking-wide text-gray-400">Ошибки</p>
@@ -177,6 +189,12 @@ const ProjectAuditTab = ({ projectId, projectUrl }: ProjectAuditTabProps) => {
           </Button>
         </div>
 
+        {historyError && (
+          <p role="alert" className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {historyError}
+          </p>
+        )}
+
         {historyLoading && !history.length ? (
           <Loader />
         ) : history.length ? (
@@ -195,13 +213,13 @@ const ProjectAuditTab = ({ projectId, projectUrl }: ProjectAuditTabProps) => {
                 {history.map((item) => (
                   <tr key={item.id} className="border-b border-gray-100 text-sm text-gray-700">
                     <td className="max-w-[260px] truncate px-4 py-3 font-medium text-gray-900">{item.url}</td>
-                    <td className="px-4 py-3">{item.status}</td>
-                    <td className="px-4 py-3">{item.score != null ? `${item.score}/100` : '—'}</td>
+                    <td className="px-4 py-3">{formatAuditStatus(item.status)}</td>
+                    <td className="px-4 py-3">{item.score != null ? describeAuditScore(item.score) : '—'}</td>
                     <td className="px-4 py-3">
                       {item.createdAt ? new Date(item.createdAt).toLocaleString('ru-RU') : '—'}
                     </td>
                     <td className="px-4 py-3">
-                      {item.status === 'completed' ? (
+                      {item.status === 'completed' || item.status === 'partial' ? (
                         <Link
                           to={`/dashboard/projects/${projectId}/audits/${item.uid}`}
                           className="font-medium text-blue-600 hover:text-blue-700"

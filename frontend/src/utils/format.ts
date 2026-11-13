@@ -45,6 +45,7 @@ const PROJECT_STATUS_LABELS: Record<string, string> = {
   pending: 'Ожидает настройки',
   inactive: 'Неактивен',
   disabled: 'Отключён',
+  scope_review: 'Требует проверки области',
 };
 
 export const formatProjectStatus = (status?: string | null): string => {

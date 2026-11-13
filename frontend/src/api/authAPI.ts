@@ -96,7 +96,13 @@ export const updateProfile = async (data: UpdateProfilePayload): Promise<User> =
   return response.data
 }
 
-export const changePassword = async (data: ChangePasswordPayload): Promise<{ success: boolean }> => {
+export interface ChangePasswordResponse {
+  success: boolean
+  // Сервер отзывает все сессии пользователя: после смены пароля нужен повторный вход.
+  reauth_required?: boolean
+}
+
+export const changePassword = async (data: ChangePasswordPayload): Promise<ChangePasswordResponse> => {
   const response = await api.post('/auth/change-password', data)
   return response.data
 }

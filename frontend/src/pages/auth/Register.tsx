@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../../store/hooks'
+import { PENDING_PROJECT_SAVE_KEY } from '../../api/session'
+import { safeRedirectPath } from '../../utils/safeRedirect'
 import { clearError, register } from '../../store/slices/authSlice'
 import Input from '../../components/ui/Input'
 import Button from '../../components/ui/Button'
 import { validatePassword } from '../../utils/validation'
 
-const PENDING_PROJECT_SAVE_KEY = 'seoMaster.pendingProjectSave'
 
 const getPendingSaveRedirect = () => {
   try {
@@ -62,8 +63,7 @@ const Register = () => {
     )
 
     if (register.fulfilled.match(result)) {
-      const redirect = searchParams.get('redirect') || getPendingSaveRedirect()
-      navigate(redirect?.startsWith('/') ? redirect : '/')
+      navigate(safeRedirectPath(searchParams.get('redirect')) ?? getPendingSaveRedirect() ?? '/')
     }
   }
 

@@ -3,13 +3,15 @@ import type { FormEvent } from 'react'
 import { ChevronDown, Download } from 'lucide-react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
-import { pollAuditStatus, setPolling, startAudit } from '../store/slices/auditSlice'
-import { createProject } from '../store/slices/dashboardSlice'
+import { cancelAuditRequest, resetAudit, startAudit } from '../store/slices/auditSlice'
+import { useAuditPolling } from '../hooks/useAuditPolling'
+import { useProjectSave } from '../hooks/useProjectSave'
 import type { AuditCriterion, AuditFinding } from '../types/audit'
+import { describeAuditScore, hasAuditResults, isActiveAuditStatus } from '../utils/auditStatus'
+import AuditStatePanel from '../components/audit/AuditStatePanel'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
-import Loader from '../components/ui/Loader'
 
 const severityRank: Record<string, number> = {
   critical: 5,
@@ -22,7 +24,16 @@ const severityRank: Record<string, number> = {
   success: 0,
 }
 
-const scoreTone = (score: number) => {
+const scoreTone = (score: number | null) => {
+  if (score === null) {
+    return {
+      text: 'text-gray-300',
+      bar: 'bg-gray-500',
+      border: 'border-gray-200',
+      bg: 'bg-gray-50',
+      label: 'Оценка недоступна',
+    }
+  }
   if (score >= 80) {
     return {
       text: 'text-emerald-700',
@@ -109,16 +120,6 @@ const getTopFindings = (findings: AuditFinding[]) =>
 const flattenCriterionFindings = (criteria: AuditCriterion[]) =>
   criteria.flatMap((criterion) => criterion.findings)
 
-const PENDING_PROJECT_SAVE_KEY = 'seoMaster.pendingProjectSave'
-
-const getProjectNameFromUrl = (value: string) => {
-  try {
-    return new URL(value).hostname.replace(/^www\./, '') || value
-  } catch {
-    return value.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0] || 'SEO project'
-  }
-}
-
 const FindingRow = ({ finding }: { finding: AuditFinding }) => {
   const detailEntries = Object.entries(finding.details ?? {})
     .map(([key, value]) => [key, formatDetailValue(value)] as const)
@@ -162,7 +163,7 @@ const exportAuditToCsv = (audit: import('../types/audit').AuditStatus) => {
 
   rows.push(['SEO Master — Отчёт аудита'])
   rows.push(['URL', audit.url])
-  rows.push(['Оценка', String(audit.score)])
+  rows.push(['Оценка', describeAuditScore(audit.score)])
   rows.push(['Дата', new Date(audit.createdAt).toLocaleString('ru-RU')])
   rows.push([])
   rows.push(['Критерий', 'Код проверки', 'Название замечания', 'Описание', 'Серьёзность', 'Статус', 'Рекомендация'])
@@ -215,46 +216,33 @@ const Audit = () => {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
-  const { currentAudit, loading, polling, error } = useAppSelector((state) => state.audit)
-  const { token, isAuthenticated } = useAppSelector((state) => state.auth)
-  const { loading: dashboardLoading, error: dashboardError } = useAppSelector((state) => state.dashboard)
+  const { currentAudit: storedAudit, loading, cancelling, error, errorKind } = useAppSelector((state) => state.audit)
+  const { sessionStatus } = useAppSelector((state) => state.auth)
   const [url, setUrl] = useState('')
   const [expandedCriterion, setExpandedCriterion] = useState<string | null>(null)
-  const [savingProject, setSavingProject] = useState(false)
   const projectId = searchParams.get('project') ?? undefined
   const shouldSaveProject = searchParams.get('saveProject') === '1'
-  const isProjectAudit = Boolean(projectId && token)
+  const isAuthenticated = sessionStatus === 'authenticated'
+  // Пока профиль подтверждается сервером, решение «вошёл ли пользователь» не принимается.
+  const sessionRestoring = sessionStatus === 'restoring'
+  const isProjectAudit = Boolean(projectId && isAuthenticated)
+
+  // На маршруте без uid прежний результат не показывается; на маршруте с uid — только результат этого uid.
+  const currentAudit = storedAudit && (!uid || storedAudit.uid === uid) ? storedAudit : null
 
   useEffect(() => {
     if (!uid) {
-      return
+      dispatch(resetAudit())
     }
-
-    void dispatch(pollAuditStatus(uid)).then((result) => {
-      if (pollAuditStatus.fulfilled.match(result)) {
-        const status = result.payload.status
-        dispatch(setPolling(status !== 'completed' && status !== 'failed'))
-      }
-    })
   }, [dispatch, uid])
 
-  useEffect(() => {
-    const activeUid = uid || currentAudit?.uid
-    const status = currentAudit?.status
-    const shouldPoll = Boolean(activeUid && polling && status !== 'completed' && status !== 'failed')
-
-    if (!shouldPoll || !activeUid) {
-      return undefined
-    }
-
-    const timer = window.setInterval(() => {
-      void dispatch(pollAuditStatus(activeUid))
-    }, 2500)
-
-    return () => {
-      window.clearInterval(timer)
-    }
-  }, [dispatch, polling, currentAudit?.status, currentAudit?.uid, uid])
+  const { gaveUp, retry: retryPolling } = useAuditPolling(uid)
+  const { state: saveState, requestSave, retry: retrySave } = useProjectSave({
+    audit: currentAudit,
+    canSave: isAuthenticated,
+    autoSave: shouldSaveProject,
+  })
+  const savingProject = saveState.status === 'saving'
 
   const criteria = useMemo(() => currentAudit?.summary?.criteria ?? [], [currentAudit?.summary?.criteria])
 
@@ -278,75 +266,25 @@ const Audit = () => {
     }
   }
 
-  const handleSaveProject = async () => {
-    if (!currentAudit?.uid || !currentAudit.url) {
+  const handleSaveProject = () => {
+    if (!currentAudit?.uid) {
       return
     }
-
-    const pendingSave = {
-      uid: currentAudit.uid,
-      url: currentAudit.url,
-    }
-    localStorage.setItem(PENDING_PROJECT_SAVE_KEY, JSON.stringify(pendingSave))
-
-    if (!isAuthenticated && !token) {
+    // Не вошёл — запоминаем намерение и ведём на регистрацию; после входа сохранение выполнится один раз само.
+    if (!requestSave() && !isAuthenticated && !sessionRestoring) {
       navigate(`/register?redirect=${encodeURIComponent(`/audit/results/${currentAudit.uid}?saveProject=1`)}`)
-      return
-    }
-
-    setSavingProject(true)
-    try {
-      const project = await dispatch(createProject({
-        name: getProjectNameFromUrl(currentAudit.url),
-        url: currentAudit.url,
-        sourceAuditId: currentAudit.uid,
-      })).unwrap()
-      localStorage.removeItem(PENDING_PROJECT_SAVE_KEY)
-      navigate(`/dashboard/projects/${project.id}/audits/${currentAudit.uid}`)
-    } finally {
-      setSavingProject(false)
     }
   }
-
-  useEffect(() => {
-    if (!shouldSaveProject || (!isAuthenticated && !token) || !currentAudit?.uid || !currentAudit.url || savingProject) {
-      return
-    }
-
-    let pendingSave: { uid?: string; url?: string } | null = null
-    try {
-      pendingSave = JSON.parse(localStorage.getItem(PENDING_PROJECT_SAVE_KEY) || 'null')
-    } catch {
-      pendingSave = null
-    }
-
-    if (pendingSave?.uid !== currentAudit.uid) {
-      return
-    }
-
-    setSavingProject(true)
-    void dispatch(createProject({
-      name: getProjectNameFromUrl(pendingSave?.url || currentAudit.url),
-      url: pendingSave?.url || currentAudit.url,
-      sourceAuditId: currentAudit.uid,
-    })).unwrap()
-      .then((project) => {
-        localStorage.removeItem(PENDING_PROJECT_SAVE_KEY)
-        navigate(`/dashboard/projects/${project.id}/audits/${currentAudit.uid}`)
-      })
-      .finally(() => {
-        setSavingProject(false)
-      })
-  }, [currentAudit?.uid, currentAudit?.url, dispatch, isAuthenticated, navigate, savingProject, shouldSaveProject, token])
 
   const allFindings = useMemo(
     () => (criteria.length > 0 ? flattenCriterionFindings(criteria) : currentAudit?.details ?? []),
     [criteria, currentAudit?.details],
   )
   const topFindings = useMemo(() => getTopFindings(allFindings), [allFindings])
-  const showProgress = currentAudit && currentAudit.status !== 'completed' && currentAudit.status !== 'failed'
-  const showResults = currentAudit && currentAudit.status === 'completed'
-  const verdict = currentAudit ? scoreTone(currentAudit.score) : scoreTone(0)
+  const showResults = currentAudit && hasAuditResults(currentAudit.status)
+  const verdict = scoreTone(currentAudit ? currentAudit.score : null)
+  // Отмена есть только у публичного аудита: проектный запускается через другой маршрут.
+  const canCancel = Boolean(uid && !projectId && currentAudit && isActiveAuditStatus(currentAudit.status))
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -355,7 +293,7 @@ const Audit = () => {
           SEO Master
         </Link>
         <div className="flex items-center gap-3">
-          {isAuthenticated || token ? (
+          {isAuthenticated ? (
             <Link to="/dashboard">
               <Button size="sm">Личный кабинет</Button>
             </Link>
@@ -411,36 +349,17 @@ const Audit = () => {
           </Card>
         </section>
 
-        {error && (
-          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
-          </div>
-        )}
-
-        {dashboardError && (
-          <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {dashboardError}
-          </div>
-        )}
-
-        {showProgress && (
-          <Card className="mt-6 rounded-lg p-8 text-center">
-            <Loader />
-            <h2 className="mt-5 text-xl font-semibold text-gray-950">Аудит выполняется</h2>
-            <p className="mt-2 text-gray-600">
-              Проверяем страницы, метаданные, ссылки, структурированные данные и доступность для crawler.
-            </p>
-          </Card>
-        )}
-
-        {currentAudit?.status === 'failed' && (
-          <Card className="mt-6 rounded-lg border-red-200 bg-red-50 p-6">
-            <h2 className="text-xl font-semibold text-red-900">Аудит завершился с ошибкой</h2>
-            <p className="mt-2 text-sm text-red-700">
-              {currentAudit.error || 'Попробуйте запустить проверку еще раз.'}
-            </p>
-          </Card>
-        )}
+        <div className="mt-2">
+          <AuditStatePanel
+            audit={currentAudit}
+            error={error}
+            errorKind={errorKind}
+            gaveUp={gaveUp}
+            onRetry={retryPolling}
+            onCancel={canCancel && uid ? () => void dispatch(cancelAuditRequest(uid)) : undefined}
+            cancelling={cancelling}
+          />
+        </div>
 
         {showResults && (
           <section className="mt-8 space-y-6">
@@ -469,12 +388,17 @@ const Audit = () => {
                 </div>
 
                 <div className="bg-gray-950 p-6 text-white">
-                  <p className="text-sm text-gray-300">Итоговая оценка</p>
-                  <p className={`mt-2 text-5xl font-black ${verdict.text}`}>{currentAudit.score}</p>
+                  <p className="text-sm text-gray-300">Итоговая оценка (эвристика)</p>
+                  <p className={`mt-2 text-5xl font-black ${verdict.text}`}>
+                    {currentAudit.score === null ? '—' : currentAudit.score}
+                  </p>
                   <p className="mt-2 text-sm text-gray-300">{verdict.label}</p>
                   <div className="mt-4 h-3 rounded-full bg-white/20">
-                    <div className={`h-3 rounded-full ${verdict.bar}`} style={{ width: `${currentAudit.score}%` }} />
+                    <div className={`h-3 rounded-full ${verdict.bar}`} style={{ width: `${currentAudit.score ?? 0}%` }} />
                   </div>
+                  <p className="mt-3 text-xs text-gray-400">
+                    Оценка рассчитана по эвристике и показывает приоритет правок, а не измеренный результат.
+                  </p>
                 </div>
               </div>
             </Card>
@@ -513,6 +437,7 @@ const Audit = () => {
                         <button
                           type="button"
                           onClick={() => setExpandedCriterion(expanded ? null : criterion.key)}
+                          aria-expanded={expanded}
                           className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left"
                         >
                           <div className="min-w-0">
@@ -577,11 +502,20 @@ const Audit = () => {
                   type="button"
                   variant="outline"
                   onClick={handleSaveProject}
-                  disabled={savingProject || dashboardLoading}
+                  disabled={savingProject || sessionRestoring}
                 >
-                  {savingProject || dashboardLoading ? 'Сохраняем проект...' : 'Сохранить проект в кабинете'}
+                  {savingProject ? 'Сохраняем проект...' : 'Сохранить проект в кабинете'}
                 </Button>
               </div>
+
+              {saveState.status === 'failed' && (
+                <div role="alert" className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  <p>{saveState.message}</p>
+                  <Button type="button" size="sm" variant="outline" className="mt-3" onClick={retrySave}>
+                    Повторить сохранение
+                  </Button>
+                </div>
+              )}
 
               {topFindings.length > 0 ? (
                 <div className="space-y-3">

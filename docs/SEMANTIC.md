@@ -120,6 +120,10 @@
 
 Reporting-обработчик сохраняет `eeat` как есть; чтобы сохранять и разбивку, ему нужно читать `eeat_details` (в AL-5 не менялся).
 
+### Потребитель: API проектов и панели (api_gateway)
+
+Код: `services/api_gateway/score_view.py`. Блок `ffScore` в `GET /api/projects` и `GET /api/projects/{id}`: `total` (число или `null`), `status` (`complete | insufficient_data | legacy_estimated`), `formulaVersion`, `heuristic`, `legacyEstimated`, `freshness` / `familiarity` / `quality` (число или `null`; у новой формулы берётся `score` доступного компонента), `partial`, `coverage`, `timestamp`. Недоступное значение остаётся `null`, нулём не заменяется. `GET /api/dashboard/stats`: `avgFFScore` — среднее последних баллов проектов только со статусом `complete` (оценочные `legacy_estimated` и `null` не участвуют), `ffScoreProjects` — число учтённых проектов; без таких проектов `avgFFScore = null`.
+
 ## 4. LLM-слой
 
 Код: `llm/policy.py`, `llm/providers.py`, `llm/llm_cache.py`, `llm/llm_client.py`.

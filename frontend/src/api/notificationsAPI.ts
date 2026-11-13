@@ -2,6 +2,7 @@ import api from './axiosConfig'
 import { fetchDashboardStats } from './dashboardAPI'
 import { fetchHITLTasks } from './hitlAPI'
 import type { Project } from '@/types/dashboard'
+import { describeFFScore } from '@/utils/ffScore'
 import type { AuditHistoryItem, ManagementTask, NotificationItem } from '@/types/notifications'
 
 const asObject = (value: unknown): Record<string, unknown> =>
@@ -140,7 +141,7 @@ const buildScoreNotifications = (projects: Project[]): NotificationItem[] =>
       category: 'score',
       severity: 'info',
       title: 'FF-Score обновлен',
-      description: `${project.name}: ${Math.round(project.ffScore?.total ?? 0)}/100`,
+      description: `${project.name}: ${describeFFScore(project.ffScore)}`,
       href: projectHref(project.id),
       actionLabel: 'Открыть проект',
       requiresAction: false,

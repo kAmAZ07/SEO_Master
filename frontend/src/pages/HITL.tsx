@@ -6,6 +6,7 @@ import Loader from '../components/ui/Loader'
 import { applyHITLTask, approveHITLTask, cancelHITLOperation, loadHITLTasks, rejectHITLTask, rollbackHITLOperation } from '../store/slices/hitlSlice'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import type { HITLTask } from '../types/hitl'
+import OperationDetails from '../components/hitl/OperationDetails'
 
 const formatJson = (value?: Record<string, unknown>) => {
   if (!value || Object.keys(value).length === 0) {
@@ -295,6 +296,9 @@ const HITL = () => {
                       </Button>
                     </div>
                     <p className="mt-2 text-sm text-gray-600">Одобрение сохраняет решение. Публикация выполняется отдельно.</p>
+                    {task.approvedAt && <p className="mt-2 text-sm text-gray-600">Одобрено: {task.approvedAt}; пользователь: {task.approvedBy || 'не предоставлен'}.</p>}
+                    {task.rejectedAt && <p className="mt-2 text-sm text-gray-600">Отклонено: {task.rejectedAt}; пользователь: {task.rejectedBy || 'не предоставлен'}.</p>}
+                    {task.rejectionReason && <p className="mt-2 text-sm text-gray-700">Причина отклонения: {task.rejectionReason}</p>}
                     {(canApply || reconcile) && <Button type="button" className="mt-3 w-full" disabled={isProcessing}
                       onClick={() => void handleApply(task)}>{reconcile ? 'Проверить результат публикации' : preparing ? 'Продолжить подготовку публикации' : 'Применить одобренные изменения'}</Button>}
                     {canCancel && <Button type="button" variant="outline" className="mt-3 w-full" disabled={isProcessing}
@@ -332,6 +336,11 @@ const HITL = () => {
                   </aside>
 
                   <section className="min-w-0 p-6">
+                    <div className="mb-4 space-y-1 text-sm text-gray-700" aria-label="Просматриваемая версия предложения">
+                      <p className="break-all">Версия предложения: <code>{task.recommendationVersionId || 'не предоставлена'}</code></p>
+                      <p className="break-all">Hash содержимого: <code>{task.contentHash || 'не предоставлен'}</code></p>
+                      <p>Решение относится к этой версии и показанным ниже значениям. Изменение версии требует нового решения.</p>
+                    </div>
                     <div className="mb-4 flex items-center justify-between gap-4">
                       <div>
                         <h3 className="text-lg font-semibold text-gray-900">Просмотр изменений</h3>
@@ -354,6 +363,10 @@ const HITL = () => {
                         useDarkTheme={false}
                       />
                     </div>
+                    {task.execution && <OperationDetails key={`${task.taskId}:${task.recommendationVersionId}:${task.contentHash}:${task.execution.operationId}`}
+                      context={task} operationId={task.execution.operationId} label="Квитанция и снимки публикации" />}
+                    {rollback && <OperationDetails key={`${task.taskId}:${task.recommendationVersionId}:${task.contentHash}:${rollback.operationId}`}
+                      context={task} operationId={rollback.operationId} label="Квитанция и снимки отката" />}
                   </section>
                 </div>
               </Card>

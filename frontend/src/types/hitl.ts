@@ -58,3 +58,28 @@ export interface HITLApproval {
   approved: boolean
   comment?: string
 }
+
+export type HITLOperationContext = Pick<HITLTask, 'taskId' | 'projectId' | 'recommendationVersionId' | 'contentHash'>
+
+export interface HITLCMSReceipt {
+  receiptId: string
+  operationId: string
+  outcome: 'applied_unverified' | 'rollback_applied_unverified' | 'no_op'
+  appliedAt: string
+  requestHash: string
+  beforeDigest: string
+  afterDigest: string
+  appliedFields: string[]
+}
+
+export interface HITLOperation {
+  operationId: string
+  state: string
+  operationType: 'apply' | 'rollback'
+  recordHash: string
+  requestHash: string | null
+  before: unknown
+  after: unknown
+  receipt: HITLCMSReceipt | null
+  verification: HITLVerification | null
+}

@@ -172,6 +172,8 @@ describe('HITL page', () => {
     expect(await screen.findByText('Meta title update')).toBeInTheDocument()
     expect(screen.getByText('project-1')).toBeInTheDocument()
     expect(screen.getByText('https://example.com/page')).toBeInTheDocument()
+    expect(screen.getByLabelText('Просматриваемая версия предложения')).toHaveTextContent('version-1')
+    expect(screen.getByLabelText('Просматриваемая версия предложения')).toHaveTextContent('a'.repeat(64))
     expect(screen.getByTestId('diff-viewer')).toHaveTextContent('Old title')
     expect(screen.getByTestId('diff-viewer')).toHaveTextContent('New title')
 

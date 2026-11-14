@@ -53,6 +53,8 @@ def stand(tmp_path, monkeypatch):
 
     def respond(request):
         calls.append(request)
+        if request.url.path.startswith("/internal/executions/"):
+            return httpx.Response(200, json={"state": "cancelled" if request.method == "POST" else "queued", "record": {"task_id": TASK_ID, "project_id": PROJECT_ID}})
         if request.url.path.endswith("/history"):
             return httpx.Response(200, json=[])
         if request.method == "GET":
@@ -153,3 +155,34 @@ def test_apply_rejects_mutable_changes_and_path_task_mismatch_before_proxy(stand
     assert client.post(f"/api/hitl/tasks/{TASK_ID}/apply", json={**body, "changes": {"title": "forged"}}).status_code == 422
     assert client.post(f"/api/hitl/tasks/{TASK_ID}/apply", json={**body, "task_id": BOB}).status_code == 409
     assert calls == []
+
+
+def test_cancel_requires_deploy_permission_and_checks_task_binding_before_command(stand):
+    client, maker, calls = stand
+    path = f"/api/hitl/tasks/{TASK_ID}/executions/{BOB}/cancel"
+    assert client.post(path).status_code == 403
+    assert all(call.method == "GET" for call in calls)
+    with maker() as db:
+        db.get(WorkspaceMember, (WORKSPACE, ALICE)).role = "deployer"
+        db.commit()
+    calls.clear()
+    response = client.post(path, headers={"Authorization": "Bearer original-access"})
+    assert response.status_code == 200 and response.json()["state"] == "cancelled"
+    assert calls[-2].url.path == f"/internal/executions/{BOB}"
+    assert calls[-1].url.path == f"/internal/executions/{BOB}/cancel"
+    assert calls[-1].headers["authorization"] == "Bearer original-access"
+
+
+def test_foreign_actor_cannot_cancel_an_operation(stand):
+    client, _, calls = stand
+    assert client.post(f"/api/hitl/tasks/{TASK_ID}/executions/{BOB}/cancel", headers={"X-User": BOB}).status_code == 404
+    assert all(call.method == "GET" for call in calls)
+
+
+def test_cancel_rejects_an_operation_bound_to_another_task_before_post(stand):
+    client, maker, calls = stand
+    with maker() as db:
+        db.get(WorkspaceMember, (WORKSPACE, ALICE)).role = "deployer"
+        db.commit()
+    assert client.post(f"/api/hitl/tasks/{BOB}/executions/{BOB}/cancel").status_code == 404
+    assert all(call.method == "GET" for call in calls)

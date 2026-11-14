@@ -102,7 +102,7 @@ async def test_legacy_rollback_cannot_dispatch_even_saved_changes(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("state", ["applying", "outcome_unknown", "applied_unverified", "no_op"])
+@pytest.mark.parametrize("state", ["applying", "outcome_unknown", "needs_reconciliation", "applied_unverified", "no_op"])
 async def test_repeated_execution_never_blindly_sends_apply(state):
     from unittest.mock import AsyncMock
     from services.client_api_gateway.hitl_executor import HITLExecutor
@@ -112,7 +112,8 @@ async def test_repeated_execution_never_blindly_sends_apply(state):
     record = {**refs.model_dump(), "project_id": str(uuid4()), "binding": {
         "base_url": "https://example.com", "site_id": str(uuid4()), "key_id": "current"}}
     operation = {"state": state, "record": record}
-    authority = AsyncMock(return_value=operation)
+    token = str(uuid4())
+    authority = AsyncMock(side_effect=[operation, {"operation": operation, "lease_id": token if state != "needs_reconciliation" else None}, operation])
     target = SimpleNamespace(status=AsyncMock(side_effect=ExecutionError("cms_operation_not_found")),
                              apply=AsyncMock(), preflight=AsyncMock())
     executor = HITLExecutor("Bearer fixture", authority=authority, target_factory=lambda *args: target)
@@ -127,27 +128,30 @@ async def test_authority_rejection_after_preflight_leaves_cms_untouched():
     from fastapi import HTTPException
     from unittest.mock import AsyncMock
     from services.client_api_gateway.hitl_executor import HITLExecutor
-    from shared.hitl_execution import ExecutionRequest
+    from shared.hitl_execution import ExecutionRequest, WordPressBinding
     refs = ExecutionRequest(operation_id=str(uuid4()), task_id=str(uuid4()), approval_id=str(uuid4()),
                             recommendation_version_id=str(uuid4()), content_hash="a" * 64)
     record = {**refs.model_dump(), "project_id": str(uuid4()), "version": {}, "before": {"exact": "snapshot"},
               "binding": {"base_url": "https://example.com", "site_id": str(uuid4()), "key_id": "current"}}
     operation = {"state": "ready", "record": record}
-    authority = AsyncMock(side_effect=[operation, HTTPException(409, "execution_expired")])
-    target = SimpleNamespace(preflight=AsyncMock(return_value=record["before"]), dry_run=AsyncMock(), apply=AsyncMock())
+    token = str(uuid4())
+    failed = {**operation, "state": "failed_before_apply"}
+    authority = AsyncMock(side_effect=[operation, {"operation": {**operation, "state": "preflight"}, "lease_id": token},
+        {**operation, "state": "dry_run"}, operation, HTTPException(409, "execution_expired"), failed])
+    target = SimpleNamespace(preflight=AsyncMock(return_value=record["before"]), dry_run=AsyncMock(), apply=AsyncMock(),
+        binding=WordPressBinding.model_validate(record["binding"]))
     executor = HITLExecutor("Bearer fixture", authority=authority, target_factory=lambda *args: target)
-    with pytest.raises(HTTPException) as error:
-        await executor.execute(refs)
-    assert error.value.detail == "execution_expired"
+    assert await executor.execute(refs) == failed
     target.apply.assert_not_called()
-    assert authority.call_args.args == ("POST", "/" + refs.operation_id + "/begin")
+    assert authority.await_args_list[-2].args == ("POST", "/" + refs.operation_id + "/begin", {"lease_id": token})
+    assert authority.call_args.args == ("POST", "/" + refs.operation_id + "/preparation/fail", {"lease_id": token, "error_code": "authorization_expired"})
 
 
 @pytest.mark.asyncio
 async def test_lost_apply_response_marks_unknown_and_retries_only_status():
     from unittest.mock import AsyncMock
     from services.client_api_gateway.hitl_executor import HITLExecutor
-    from shared.hitl_execution import ExecutionRequest
+    from shared.hitl_execution import ExecutionRequest, WordPressBinding
     refs = ExecutionRequest(operation_id=str(uuid4()), task_id=str(uuid4()), approval_id=str(uuid4()),
                             recommendation_version_id=str(uuid4()), content_hash="a" * 64)
     record = {**refs.model_dump(), "project_id": str(uuid4()), "version": {}, "before": {},
@@ -157,13 +161,17 @@ async def test_lost_apply_response_marks_unknown_and_retries_only_status():
     unknown = {**ready, "state": "outcome_unknown"}
     final = {**ready, "state": "applied_unverified"}
     receipt = {"signed": "receipt"}
-    authority = AsyncMock(side_effect=[ready, applying, unknown, unknown, final])
+    token = str(uuid4())
+    preparation_token = str(uuid4())
+    authority = AsyncMock(side_effect=[ready, {"operation": {**ready, "state": "preflight"}, "lease_id": preparation_token},
+        {**ready, "state": "dry_run"}, ready, applying, unknown, unknown, {"operation": unknown, "lease_id": token}, final])
     target = SimpleNamespace(preflight=AsyncMock(return_value={}), dry_run=AsyncMock(),
-                             apply=AsyncMock(side_effect=TimeoutError()), status=AsyncMock(return_value=receipt))
+                             apply=AsyncMock(side_effect=TimeoutError()), status=AsyncMock(return_value=receipt),
+                             binding=WordPressBinding.model_validate(record["binding"]))
     executor = HITLExecutor("Bearer fixture", authority=authority, target_factory=lambda *args: target)
     with pytest.raises(TimeoutError):
         await executor.execute(refs)
     assert authority.call_args.args == ("POST", "/" + refs.operation_id + "/finish", {"receipt": None})
     assert await executor.execute(refs) == final
     assert target.apply.call_count == 1 and target.status.call_count == 1
-    assert authority.call_args.args == ("POST", "/" + refs.operation_id + "/finish", {"receipt": receipt})
+    assert authority.call_args.args == ("POST", "/recovery/" + refs.operation_id + "/report", {"lease_id": token, "receipt": receipt, "error_code": None})

@@ -37,13 +37,39 @@ REDIS = "redis:7-alpine@sha256:7aec734b2bb298a1d769fd8729f13b8514a41bf90fcdd1f38
 RABBIT = "rabbitmq:3.12-management-alpine@sha256:0b44fbcc3a4bf22d00090f1353127577dbe1fcb109c41669733a9d7ecf6c3a78"
 CLIENT_ENTRY = """
 import os
+import asyncio
+from pathlib import Path
 assert os.environ['NETPOLICY_PROFILE']=='test'
 import services.client_api_gateway.hitl_executor as executor
 from shared.cms_http import CMSHttpClient
 from shared.netpolicy import NetPolicy
 original=executor.wordpress_target
 def target(project_id,binding=None):
-    return original(project_id,binding,http=CMSHttpClient(policy=NetPolicy(allow_private_hosts=frozenset({'wordpress.test'}))))
+    client=original(project_id,binding,http=CMSHttpClient(policy=NetPolicy(allow_private_hosts=frozenset({'wordpress.test'}))))
+    apply=client.apply
+    async def interrupted(record):
+        receipt=await apply(record)
+        if Path('/tmp/ar6-hold-receipt').exists():
+            Path('/tmp/ar6-receipt-received').write_text(record['operation_id'])
+            await asyncio.Event().wait()
+        return receipt
+    client.apply=interrupted
+    preflight=client.preflight
+    async def snapshot_interrupted(version):
+        snapshot=await preflight(version)
+        if Path('/tmp/ar6-hold-preflight').exists():
+            Path('/tmp/ar6-preflight-received').write_text('snapshot')
+            await asyncio.Event().wait()
+        return snapshot
+    client.preflight=snapshot_interrupted
+    dry_run=client.dry_run
+    async def dry_run_interrupted(record):
+        await dry_run(record)
+        if Path('/tmp/ar6-hold-dry-run').exists():
+            Path('/tmp/ar6-dry-run-received').write_text(record['operation_id'])
+            await asyncio.Event().wait()
+    client.dry_run=dry_run_interrupted
+    return client
 executor.wordpress_target=target
 import uvicorn
 uvicorn.run('services.client_api_gateway.main:app',host='0.0.0.0',port=8005)
@@ -255,10 +281,117 @@ def run_apps(wp: NativeWordPress) -> None:
             request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references, expected=403)
             database.run("UPDATE audit_schema.workspace_members SET role='owner' WHERE user_id=:id", id=actor)
             assert title() == "Мастерская обуви"
+            # Actual process loss AFTER WordPress commit/checked receipt and BEFORE
+            # Management completion. A restart must use status, never a second apply.
+            from concurrent.futures import ThreadPoolExecutor
+            client_name = wp.owner + "-client"
+            # Two actual pre-write crashes: resume the original intent after a lost
+            # snapshot; then preserve a frozen command across a lost dry-run response.
+            preparation_id = references["operation_id"]
+            frozen_preparation = None
+            for stage, flag, marker in (("preflight", "ar6-hold-preflight", "ar6-preflight-received"),
+                                        ("dry_run", "ar6-hold-dry-run", "ar6-dry-run-received")):
+                wp.run("exec", client_name, "python", "-c", "from pathlib import Path; Path('/tmp/" + flag + "').touch()")
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    pending = pool.submit(request, api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references)
+                    for _ in range(100):
+                        try:
+                            wp.run("exec", client_name, "cat", "/tmp/" + marker, timeout=5)
+                            break
+                        except RuntimeError:
+                            time.sleep(.2)
+                    else:
+                        raise AssertionError("pre-write crash point was not reached: " + stage)
+                    assert title() == "Мастерская обуви"
+                    assert database.scalar("SELECT metadata->>'state' FROM public.management_changelog WHERE id=:id", id=preparation_id) == stage
+                    if stage == "preflight":
+                        assert database.scalar("SELECT before_value IS NULL AND after_value IS NULL AND metadata->'record'=metadata->'intent' FROM public.management_changelog WHERE id=:id", id=preparation_id) is True
+                    else:
+                        frozen_preparation = database.scalar("SELECT metadata->'record' FROM public.management_changelog WHERE id=:id", id=preparation_id)
+                        assert frozen_preparation["command"]["operation_id"] == preparation_id
+                    wp.run("kill", client_name)
+                    try:
+                        pending.result(timeout=55)
+                    except (AssertionError, httpx.RequestError):
+                        pass  # No CMS write was dispatched at either boundary.
+                    else:
+                        raise AssertionError("killed pre-write process returned a successful operation")
+                wp.run("start", client_name)
+                for _ in range(60):
+                    info = json.loads(wp.run("inspect", client_name))[0]
+                    port = info["NetworkSettings"]["Ports"]["8005/tcp"][0]["HostPort"]
+                    try:
+                        request("http://127.0.0.1:" + port, "GET", "/health/ready")
+                        break
+                    except (AssertionError, httpx.RequestError):
+                        time.sleep(.5)
+                else:
+                    raise AssertionError("pre-write restart readiness failed")
+                assert title() == "Мастерская обуви"
+                # The daemon must ignore unbegun rows. Only the explicit next apply
+                # request resumes preparation, after the previous lease expires.
+                lease_until = database.scalar("SELECT (metadata->'preparation'->>'lease_until')::timestamptz FROM public.management_changelog WHERE id=:id", id=preparation_id)
+                if stage == "dry_run":
+                    # Snapshot I/O can make the command deadline slightly later
+                    # than its preparation lease. Wait for BOTH, not a timing race.
+                    lease_until = max(lease_until, datetime.fromtimestamp(frozen_preparation["command"]["authorization_deadline"], timezone.utc))
+                for _ in range(75):
+                    if datetime.now(timezone.utc) >= lease_until:
+                        break
+                    time.sleep(1)
+                else:
+                    raise AssertionError("preparation lease expiry exceeded fixture budget")
+                assert title() == "Мастерская обуви"
+            stopped = request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references)
+            assert stopped["state"] == "failed_before_apply" and stopped["record"] == frozen_preparation
+            assert stopped["preparation"]["attempts"] == 2
+            assert stopped["preparation"]["error_code"] == "authorization_expired"
+            # Explicit cancellation releases only this proven unbegun operation.
+            request(api, "POST", f"/api/hitl/tasks/{task_id}/executions/{preparation_id}/cancel", token=token)
+            assert database.scalar("SELECT metadata->>'state' FROM public.management_changelog WHERE id=:id", id=preparation_id) == "cancelled"
+            assert wp.php("global $wpdb; echo $wpdb->get_var(\"SELECT count(*) FROM {$wpdb->prefix}seo_master_operations_v2 WHERE operation_id='" + preparation_id + "'\");").strip() == "0"
+            references = {**references, "operation_id": str(uuid4())}
+            wp.run("exec", client_name, "python", "-c", "from pathlib import Path; Path('/tmp/ar6-hold-receipt').touch()")
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(request, api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references)
+                for _ in range(80):
+                    try:
+                        marker = wp.run("exec", client_name, "cat", "/tmp/ar6-receipt-received", timeout=5).strip()
+                        assert marker == references["operation_id"]
+                        break
+                    except RuntimeError:
+                        time.sleep(.25)
+                else:
+                    raise AssertionError("fault injection did not reach post-commit boundary")
+                assert title() == "Мастерская зимней обуви"
+                assert database.scalar("SELECT metadata->>'state' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == "applying"
+                frozen = database.scalar("SELECT metadata->'record' FROM public.management_changelog WHERE id=:id", id=references["operation_id"])
+                wp.run("kill", client_name)
+                try:
+                    pending.result(timeout=55)
+                except (AssertionError, httpx.RequestError):
+                    pass  # The original HTTP response is lost; CMS commit already proved.
+                else:
+                    raise AssertionError("interrupted Gateway unexpectedly delivered a receipt")
+            database.run("UPDATE public.users SET is_active=false WHERE id=:id", id=actor)
+            wp.run("start", client_name)
+            for _ in range(110):
+                if database.scalar("SELECT metadata->>'state' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == "applied_unverified":
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError("restarted status worker did not reconcile committed WordPress operation")
+            assert database.scalar("SELECT metadata->'record' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == frozen
+            assert database.scalar("SELECT jsonb_array_length(metadata->'recovery'->'attempts') FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == 1
+            assert database.scalar("SELECT metadata->'recovery'->'attempts'->0->>'status' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == "succeeded"
+            database.run("UPDATE public.users SET is_active=true WHERE id=:id", id=actor)
             result = request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references)
             assert result["state"] == "applied_unverified" and title() == "Мастерская зимней обуви"
+            count = wp.php("global $wpdb; echo $wpdb->get_var(\"SELECT count(*) FROM {$wpdb->prefix}seo_master_operations_v2 WHERE operation_id='" + references["operation_id"] + "'\");")
+            assert count.strip() == "1"
             assert request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references) == result
-            assert database.scalar("SELECT count(*) FROM public.management_changelog WHERE source='hitl_executor_v1'") == 1
+            assert database.scalar("SELECT count(*) FROM public.management_changelog WHERE source='hitl_executor_v1' AND id=:id", id=references["operation_id"]) == 1
+            assert database.scalar("SELECT count(*) FROM public.management_changelog WHERE source='hitl_executor_v1'") == 2
             # The actual publisher and live consumer run with the restricted Management role.
             wp.run("exec", wp.owner + "-management", "python", "-B", "-c", "from services.management_service.tasks.periodic_tasks import dispatch_hitl_outbox; result=dispatch_hitl_outbox(); assert result['published']>=1")
             for _ in range(50):
@@ -274,7 +407,7 @@ def run_apps(wp: NativeWordPress) -> None:
                     if service == "management":
                         assert conn.scalar(text("SELECT has_table_privilege(current_user,'audit_schema.workspace_members','UPDATE')")) is False
                 engine.dispose()
-            print("PASS actual HTTP apps: UID10001/read-only containers; migrated PG with distinct no-DDL roles; real Redis JWT sessions; viewed AL5 -> approve without apply -> guarded apply -> same operation; real RabbitMQ outbox/inbox; WordPress receipt and exact title. CMS transport test-private host only; verify/rollback/staging not claimed.")
+            print("PASS actual HTTP apps: UID10001/read-only containers; migrated PG with distinct no-DDL roles; real Redis JWT sessions; queued intent persisted before CMS; SIGKILL before freeze and after dry-run, same ID and immutable command, zero CMS writes; explicit pre-write cancel; SIGKILL after WordPress commit and service-only receipt recovery with inactive user; one WP ledger mutation; real RabbitMQ outbox/inbox. CMS transport test-private host only; public verify/rollback/staging not claimed.")
         finally:
             stand.stop_apps()
             for role, _local, _inside in credentials.values():

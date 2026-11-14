@@ -16,11 +16,12 @@ from services.client_api_gateway.hitl_executor import HITLExecutor
 from services.management_service.approval_policy import ApprovalError, DecisionRequest, UserActor
 from services.management_service.approval_service import ApprovalService
 from services.management_service.execution_service import ExecutionService
+from services.management_service.execution_preparation import ExecutionPreparation
 from services.management_service.migrations.runner import migrate
 from services.management_service.models import Task, TaskStatus, TaskType
 from services.semantic_service.proposals.model import ExternalEntity
 from services.semantic_service.proposals.repository import row_from_version
-from shared.hitl_execution import ExecutionRequest, WordPressBinding
+from shared.hitl_execution import ExecutionRequest, PreparationFailure, WordPressBinding
 from shared.page_evidence import seal_evidence
 from tests.fixtures.management_proposal import PROJECT_ID, TASK_ID, management_proposal_fixture
 from tests.wordpress.native import NativeWordPress
@@ -70,14 +71,22 @@ async def run_authority(wp: NativeWordPress, target_factory) -> None:
                 try:
                     if path == "/context":
                         return service.context(ExecutionRequest.model_validate(payload), actor)
+                    if path == "/queue":
+                        return service.queue(ExecutionRequest.model_validate(payload), actor)
                     if path == "/reserve":
                         return service.reserve(ExecutionRequest.model_validate({key: payload[key] for key in ExecutionRequest.model_fields}),
-                            actor, WordPressBinding.model_validate(payload["binding"]), payload["before"])
+                            actor, WordPressBinding.model_validate(payload["binding"]), payload["before"], preparation_lease=payload["lease_id"])
                     operation_id = path.split("/")[1]
                     if method == "GET":
                         return service.read(operation_id, actor)
                     if path.endswith("/begin"):
-                        return service.begin(operation_id, actor)
+                        return service.begin(operation_id, actor, preparation_lease=payload["lease_id"])
+                    if path.endswith("/preparation/claim"):
+                        return ExecutionPreparation(session).claim(operation_id, actor)
+                    if path.endswith("/preparation/ready"):
+                        return ExecutionPreparation(session).ready(operation_id, payload["lease_id"])
+                    if path.endswith("/preparation/fail"):
+                        return ExecutionPreparation(session).fail(operation_id, PreparationFailure.model_validate(payload))
                     if path.endswith("/finish"):
                         return service.finish(operation_id, receipt=payload["receipt"])
                     raise AssertionError("unknown native authority call")

@@ -16,7 +16,8 @@ from sqlalchemy.orm import Session
 from database.models import DomainAuthorization
 from services.management_service.approval_policy import ApprovalError, DecisionRequest, UserActor
 from services.management_service.execution_service import ExecutionService
-from services.management_service.models import HITLApproval, Task, TaskStatus
+from services.management_service.execution_preparation import ExecutionPreparation
+from services.management_service.models import Changelog, HITLApproval, Task, TaskStatus
 from services.management_service.proposal_handoff import version_diff
 from services.semantic_service.db.models import RecommendationVersionRow
 from services.semantic_service.proposals.model import ExternalEntity
@@ -60,12 +61,21 @@ def executable(stand):
 
 def reserve(engine, references, *, now=NOW, before=BEFORE, user=ALICE):
     with Session(engine) as session:
-        return ExecutionService(session, clock=lambda: now).reserve(references, UserActor(user), BINDING, before)
+        service = ExecutionService(session, clock=lambda: now)
+        if session.query(Changelog).filter_by(id=references.operation_id).first() is None:
+            service.queue(references, UserActor(user))
+            token = ExecutionPreparation(session, clock=lambda: now).claim(references.operation_id, UserActor(user))["lease_id"]
+        else:
+            token = service._row(references.operation_id).meta["preparation"]["lease_id"]
+        result = service.reserve(references, UserActor(user), BINDING, before, preparation_lease=token)
+        return ExecutionPreparation(session, clock=lambda: now).ready(references.operation_id, token) if result["state"] == "dry_run" else result
 
 
 def begin(engine, references, *, now=NOW):
     with Session(engine) as session:
-        return ExecutionService(session, clock=lambda: now).begin(references.operation_id, UserActor(ALICE))
+        service = ExecutionService(session, clock=lambda: now)
+        token = service._row(references.operation_id).meta["preparation"]["lease_id"]
+        return service.begin(references.operation_id, UserActor(ALICE), preparation_lease=token)
 
 
 def test_reserve_is_separate_from_apply_and_retry_preserves_exact_command(executable):
@@ -104,7 +114,9 @@ def test_invalid_authority_cannot_reserve_operation(executable, mutation):
     with pytest.raises((ApprovalError, ValueError)):
         reserve(engine, refs, now=now, before=before, user=actor)
     with engine.connect() as conn:
-        assert conn.scalar(text("SELECT count(*) FROM public.management_changelog")) == 0
+        assert conn.scalar(text("SELECT count(*) FROM public.management_changelog")) == (1 if mutation == "before" else 0)
+        if mutation == "before":
+            assert conn.scalar(text("SELECT metadata->'prepared' FROM public.management_changelog")) is False
 
 
 def test_begin_rechecks_deadline_and_current_role_after_reservation(executable):
@@ -224,8 +236,9 @@ def test_begin_waiting_for_producer_commit_reads_fresh_authority(executable, mut
     def attempt():
         with Session(engine) as session:
             waiting_pid.put(session.scalar(text("SELECT pg_backend_pid()")))
+            token = ExecutionService(session)._row(refs.operation_id).meta["preparation"]["lease_id"]
             with pytest.raises(ApprovalError):
-                ExecutionService(session, clock=lambda: NOW).begin(refs.operation_id, UserActor(ALICE))
+                ExecutionService(session, clock=lambda: NOW).begin(refs.operation_id, UserActor(ALICE), preparation_lease=token)
     with ThreadPoolExecutor(max_workers=1) as pool:
         with Session(engine) as producer:
             if mutation == "role":

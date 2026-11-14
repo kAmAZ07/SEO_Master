@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = Field(default="production", env="ENVIRONMENT")
     SERVICE_NAME: str = Field(default="api-gateway", env="SERVICE_NAME")
     SERVICE_PORT: int = Field(default=8000, env="API_GATEWAY_PORT")
+    # AR-15: operator-selected artifact and out-of-band public trust; no mtime fallback.
+    WORDPRESS_PLUGIN_PACKAGE_PATH: str = ""
+    WORDPRESS_PLUGIN_PACKAGE_SHA256: str = ""
+    WORDPRESS_PLUGIN_RELEASE_KEYS_JSON: str = ""
     
     DATABASE_URL: str = Field(..., env="DATABASE_URL")
     

@@ -1,46 +1,17 @@
 ﻿param(
-    [string]$Version = '0.2.0'
+    [Parameter(Mandatory=$true)][string]$Python,
+    [Parameter(Mandatory=$true)][string]$Output,
+    [Parameter(Mandatory=$true)][string]$SigningKeyEnv,
+    [string]$Revision = 'HEAD'
 )
-
 $ErrorActionPreference = 'Stop'
-
-$pluginRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$distDir = Join-Path $pluginRoot 'dist'
-$packageDir = Join-Path $distDir 'seo-master-connector'
-$zipPath = Join-Path $distDir ("seo-master-connector-$Version.zip")
-
-if (Test-Path $packageDir) {
-    Remove-Item -Recurse -Force $packageDir
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
+$pythonPath = (Get-Item -LiteralPath $Python).FullName
+$outputPath = [System.IO.Path]::GetFullPath($Output)
+Push-Location -LiteralPath $repoRoot
+try {
+    & $pythonPath -B -m scripts.plugin_package build --revision $Revision --output $outputPath --signing-key-env $SigningKeyEnv
+    if ($LASTEXITCODE -ne 0) { throw 'Signed package build failed; no artifact may be published.' }
+} finally {
+    Pop-Location
 }
-if (Test-Path $zipPath) {
-    Remove-Item -Force $zipPath
-}
-
-New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
-
-$includePaths = @(
-    'seo-master-plugin.php',
-    'readme.txt',
-    'uninstall.php',
-    'admin',
-    'includes'
-)
-
-foreach ($relativePath in $includePaths) {
-    $source = Join-Path $pluginRoot $relativePath
-    $target = Join-Path $packageDir $relativePath
-
-    if (Test-Path $source -PathType Container) {
-        Copy-Item -Path $source -Destination $target -Recurse -Force
-    } elseif (Test-Path $source -PathType Leaf) {
-        Copy-Item -Path $source -Destination $target -Force
-    }
-}
-
-if (-not (Test-Path $distDir)) {
-    New-Item -ItemType Directory -Path $distDir -Force | Out-Null
-}
-
-Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -Force
-
-Write-Host "Package created: $zipPath"

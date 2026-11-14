@@ -127,9 +127,16 @@ def main() -> None:
     parser.add_argument("--docker-context", default="desktop-linux")
     parser.add_argument("--with-management", action="store_true")
     parser.add_argument("--with-apps", action="store_true")
+    parser.add_argument("--plugin-revision", help="Build actual Git blobs of this commit; omitted means an explicit working-source fixture")
     args = parser.parse_args()
-    with NativeWordPress(Path(__file__).resolve().parents[2], project_id=PROJECT_ID, site_id=str(uuid4()), context=args.docker_context) as wp:
+    with NativeWordPress(Path(__file__).resolve().parents[2], project_id=PROJECT_ID, site_id=str(uuid4()), context=args.docker_context, revision=args.plugin_revision) as wp:
         asyncio.run(run_contract(wp))
+        from tests.wordpress.field_matrix import run_field_matrix
+        binding = WordPressBinding(base_url='http://wordpress.test', site_id=wp.site_id, key_id='fixture')
+        backend = LoopbackBackend(wp.port)
+        target = WordPressV2(PROJECT_ID, binding, wp.secret, wp.receipt_secret,
+            http=CMSHttpClient(policy=NetPolicy(allow_private_hosts=frozenset({'wordpress.test'})), resolver=resolver, network_backend=backend))
+        asyncio.run(run_field_matrix(wp, target, binding, backend, resolver))
         if args.with_management or args.with_apps:
             # Native tests never load the checkout's working .env configuration.
             import tempfile

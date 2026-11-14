@@ -52,7 +52,9 @@ function assertion(bool $condition, string $message): void {
     if (!$condition) { $failures[] = $message; }
 }
 ob_start();
-require __DIR__ . '/../../adapters/wordpress-plugin/seo-master-plugin.php';
+require __DIR__ . '/package-fixture.php';
+$package_root = package_fixture();
+require $package_root . '/seo-master-plugin.php';
 $bootstrap_output = ob_get_clean();
 assertion($bootstrap_output === '', 'bootstrap emitted output/BOM');
 seo_master_bootstrap();

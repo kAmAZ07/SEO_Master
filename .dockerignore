@@ -60,4 +60,5 @@
 frontend/dist
 frontend/coverage
 Documents
-# adapters/wordpress-plugin/dist/*.zip нужен существующему API Gateway Dockerfile.
+# dist/README.md сохраняет каталог для Docker COPY; release ZIP подключается явно.
+adapters/wordpress-plugin/dist/*.zip

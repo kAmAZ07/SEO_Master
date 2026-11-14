@@ -166,8 +166,12 @@ jobs:
       - name: Install isolated test dependencies
         run: >-
           python -m pip install --require-hashes --only-binary=:all: -r locks/management-test.txt
+      - name: Check signed package strict types and lint
+        run: |
+          python -B -m mypy --strict --explicit-package-bases shared/plugin_package.py scripts/plugin_package.py
+          python -B -m ruff check shared/plugin_package.py scripts/plugin_package.py tests/unit/test_plugin_package.py services/api_gateway/routes/plugin_routes.py
       - name: Test migrated authority and actual CMS, without shared stack startup
-        run: python -B -m tests.wordpress.native_contract --docker-context default --with-management --with-apps
+        run: python -B -m tests.wordpress.native_contract --docker-context default --plugin-revision HEAD --with-management --with-apps
 
   image-builds:
     name: Linux image builds and UID (not stack E2E)

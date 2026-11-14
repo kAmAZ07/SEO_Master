@@ -24,7 +24,7 @@ function seo_master_register_routes() {
         register_rest_route('seo-master/v1', '/' . $route, array('methods' => 'PATCH', 'callback' => 'seo_master_upgrade_required', 'permission_callback' => '__return_true'));
     }
     register_rest_route('seo-master/v2', '/capabilities', array('methods' => 'GET', 'callback' => 'seo_master_capabilities', 'permission_callback' => '__return_true'));
-    foreach (array('challenge', 'snapshot', 'dry-run', 'apply', 'rollback', 'rollback/dry-run', 'target-bound/apply', 'target-bound/dry-run') as $route) {
+    foreach (array('challenge', 'snapshot', 'dry-run', 'apply', 'rollback', 'rollback/dry-run', 'target-bound/apply', 'target-bound/dry-run', 'target-bound/rollback', 'target-bound/rollback/dry-run') as $route) {
         register_rest_route('seo-master/v2', '/' . $route, array('methods' => 'POST', 'callback' => 'seo_master_v2_request', 'permission_callback' => 'seo_master_v2_permission'));
     }
     register_rest_route('seo-master/v2', '/operations/(?P<operation_id>[0-9a-f-]{36})', array(

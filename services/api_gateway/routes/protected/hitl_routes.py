@@ -13,6 +13,7 @@ from database.models import (
 from services.api_gateway.config import settings
 from shared.projects.roles import Permission
 from shared.hitl_execution import ExecutionRequest
+from shared.hitl_rollback import RollbackRequest
 from services.api_gateway.auth import (
     get_current_user,
 )
@@ -89,6 +90,18 @@ async def cancel_execution(task_id: str, operation_id: str, request: Request,
     # Task identity is immutable, so this scoped read remains valid through cancel.
     await execution_status(task_id, operation_id, request, current_user, db)
     data = await _hitl_json("POST", "/internal/executions/" + operation_id + "/cancel", request, execution=True)
+    if not isinstance(data, dict):
+        raise HTTPException(502, "hitl_service_invalid_response")
+    return data
+
+
+@router.post("/hitl/tasks/{task_id}/executions/{operation_id}/rollback")
+async def rollback_execution(task_id: str, operation_id: str, body: RollbackRequest, request: Request,
+                             current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    await _get_owned_hitl_task(task_id, current_user, db, request, Permission.DEPLOY)
+    await execution_status(task_id, operation_id, request, current_user, db)
+    data = await _hitl_json("POST", "/internal/executions/" + operation_id + "/rollback", request,
+                            payload=body.model_dump(), execution=True)
     if not isinstance(data, dict):
         raise HTTPException(502, "hitl_service_invalid_response")
     return data

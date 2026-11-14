@@ -666,6 +666,44 @@ $tests += [
         check($fixture->store->writes === 1 && count($fixture->store->operations) === 1, 'policy failure mutated');
     },
 ];
+$tests['target-bound rollback rejects target reference drift and lock-wait expiry without writes'] = function (): void {
+    foreach (['target', 'deadline', 'task', 'version', 'approval', 'drift'] as $case) {
+        $fixture = new ContractFixture();
+        $original = $fixture->send($fixture->command());
+        $command = rollback_command($original);
+        foreach (['task_id', 'proposal_version', 'approval_ref'] as $field) { $command[$field] = $original[$field]; }
+        $command['operation_type'] = 'rollback';
+        $command['target_url'] = $fixture->store->target_url;
+        $command['authorization_deadline'] = $fixture->now + 60;
+        $expected = 'original_reference_conflict';
+        if ($case === 'target') { $fixture->store->target_url .= '/moved'; $expected = 'target_url_conflict'; }
+        if ($case === 'deadline') { $fixture->store->target_lock_callback = function () use ($fixture): void { $fixture->now += 60; }; $expected = 'authorization_expired'; }
+        if ($case === 'task') { $command['task_id'] = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'; }
+        if ($case === 'version') { $command['proposal_version'] = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'; }
+        if ($case === 'approval') { $command['approval_ref'] = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'; }
+        if ($case === 'drift') { $fixture->store->fields['description'] = ['state'=>'value','value'=>'Manual']; $expected = 'precondition_conflict'; }
+        $command['proposal_hash'] = sm_v2_rollback_proposal_hash($command);
+        expect_error(fn() => $fixture->send($command, '/seo-master/v2/target-bound/rollback'), $expected);
+        check($fixture->store->writes === 1 && count($fixture->store->operations) === 1, 'denied rollback mutated CMS');
+    }
+};
+$tests['target-bound rollback dry-run is read-only and replay ignores expired mutation deadline'] = function (): void {
+    $fixture = new ContractFixture();
+    $original = $fixture->send($fixture->command());
+    $command = rollback_command($original);
+    foreach (['task_id', 'proposal_version', 'approval_ref'] as $field) { $command[$field] = $original[$field]; }
+    $command['operation_type'] = 'rollback';
+    $command['target_url'] = $fixture->store->target_url;
+    $command['authorization_deadline'] = $fixture->now + 60;
+    $command['proposal_hash'] = sm_v2_rollback_proposal_hash($command);
+    $preview = $fixture->send($command, '/seo-master/v2/target-bound/rollback/dry-run');
+    check($preview['outcome'] === 'ready' && $preview['after'] === $original['before'], 'rollback preview lost exact before');
+    check($fixture->store->writes === 1 && count($fixture->store->operations) === 1, 'rollback preview wrote data');
+    $receipt = $fixture->send($command, '/seo-master/v2/target-bound/rollback');
+    $fixture->now += 61;
+    check($fixture->send($command, '/seo-master/v2/target-bound/rollback') === $receipt, 'rollback replay lost receipt');
+    check($receipt['after'] === $original['before'] && $fixture->store->writes === 2, 'rollback replay changed before or wrote twice');
+};
 $tests['unverified receipts never schedule cache effects on status or same-id recovery'] = function (): void {
     foreach (['status', 'apply', 'rollback'] as $path) {
         foreach (['scope', 'signature', 'schema', 'cross_kind', 'rollback_type'] as $case) {

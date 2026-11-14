@@ -4,6 +4,7 @@ import logging
 
 from services.client_api_gateway.config import settings
 from services.client_api_gateway.hitl_executor import StatusReconciler
+from services.client_api_gateway.public_verifier import PublicVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -15,12 +16,17 @@ def configured() -> bool:
 
 async def run() -> None:
     reconciler = StatusReconciler()
+    verifier = PublicVerifier()
     while True:
         try:
             await reconciler.once()
         except Exception:
             # URLs, credentials, user tokens and raw provider errors never enter logs.
             logger.warning("Execution status recovery unavailable; durable lease/budget retained")
+        try:
+            await verifier.once()
+        except Exception:
+            logger.warning("Public verification unavailable; durable lease/budget retained")
         await asyncio.sleep(5)
 
 

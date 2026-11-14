@@ -19,6 +19,8 @@ from services.semantic_service.proposals.model import ExternalEntity
 from shared.cms_http import CMSHttpClient
 from shared.hitl_execution import ExecutionError, ExecutionRequest, WordPressBinding, bind_proposal_hash, make_command
 from shared.netpolicy import NetPolicy
+from shared.netpolicy import SafeHttpClient
+from services.client_api_gateway.public_verifier import PublicPageReader
 from tests.fixtures.management_proposal import PROJECT_ID, TASK_ID, management_proposal_fixture
 from tests.wordpress.native import NativeWordPress
 
@@ -149,7 +151,9 @@ def main() -> None:
                             http=CMSHttpClient(policy=NetPolicy(allow_private_hosts=frozenset({"wordpress.test"})),
                                 resolver=resolver, network_backend=LoopbackBackend(wp.port)))
                     if args.with_management:
-                        asyncio.run(run_authority(wp, factory))
+                        public_reader = PublicPageReader(http=SafeHttpClient(policy=NetPolicy(allow_private_hosts=frozenset({"wordpress.test"})),
+                            resolver=resolver, network_backend=LoopbackBackend(wp.port)))
+                        asyncio.run(run_authority(wp, factory, public_reader))
                     if args.with_apps:
                         from tests.wordpress.app_http import run_apps
                         run_apps(wp)

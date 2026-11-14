@@ -23,9 +23,14 @@ from shared.projects.authorization_state import is_fresh
 from services.semantic_service.proposals.model import RecommendationVersion
 from services.management_service.recovery_policy import RecoveryState
 from services.management_service.preparation_policy import PreparationState
+from services.management_service.verification_policy import VerificationState
+from shared.hitl_rollback import RollbackRequest, bind_rollback_hash, make_rollback_command
+from shared.hitl_verification import PublicBaseline, PublicObservation
 
 SOURCE = "hitl_executor_v1"
 ENTITY = "deployment_operation"
+CONFIRMED_STATES = frozenset({"applied_unverified", "no_op", "verifying", "verified", "verification_failed",
+    "rollback_applied_unverified", "rollback_verifying", "rollback_verified", "rollback_verification_failed", "rollback_in_progress", "rolled_back"})
 
 
 class OperationRow(Protocol):
@@ -43,16 +48,19 @@ def record_hash(value: dict[str, Any]) -> str:
 
 
 class ExecutionService:
-    def __init__(self, db: Session, *, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc), fresh_days: int = 30):
+    def __init__(self, db: Session, *, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc), fresh_days: int = 30,
+                 verification_deadline_seconds: int = 300):
         self.db, self.clock = db, clock
         self.approvals = ApprovalService(db, clock=clock)
         self.fresh_days = fresh_days
+        self.verification_deadline_seconds = verification_deadline_seconds
 
     def _authorize(self, references: ExecutionRequest, actor: UserActor) -> tuple[TaskRow, ApprovalRow, RecommendationVersion, Mapping[str, Any], DecisionRecord, datetime]:
         task = cast(TaskRow | None, self.db.query(Task).filter(Task.id == references.task_id).populate_existing().with_for_update().first())
         if task is None:
             raise ApprovalError("execution_not_found", 404)
         scope = self.approvals.project_scope(str(task.project_id), actor, Permission.DEPLOY)
+        self._no_other_inflight(str(task.id), references.operation_id)
         approval = cast(ApprovalRow | None, self.db.query(HITLApproval).filter(HITLApproval.task_id == task.id).populate_existing().with_for_update().first())
         if approval is None or str(approval.id) != references.approval_id or str(approval.project_id) != str(task.project_id):
             raise ApprovalError("execution_approval_required")
@@ -71,18 +79,115 @@ class ExecutionService:
         ), {"workspace": decision.workspace_id, "actor": decision.actor_id}).scalar()
         if not isinstance(approver_role, str) or not has_permission(approver_role, Permission.APPROVE):
             raise ApprovalError("execution_approver_permission_lost")
+        valid_until = min(decision.expires_at, self._ownership_deadline(version, scope))
+        if self.clock() >= valid_until:
+            raise ApprovalError("execution_expired")
+        return task, approval, version, scope, decision, valid_until
+
+    def _ownership_deadline(self, version: RecommendationVersion, scope: Mapping[str, Any]) -> datetime:
         verified = self.db.execute(text(
             "SELECT verified_at FROM audit_schema.domain_authorizations WHERE project_id=:project AND workspace_id=:workspace "
             "AND status='verified' AND scope_origin=:origin AND scope_path_prefix=:prefix "
             "AND revoked_at IS NULL"
-        ), {"project": version.project_id, "workspace": decision.workspace_id, "origin": scope["origin"],
+        ), {"project": version.project_id, "workspace": scope["workspace_id"], "origin": scope["origin"],
             "prefix": scope["path_prefix"]}).scalar()
         if verified is None or not is_fresh("verified", verified, self.fresh_days, self.clock()):
             raise ApprovalError("execution_domain_authorization_required")
-        valid_until = min(decision.expires_at, verified + timedelta(days=self.fresh_days))
-        if self.clock() >= valid_until:
-            raise ApprovalError("execution_expired")
-        return task, approval, version, scope, decision, valid_until
+        return cast(datetime, verified + timedelta(days=self.fresh_days))
+
+    def _no_other_inflight(self, task_id: str, operation_id: str) -> None:
+        if self.db.scalar(text("""SELECT EXISTS(SELECT 1 FROM public.management_changelog
+          WHERE source=:source AND task_id=:task AND id!=:operation
+          AND metadata->>'state' IN ('applying','outcome_unknown','needs_reconciliation','rollback_in_progress'))"""),
+          {"source": SOURCE, "task": task_id, "operation": operation_id}):
+            raise ApprovalError("execution_other_operation_inflight")
+
+    def _authorize_rollback(self, record: dict[str, Any], actor: UserActor) -> tuple[TaskRow, RecommendationVersion, Mapping[str, Any], datetime]:
+        task = cast(TaskRow | None, self.db.query(Task).filter(Task.id == record["task_id"]).populate_existing().with_for_update().first())
+        if task is None:
+            raise ApprovalError("execution_not_found", 404)
+        scope = self.approvals.project_scope(str(task.project_id), actor, Permission.DEPLOY)
+        self._no_other_inflight(str(task.id), record["operation_id"])
+        original = self._row(record["original_operation_id"], lock=True)
+        if (original.meta.get("operation_type", "apply") != "apply" or str(original.task_id) != str(task.id)
+                or original.meta["record"]["project_id"] != str(task.project_id)
+                or original.meta["state"] not in {"applied_unverified", "no_op", "verifying", "verified", "verification_failed"}
+                or original.meta.get("rollback_operation_id")):
+            raise ApprovalError("rollback_original_unavailable")
+        source = original.meta["record"]
+        receipt = original.meta.get("receipt")
+        if not isinstance(receipt, dict):
+            raise ApprovalError("rollback_original_unavailable")
+        validate_receipt(receipt, source["command"], source["before"], source["after"])
+        version = RecommendationVersion.model_validate(source["version"])
+        if (record["actor_id"] != actor.user_id or record["workspace_id"] != scope["workspace_id"]
+                or scope["status"] != "active" or scope["origin"] != version.target.origin
+                or not parse_scope(scope["origin"] + scope["path_prefix"]).contains(version.target.url)
+                or record["original_record_hash"] != original.meta["record_hash"]
+                or record["original_receipt_id"] != receipt["receipt_id"]
+                or record["original_request_hash"] != source["request_hash"]
+                or record["original_proposal_hash"] != source["command"]["proposal_hash"]
+                or record["restore_before"] != source["before"] or record["expected_current"] != source["after"]
+                or record["original_binding"] != source["binding"] or record["version"] != source["version"]):
+            raise ApprovalError("rollback_reference_conflict")
+        return task, version, scope, self._ownership_deadline(version, scope)
+
+    def _authorize_operation(self, references: ExecutionRequest, actor: UserActor, row: OperationRow) -> tuple[TaskRow, RecommendationVersion, Mapping[str, Any], dict[str, Any], datetime]:
+        if any(row.meta["record"].get(key) != value for key, value in references.model_dump().items()):
+            raise ApprovalError("execution_idempotency_conflict")
+        if row.meta.get("operation_type") == "rollback":
+            task, version, scope, until = self._authorize_rollback(row.meta["record"], actor)
+            saved = row.meta["intent"]
+            return task, version, scope, saved, until
+        task, _, version, scope, decision, until = self._authorize(references, actor)
+        return task, version, scope, self._intent(references, actor, version, scope, decision), until
+
+    def queue_rollback(self, original_id: str, request: RollbackRequest, actor: UserActor) -> dict[str, Any]:
+        try:
+            original = self._row(original_id)
+            task = cast(TaskRow | None, self.db.query(Task).filter(Task.id == original.task_id).populate_existing().with_for_update().first())
+            if task is None:
+                raise ApprovalError("execution_not_found", 404)
+            scope = self.approvals.project_scope(str(original.project_id), actor, Permission.DEPLOY)
+            original = self._row(original_id, lock=True)
+            existing = self.db.query(Changelog).filter(Changelog.id == request.operation_id).first()
+            if existing is not None:
+                row = self._row(request.operation_id, lock=True)
+                if (row.meta.get("operation_type") != "rollback" or row.meta["record"].get("original_operation_id") != original_id
+                        or row.meta["record"].get("reason") != request.reason or row.meta["record"]["actor_id"] != actor.user_id):
+                    raise ApprovalError("execution_idempotency_conflict")
+                self.db.rollback()
+                return self.serialize(row)
+            source = original.meta["record"]
+            receipt = original.meta.get("receipt")
+            if not isinstance(receipt, dict) or original.meta.get("operation_type", "apply") != "apply":
+                raise ApprovalError("rollback_original_unavailable")
+            refs = ExecutionRequest(operation_id=request.operation_id, task_id=source["task_id"], approval_id=source["approval_id"],
+                recommendation_version_id=source["recommendation_version_id"], content_hash=source["content_hash"])
+            intent = {**refs.model_dump(), "operation_type": "rollback", "project_id": source["project_id"], "workspace_id": scope["workspace_id"],
+                "actor_id": actor.user_id, "actor_role": scope["role"], "version": source["version"], "reason": request.reason,
+                "original_operation_id": original_id, "original_record_hash": original.meta["record_hash"],
+                "original_receipt_id": receipt["receipt_id"], "original_request_hash": source["request_hash"],
+                "original_proposal_hash": source["command"]["proposal_hash"], "original_binding": source["binding"],
+                "restore_before": source["before"], "expected_current": source["after"]}
+            intent["decision_hash"] = digest(intent)  # Explicit rollback consent; old approval is a historic reference only.
+            self._authorize_rollback(intent, actor)
+            metadata = {"operation_type": "rollback", "intent": intent, "intent_hash": record_hash(intent), "record": intent,
+                "record_hash": record_hash(intent), "prepared": False, "state": "queued", "preparation": PreparationState.initial(self.clock()).dump()}
+            if "public_baseline" in original.meta:
+                metadata["public_baseline"] = original.meta["public_baseline"]
+            row = cast(OperationRow, Changelog(id=UUID(request.operation_id), task_id=task.id, project_id=task.project_id,
+                entity_id=request.operation_id, entity_type=ENTITY, change_type="execute_v1", source=SOURCE, applied=False,
+                before_value=null(), after_value=null(), meta=metadata))
+            self.db.add(row)
+            self.db.commit()
+            return self.serialize(row)
+        except IntegrityError:
+            self.db.rollback()
+            raise ApprovalError("rollback_already_exists") from None
+        except Exception:
+            self.db.rollback()
+            raise
 
     def context(self, references: ExecutionRequest, actor: UserActor) -> dict[str, Any]:
         try:
@@ -172,6 +277,10 @@ class ExecutionService:
                 "record_hash": row.meta["record_hash"], "receipt": row.meta.get("receipt"),
                 "cancellation": {"actor_id": row.meta["cancel_actor_id"], "at": row.meta["cancelled_at"], "reason": row.meta["cancel_reason"]} if "cancel_actor_id" in row.meta else None,
                 "prepared": row.meta.get("prepared", True),
+                "operation_type": row.meta.get("operation_type", "apply"),
+                "rollback_operation_id": row.meta.get("rollback_operation_id"),
+                "public_baseline": row.meta.get("public_baseline"),
+                "verification": VerificationState.load(row.meta["verification"]).summary() if "verification" in row.meta else None,
                 "preparation": PreparationState.load(row.meta["preparation"]).summary() if "preparation" in row.meta else None,
                 "recovery": RecoveryState.load(row.meta["recovery"]).summary() if "recovery" in row.meta else None}
 
@@ -181,13 +290,13 @@ class ExecutionService:
         return self.serialize(row)
 
     def reserve(self, references: ExecutionRequest, actor: UserActor, binding: WordPressBinding, before: Any,
-                *, preparation_lease: str | None = None) -> dict[str, Any]:
+                *, preparation_lease: str | None = None, public_baseline: PublicObservation | None = None) -> dict[str, Any]:
         try:
-            task, _, version, scope, decision, valid_until = self._authorize(references, actor)
+            initial = self._row(references.operation_id)
+            _, version, _, intent, valid_until = self._authorize_operation(references, actor, initial)
             if parse_scope(binding.base_url).origin != version.target.origin:
                 raise ApprovalError("execution_site_scope_mismatch")
             row = self._row(references.operation_id, lock=True)
-            intent = self._intent(references, actor, version, scope, decision)
             saved_intent = row.meta.get("intent") or {key: value for key, value in row.meta["record"].items()
                 if key not in {"command", "request_hash", "binding", "before", "after"}}
             if {**intent, "actor_role": saved_intent["actor_role"]} != saved_intent:
@@ -199,18 +308,23 @@ class ExecutionService:
                 raise ApprovalError("execution_expired")
             if row.meta["state"] not in {"preflight", "dry_run", "ready"}:
                 raise ApprovalError("execution_state_conflict")
-            command, after = make_command(version.model_dump(mode="json"), references, binding, before)
+            rollback = row.meta.get("operation_type") == "rollback"
+            if rollback:
+                command, after = make_rollback_command(saved_intent, binding, before)
+            else:
+                command, after = make_command(version.model_dump(mode="json"), references, binding, before)
             command["target_url"] = version.target.url
             command["authorization_deadline"] = int(min(valid_until, self.clock() + timedelta(seconds=60)).timestamp())
             from shared.hitl_execution import bind_proposal_hash
-            bind_proposal_hash(command)
+            binder = bind_rollback_hash if rollback else bind_proposal_hash
+            binder(command)
             record = {**saved_intent, "binding": binding.model_dump(),
                       "before": before, "after": after, "command": command, "request_hash": digest(command)}
             if row.meta.get("prepared", True):
                 # A retry preserves the original bounded command, including its deadline.
                 # All other inputs must still match the freshly authorized version.
                 command["authorization_deadline"] = row.meta["record"]["command"]["authorization_deadline"]
-                bind_proposal_hash(command)
+                binder(command)
                 record["request_hash"] = digest(command)
                 if row.meta["record"] != record:
                     raise ApprovalError("execution_idempotency_conflict")
@@ -219,6 +333,15 @@ class ExecutionService:
                 row.meta = {**row.meta, "record": record, "record_hash": record_hash(record), "prepared": True}
             if row.meta["state"] == "preflight":
                 row.meta = {**row.meta, "state": "dry_run", "preparation": preparation.transition("dry_run", self.clock()).dump()}
+            if not rollback and "public_baseline" not in row.meta and public_baseline is not None:
+                if (public_baseline.url != version.target.url or public_baseline.final_url != version.target.url
+                        or public_baseline.status != 200 or public_baseline.facts is None
+                        or public_baseline.observed_at > self.clock()
+                        or public_baseline.observed_at < preparation.started_at):
+                    raise ApprovalError("verification_baseline_invalid")
+                baseline = PublicBaseline(operation_id=references.operation_id, project_id=version.project_id,
+                    recommendation_version_id=version.version_id, content_hash=version.content_hash, observation=public_baseline)
+                row.meta = {**row.meta, "public_baseline": baseline.model_dump(mode="json")}
             self.db.commit()
             return self.serialize(row)
         except IntegrityError:
@@ -235,10 +358,10 @@ class ExecutionService:
             references = ExecutionRequest.model_validate({key: record[key] for key in ExecutionRequest.model_fields})
             # _authorize locks Task first, then the enforced Core authority barrier.
             self.db.execute(text("SET LOCAL lock_timeout='5s'"))
-            task, _, version, _, decision, valid_until = self._authorize(references, actor)
+            task, version, _, intent, valid_until = self._authorize_operation(references, actor, initial)
             row = self._row(operation_id, lock=True)
             if (row.meta["state"] != "ready" or actor.user_id != record["actor_id"]
-                    or decision.digest() != record["decision_hash"] or version.model_dump(mode="json") != record["version"]):
+                    or intent["decision_hash"] != record["decision_hash"] or version.model_dump(mode="json") != record["version"]):
                 raise ApprovalError("execution_state_conflict")
             if self.clock() >= valid_until or int(self.clock().timestamp()) >= record["command"]["authorization_deadline"]:
                 raise ApprovalError("execution_expired")
@@ -247,8 +370,17 @@ class ExecutionService:
                 raise ApprovalError("preparation_lease_conflict")
             row.meta = {**row.meta, "state": "applying", "began_at": now.isoformat(),
                         "recovery": RecoveryState.initial(now, record["command"]["authorization_deadline"]).dump()}
-            task.status = TaskStatus.IN_PROGRESS
-            task.updated_at = self.clock()
+            if row.meta.get("operation_type") == "rollback":
+                self.db.flush()
+                original = self._row(record["original_operation_id"], lock=True)
+                metadata = dict(original.meta)
+                if "verification" in metadata:
+                    metadata["verification"] = VerificationState.load(metadata["verification"]).superseded(now).dump()
+                original.meta = {**metadata, "rollback_operation_id": operation_id, "state": "rollback_in_progress"}
+            approval = cast(ApprovalRow | None, self.db.query(HITLApproval).filter(HITLApproval.task_id == task.id).populate_existing().first())
+            current_version = ((approval.diff_data if approval else {}) or {}).get("recommendation_version", {}).get("version_id")
+            if current_version == record["recommendation_version_id"]:
+                task.status, task.updated_at = TaskStatus.IN_PROGRESS, now
             self.db.commit()
             return self.serialize(row)
         except Exception:
@@ -263,7 +395,7 @@ class ExecutionService:
             if task is None:
                 raise ApprovalError("execution_not_found", 404)
             row = self._row(operation_id, lock=True)
-            if row.meta["state"] in {"applied_unverified", "no_op"} and (receipt is None or row.meta.get("receipt") == receipt):
+            if row.meta["state"] in CONFIRMED_STATES and (receipt is None or row.meta.get("receipt") == receipt):
                 self.db.commit()
                 return self.serialize(row)
             if row.meta["state"] not in {"applying", "outcome_unknown", "needs_reconciliation"}:
@@ -281,8 +413,7 @@ class ExecutionService:
             self.db.rollback()
             raise
 
-    @staticmethod
-    def _complete_receipt(row: OperationRow, task: TaskRow, receipt: dict[str, Any], now: datetime) -> None:
+    def _complete_receipt(self, row: OperationRow, task: TaskRow, receipt: dict[str, Any], now: datetime) -> None:
         record = row.meta["record"]
         validate_receipt(receipt, record["command"], record["before"], record["after"])
         metadata = dict(row.meta)
@@ -291,6 +422,15 @@ class ExecutionService:
             if recovery.attempts and recovery.attempts[-1].status == "pending":
                 recovery = recovery.settled(now, "superseded")
             metadata["recovery"] = recovery.model_copy(update={"next_attempt_at": None}).dump()
-        row.applied = receipt["outcome"] == "applied_unverified"
-        task.status, task.updated_at = TaskStatus.DEPLOYED, now
-        row.meta = {**metadata, "state": receipt["outcome"], "receipt": receipt, "finished_at": now.isoformat()}
+        rollback = row.meta.get("operation_type") == "rollback"
+        approval = cast(ApprovalRow | None, self.db.query(HITLApproval).filter(HITLApproval.task_id == task.id).populate_existing().first())
+        current_version = ((approval.diff_data if approval else {}) or {}).get("recommendation_version", {}).get("version_id")
+        row.applied = receipt["outcome"] in {"applied_unverified", "rollback_applied_unverified"}
+        if current_version == record["recommendation_version_id"]:
+            task.status, task.updated_at = TaskStatus.DEPLOYED, now
+        state = "rollback_applied_unverified" if rollback else receipt["outcome"]
+        row.meta = {**metadata, "state": state, "receipt": receipt, "finished_at": now.isoformat(),
+                    "verification": VerificationState.initial(now, self.verification_deadline_seconds).dump()}
+        if rollback:
+            original = self._row(record["original_operation_id"], lock=True)
+            original.meta = {**original.meta, "state": "rolled_back"}

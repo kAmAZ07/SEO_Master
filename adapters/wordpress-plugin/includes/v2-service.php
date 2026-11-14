@@ -35,9 +35,10 @@ final class SM_V2_Service {
             '/seo-master/v2/challenge', '/seo-master/v2/snapshot', '/seo-master/v2/dry-run', '/seo-master/v2/apply',
             '/seo-master/v2/rollback', '/seo-master/v2/rollback/dry-run',
             '/seo-master/v2/target-bound/apply', '/seo-master/v2/target-bound/dry-run',
+            '/seo-master/v2/target-bound/rollback', '/seo-master/v2/target-bound/rollback/dry-run',
         ], true)) { throw new SM_V2_Error('invalid_route', 400); }
         if (strlen($body) > 16384) { throw new SM_V2_Error('request_too_large', 413); }
-        $is_command = in_array($route, ['/seo-master/v2/dry-run', '/seo-master/v2/apply', '/seo-master/v2/rollback', '/seo-master/v2/rollback/dry-run', '/seo-master/v2/target-bound/apply', '/seo-master/v2/target-bound/dry-run'], true);
+        $is_command = in_array($route, ['/seo-master/v2/dry-run', '/seo-master/v2/apply', '/seo-master/v2/rollback', '/seo-master/v2/rollback/dry-run', '/seo-master/v2/target-bound/apply', '/seo-master/v2/target-bound/dry-run', '/seo-master/v2/target-bound/rollback', '/seo-master/v2/target-bound/rollback/dry-run'], true);
         $operation = $headers['x-seo-operation-id'] ?? '';
         $this->authenticate($method, $route, $body, $headers, $now, $is_command || $status_operation !== null);
         if ($status_operation !== null) {
@@ -78,7 +79,7 @@ final class SM_V2_Service {
                 return ['snapshot' => $snapshot, 'digest' => sm_v2_digest($snapshot)];
             });
         }
-        if (in_array($route, ['/seo-master/v2/rollback', '/seo-master/v2/rollback/dry-run'], true)) {
+        if (in_array($route, ['/seo-master/v2/rollback', '/seo-master/v2/rollback/dry-run', '/seo-master/v2/target-bound/rollback', '/seo-master/v2/target-bound/rollback/dry-run'], true)) {
             return $this->reverse($route, $payload, $operation, hash('sha256', $body), $now);
         }
         $target_bound = str_starts_with($route, '/seo-master/v2/target-bound/');
@@ -164,11 +165,20 @@ final class SM_V2_Service {
         });
     }
     private function reverse(string $route, array $payload, string $operation, string $request_hash, int $now): array {
-        sm_v2_keys($payload, [
+        $target_bound = str_starts_with($route, '/seo-master/v2/target-bound/');
+        $required = [
             'project_id', 'site_id', 'entity_id', 'operation_id', 'task_id', 'proposal_version', 'proposal_hash', 'approval_ref',
             'reason', 'original_operation_id', 'original_receipt_id', 'original_request_hash', 'original_proposal_hash',
             'before_digest', 'expected_after_digest',
-        ]);
+        ];
+        if ($target_bound) {
+            $required = array_merge($required, ['operation_type', 'target_url', 'authorization_deadline']);
+            if (($payload['operation_type'] ?? null) !== 'rollback' || !is_string($payload['target_url'] ?? null) ||
+                strlen($payload['target_url']) > 2048 || !is_int($payload['authorization_deadline'] ?? null)) {
+                throw new SM_V2_Error('invalid_schema', 400);
+            }
+        }
+        sm_v2_keys($payload, $required);
         foreach (['operation_id', 'task_id', 'proposal_version', 'approval_ref', 'original_operation_id'] as $field) {
             if (!sm_v2_uuid($payload[$field])) { throw new SM_V2_Error('invalid_schema', 400); }
         }
@@ -179,9 +189,9 @@ final class SM_V2_Service {
         if ($payload['operation_id'] === $payload['original_operation_id']) { throw new SM_V2_Error('invalid_schema', 400); }
         if ($operation !== $payload['operation_id']) { throw new SM_V2_Error('scope_mismatch', 403); }
         if (!hash_equals(sm_v2_rollback_proposal_hash($payload), $payload['proposal_hash'])) { throw new SM_V2_Error('proposal_hash_conflict', 409); }
-        $dry_run = $route === '/seo-master/v2/rollback/dry-run';
+        $dry_run = in_array($route, ['/seo-master/v2/rollback/dry-run', '/seo-master/v2/target-bound/rollback/dry-run'], true);
         if (!$dry_run && !$this->config->can_publish()) { throw new SM_V2_Error('trusted_gateway_required', 503); }
-        return $this->transaction(function () use ($payload, $request_hash, $now, $dry_run): array {
+        return $this->transaction(function () use ($payload, $request_hash, $now, $dry_run, $target_bound): array {
             if (!$dry_run) {
                 $existing = $this->store->lock_operation($payload['operation_id'], $request_hash);
                 if ($existing !== null) {
@@ -201,6 +211,8 @@ final class SM_V2_Service {
             foreach (['receipt_id', 'request_hash', 'proposal_hash'] as $field) {
                 if (!hash_equals($original[$field], $payload['original_' . $field])) { throw new SM_V2_Error('original_reference_conflict', 409); }
             }
+            if ($target_bound && ($payload['task_id'] !== $original['task_id'] || $payload['proposal_version'] !== $original['proposal_version'] ||
+                $payload['approval_ref'] !== $original['approval_ref'])) { throw new SM_V2_Error('original_reference_conflict', 409); }
             if (!hash_equals($original['after_digest'], $payload['before_digest']) ||
                 !hash_equals($original['before_digest'], $payload['expected_after_digest'])) { throw new SM_V2_Error('original_reference_conflict', 409); }
             sm_v2_validate_snapshot($original['before'], true);
@@ -218,6 +230,12 @@ final class SM_V2_Service {
                 throw new SM_V2_Error('rollback_already_consumed', 409);
             }
             $before = $this->store->snapshot($payload['entity_id']);
+            if ($target_bound) {
+                if (!$this->store instanceof SM_V2_Target_Store) { throw new SM_V2_Error('unsupported_target_binding', 422); }
+                $this->store->assert_target_url($payload['entity_id'], $payload['target_url']);
+                $now = ($this->clock)();
+                if ($now >= $payload['authorization_deadline']) { throw new SM_V2_Error('authorization_expired', 409); }
+            }
             if (!hash_equals(sm_v2_digest($before), $original['after_digest'])) { throw new SM_V2_Error('precondition_conflict', 409); }
             $after = $original['before'];
             if ($dry_run) {
@@ -232,6 +250,7 @@ final class SM_V2_Service {
             foreach (['title', 'description', 'jsonld'] as $field) {
                 if ($before['fields'][$field] !== $after['fields'][$field]) { $changed[$field] = $after['fields'][$field]; }
             }
+            if ($target_bound && ($this->clock)() >= $payload['authorization_deadline']) { throw new SM_V2_Error('authorization_expired', 409); }
             if ($changed !== []) { $this->store->restore_fields($payload['entity_id'], $changed); }
             if (!hash_equals(sm_v2_digest($this->store->snapshot($payload['entity_id'])), $original['before_digest'])) {
                 throw new SM_V2_Error('storage_postcondition_failed', 503);

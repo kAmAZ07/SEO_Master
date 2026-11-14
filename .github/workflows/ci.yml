@@ -115,6 +115,10 @@ jobs:
         run: |
           python -B -m mypy --strict --explicit-package-bases services/management_service/migrations services/management_service/canonical_projects.py
           python -B -m ruff check services/management_service/migrations services/management_service/canonical_projects.py tests/integration/test_management_migrations_postgres.py tests/integration/test_management_canonical_postgres.py
+      - name: Check verify and rollback strict types and lint
+        run: |
+          python -B -m mypy --strict --explicit-package-bases --follow-imports=silent shared/hitl_verification.py shared/hitl_rollback.py services/management_service/verification_policy.py services/management_service/execution_verification.py services/management_service/execution_service.py services/client_api_gateway/public_verifier.py services/client_api_gateway/hitl_executor.py
+          python -B -m ruff check shared/hitl_verification.py shared/hitl_rollback.py services/management_service/verification_policy.py services/management_service/execution_verification.py services/management_service/execution_service.py services/client_api_gateway/public_verifier.py services/client_api_gateway/hitl_executor.py tests/integration/test_management_verification_postgres.py
       - name: Проверить миграции, legacy-данные, роли и транзакции на отдельной БД
         env:
           TEST_PG_ADMIN_URL: postgresql://postgres:isolated-ci-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
@@ -143,6 +147,7 @@ jobs:
                   "tests/integration/test_management_execution_postgres.py",
                   "tests/integration/test_management_recovery_postgres.py",
                   "tests/integration/test_management_preparation_postgres.py",
+                  "tests/integration/test_management_verification_postgres.py",
                   "tests/integration/test_runtime_foundation_postgres.py",
               ], plugins=[RequiredTests()]))
           PY

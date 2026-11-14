@@ -36,11 +36,13 @@ PROFILES = (
         "tests/unit/test_management_proposals.py",
         "tests/unit/test_management_approvals.py",
         "tests/unit/test_management_recovery.py",
+        "tests/unit/test_verification_policy.py",
     )),
     Profile("client", "services/client_api_gateway/requirements.txt", (
         "tests/unit/test_client_startup.py",
         "tests/unit/test_client_recovery.py",
         "tests/unit/test_client_preparation.py",
+        "tests/unit/test_public_verifier.py",
         "tests/unit/test_client_gateway_rollback.py",
         "tests/unit/test_client_model_imports.py",
     )),

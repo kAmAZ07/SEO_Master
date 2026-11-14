@@ -15,6 +15,9 @@ from services.management_service.execution_service import ExecutionService
 from shared.hitl_execution import ExecutionError, ExecutionRequest, PreparationFailure, PreparationLease, RecoveryClaim, RecoveryReport, UUID_PATTERN, WordPressBinding
 from services.management_service.execution_recovery import ExecutionRecovery
 from services.management_service.execution_preparation import ExecutionPreparation
+from services.management_service.execution_verification import ExecutionVerification
+from shared.hitl_rollback import RollbackRequest
+from shared.hitl_verification import PublicObservation, VerificationReport
 
 
 def executor_identity(x_executor_key: str | None = Header(default=None)) -> None:
@@ -29,13 +32,15 @@ router = APIRouter(dependencies=[Depends(require_service_identity), Depends(exec
 
 
 def _service(db: Session) -> ExecutionService:
-    return ExecutionService(db, fresh_days=settings.DOMAIN_VERIFICATION_FRESH_DAYS)
+    return ExecutionService(db, fresh_days=settings.DOMAIN_VERIFICATION_FRESH_DAYS,
+                            verification_deadline_seconds=settings.VERIFICATION_DEADLINE_SECONDS)
 
 
 class ReserveRequest(ExecutionRequest):
     binding: WordPressBinding
     before: dict[str, Any]
     lease_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+    public_baseline: PublicObservation | None = None
 
 
 class FinishRequest(BaseModel):
@@ -63,8 +68,8 @@ def context(body: ExecutionRequest, actor: UserActor = Depends(authenticated_act
 
 @router.post("/reserve")
 def reserve(body: ReserveRequest, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
-    references = ExecutionRequest.model_validate(body.model_dump(exclude={"binding", "before", "lease_id"}))
-    return _call(_service(db).reserve, references, actor, body.binding, body.before, preparation_lease=body.lease_id)
+    references = ExecutionRequest.model_validate(body.model_dump(exclude={"binding", "before", "lease_id", "public_baseline"}))
+    return _call(_service(db).reserve, references, actor, body.binding, body.before, preparation_lease=body.lease_id, public_baseline=body.public_baseline)
 
 
 @router.post("/queue")
@@ -102,9 +107,24 @@ def recovery_claim(body: RecoveryClaim, db: Session = Depends(get_db)) -> dict[s
     return _call(ExecutionRecovery(db).claim, body.operation_id)
 
 
+@router.post("/{operation_id}/rollback/queue")
+def rollback_queue(operation_id: UUID, body: RollbackRequest, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _call(_service(db).queue_rollback, str(operation_id), body, actor)
+
+
+@router.post("/verification/claim")
+def verification_claim(body: RecoveryClaim, db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _call(ExecutionVerification(db, deadline_seconds=settings.VERIFICATION_DEADLINE_SECONDS).claim, body.operation_id)
+
+
+@router.post("/verification/{operation_id}/report")
+def verification_report(operation_id: UUID, body: VerificationReport, db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _call(ExecutionVerification(db, deadline_seconds=settings.VERIFICATION_DEADLINE_SECONDS).report, str(operation_id), body)
+
+
 @router.post("/recovery/{operation_id}/report")
 def recovery_report(operation_id: UUID, body: RecoveryReport, db: Session = Depends(get_db)) -> dict[str, Any]:
-    return _call(ExecutionRecovery(db).report, str(operation_id), body)
+    return _call(ExecutionRecovery(db, verification_deadline_seconds=settings.VERIFICATION_DEADLINE_SECONDS).report, str(operation_id), body)
 
 
 @router.get("/{operation_id}")

@@ -8,6 +8,7 @@ import pytest
 
 from services.client_api_gateway.hitl_executor import HITLExecutor
 from shared.hitl_execution import ExecutionRequest, WordPressBinding
+from tests.fixtures.public_observation import public_observation
 
 
 @pytest.mark.asyncio
@@ -49,7 +50,7 @@ async def test_ambiguous_or_invalid_begin_response_never_dispatches_apply_or_dow
     refs = ExecutionRequest(operation_id=str(uuid4()), task_id=str(uuid4()), approval_id=str(uuid4()),
         recommendation_version_id=str(uuid4()), content_hash="a" * 64)
     binding = WordPressBinding(base_url="https://example.com", site_id=str(uuid4()), key_id="current")
-    record = {**refs.model_dump(), "project_id": str(uuid4()), "binding": binding.model_dump(), "version": {"version": 1}, "before": {}}
+    record = {**refs.model_dump(), "project_id": str(uuid4()), "binding": binding.model_dump(), "version": {"version": 1, "target": {"url": "https://example.com/page"}}, "before": {}}
     value = {"state": "ready", "record": record, "record_hash": "b" * 64}
     token = str(uuid4())
     calls = []
@@ -74,7 +75,8 @@ async def test_ambiguous_or_invalid_begin_response_never_dispatches_apply_or_dow
         raise AssertionError("unexpected command")
     target = SimpleNamespace(binding=binding, preflight=AsyncMock(return_value={}), dry_run=AsyncMock(), apply=AsyncMock())
     with pytest.raises(HTTPException) as caught:
-        await HITLExecutor("Bearer fixture", authority=authority, target_factory=lambda *args: target).execute(refs)
+        await HITLExecutor("Bearer fixture", authority=authority, target_factory=lambda *args: target,
+            public_reader=SimpleNamespace(read=AsyncMock(return_value=public_observation()))).execute(refs)
     assert caught.value.status_code == (503 if bad_begin == "lost_response" else 502)
     target.apply.assert_not_called()
     assert calls[-1].endswith("/preparation/fail") and not any(path.endswith("/finish") for path in calls)

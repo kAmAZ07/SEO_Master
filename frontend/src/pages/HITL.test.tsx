@@ -14,6 +14,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchTaskDetails: vi.fn(),
   applyTask: vi.fn(),
   cancelOperation: vi.fn(),
+  rollbackOperation: vi.fn(),
 }))
 
 vi.mock('../api/hitlAPI', () => ({
@@ -23,6 +24,7 @@ vi.mock('../api/hitlAPI', () => ({
   fetchTaskDetails: apiMocks.fetchTaskDetails,
   applyTask: apiMocks.applyTask,
   cancelOperation: apiMocks.cancelOperation,
+  rollbackOperation: apiMocks.rollbackOperation,
 }))
 
 vi.mock('react-diff-viewer-continued', () => ({
@@ -59,6 +61,70 @@ describe('HITL page', () => {
     apiMocks.fetchTaskDetails.mockReset()
     apiMocks.applyTask.mockReset()
     apiMocks.cancelOperation.mockReset()
+    apiMocks.rollbackOperation.mockReset()
+  })
+
+  it('requires an explicit rollback reason and keeps one operation after a lost response', async () => {
+    const task = { id: 'approval-1', taskId: 'task-1', projectId: 'project-1', status: 'approved',
+      authorizationStatus: 'approved', managedTarget: true, recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64),
+      diffData: { before: { title: 'Old' }, after: { title: 'New' } }, metadata: {},
+      execution: { operationId: 'original-operation', state: 'applied_unverified', recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64) } }
+    apiMocks.fetchHITLTasks.mockResolvedValueOnce([task])
+    apiMocks.rollbackOperation.mockRejectedValueOnce(new Error('Lost response')).mockResolvedValueOnce(undefined)
+    apiMocks.fetchTaskDetails.mockResolvedValueOnce({ ...task, execution: { ...task.execution, state: 'rolled_back',
+      rollback: { operationId: 'server-rollback', state: 'rollback_applied_unverified', reason: 'Restore', verification: null } } })
+    renderHITL()
+    const button = await screen.findByRole('button', { name: 'Подтвердить откат к прежним значениям' })
+    expect(button).toBeDisabled()
+    expect(apiMocks.rollbackOperation).not.toHaveBeenCalled()
+    await userEvent.type(screen.getByLabelText('Причина отката'), 'Restore')
+    await userEvent.click(button)
+    await waitFor(() => expect(apiMocks.rollbackOperation).toHaveBeenCalledTimes(1))
+    const operationId = apiMocks.rollbackOperation.mock.calls[0][2]
+    await waitFor(() => expect(button).toBeEnabled())
+    expect(screen.getByLabelText('Причина отката')).toBeDisabled()
+    await userEvent.click(button)
+    await waitFor(() => expect(apiMocks.rollbackOperation).toHaveBeenLastCalledWith('task-1', 'original-operation', operationId, 'Restore'))
+    expect(await screen.findByText(/Откат записан. Независимая проверка ещё не выполнена/)).toBeInTheDocument()
+    expect(screen.queryByText('Откат подтверждён независимым чтением публичной страницы.')).not.toBeInTheDocument()
+    expect(apiMocks.applyTask).not.toHaveBeenCalled()
+  })
+
+  it('cancels only the unbegun rollback and allows a new explicitly reviewed request', async () => {
+    const task = { id: 'approval-1', taskId: 'task-1', projectId: 'project-1', status: 'approved',
+      authorizationStatus: 'approved', managedTarget: true, recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64),
+      diffData: { before: {}, after: {} }, metadata: {},
+      execution: { operationId: 'original-operation', state: 'verified', recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64),
+        rollback: { operationId: 'failed-rollback', state: 'failed_before_apply', reason: 'Restore', verification: null } } }
+    apiMocks.fetchHITLTasks.mockResolvedValueOnce([task])
+    apiMocks.cancelOperation.mockResolvedValueOnce(undefined)
+    apiMocks.fetchTaskDetails.mockResolvedValueOnce({ ...task, execution: { ...task.execution,
+      rollback: { ...task.execution.rollback, state: 'cancelled' } } })
+    apiMocks.rollbackOperation.mockRejectedValueOnce(new Error('Lost response'))
+    renderHITL()
+    await userEvent.click(await screen.findByRole('button', { name: 'Отменить откат до записи' }))
+    await waitFor(() => expect(apiMocks.cancelOperation).toHaveBeenCalledWith('task-1', 'failed-rollback'))
+    const reason = await screen.findByLabelText('Причина отката')
+    await userEvent.type(reason, 'Reviewed again')
+    await userEvent.click(screen.getByRole('button', { name: 'Подтвердить откат к прежним значениям' }))
+    await waitFor(() => expect(apiMocks.rollbackOperation).toHaveBeenCalledTimes(1))
+    expect(apiMocks.rollbackOperation.mock.calls[0][2]).not.toBe('failed-rollback')
+    expect(apiMocks.applyTask).not.toHaveBeenCalled()
+  })
+
+  it('keeps an oversized UTF8 reason editable without creating a request', async () => {
+    apiMocks.fetchHITLTasks.mockResolvedValueOnce([{ id: 'approval-1', taskId: 'task-1', projectId: 'project-1', status: 'approved',
+      diffData: { before: {}, after: {} }, metadata: {}, execution: { operationId: 'original', state: 'verified' } }])
+    renderHITL()
+    const reason = await screen.findByLabelText('Причина отката')
+    await userEvent.click(reason)
+    await userEvent.paste('Я'.repeat(600))
+    expect(screen.getByRole('button', { name: 'Подтвердить откат к прежним значениям' })).toBeDisabled()
+    expect(reason).toBeEnabled()
+    expect(apiMocks.rollbackOperation).not.toHaveBeenCalled()
+    await userEvent.clear(reason)
+    await userEvent.type(reason, 'Restore')
+    expect(screen.getByRole('button', { name: 'Подтвердить откат к прежним значениям' })).toBeEnabled()
   })
 
   it('renders pending diff data and approves a task', async () => {

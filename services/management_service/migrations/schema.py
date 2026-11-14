@@ -63,6 +63,13 @@ def require_schema(connection: Connection, *, expected_head: str = HEAD) -> None
         ))
         if execution_index is not True:
             raise RuntimeError("MANAGEMENT_SCHEMA_NOT_READY")
+        rollback_index = connection.scalar(text(
+            "SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid "
+            "JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' "
+            "AND c.relname='uq_hitl_rollback_original' AND i.indisunique AND i.indisvalid)"
+        ))
+        if rollback_index is not True:
+            raise RuntimeError("MANAGEMENT_SCHEMA_NOT_READY")
     triggers = set(
         connection.execute(
             text(
@@ -81,6 +88,7 @@ def require_schema(connection: Connection, *, expected_head: str = HEAD) -> None
         expected_triggers.add(("management_changelog", "hitl_execution_immutable"))
         expected_triggers.add(("management_changelog", "hitl_execution_recovery_guard"))
         expected_triggers.add(("management_changelog", "hitl_execution_preparation_guard"))
+        expected_triggers.add(("management_changelog", "hitl_execution_verification_guard"))
     if not expected_triggers <= triggers:
         raise RuntimeError("MANAGEMENT_SCHEMA_NOT_READY")
 

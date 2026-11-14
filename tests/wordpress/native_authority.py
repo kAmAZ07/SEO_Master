@@ -17,17 +17,21 @@ from services.management_service.approval_policy import ApprovalError, DecisionR
 from services.management_service.approval_service import ApprovalService
 from services.management_service.execution_service import ExecutionService
 from services.management_service.execution_preparation import ExecutionPreparation
+from services.management_service.execution_verification import ExecutionVerification
+from services.client_api_gateway.public_verifier import PublicVerifier
 from services.management_service.migrations.runner import migrate
 from services.management_service.models import Task, TaskStatus, TaskType
 from services.semantic_service.proposals.model import ExternalEntity
 from services.semantic_service.proposals.repository import row_from_version
 from shared.hitl_execution import ExecutionRequest, PreparationFailure, WordPressBinding
+from shared.hitl_rollback import RollbackRequest
+from shared.hitl_verification import PublicObservation, VerificationReport
 from shared.page_evidence import seal_evidence
 from tests.fixtures.management_proposal import PROJECT_ID, TASK_ID, management_proposal_fixture
 from tests.wordpress.native import NativeWordPress
 
 
-async def run_authority(wp: NativeWordPress, target_factory) -> None:
+async def run_authority(wp: NativeWordPress, target_factory, public_reader) -> None:
     # The admin URL is created here; never use an inherited shared TEST_PG_ADMIN_URL.
     os.environ["TEST_PG_ADMIN_URL"] = wp.start_postgres()
     from tests.integration.test_migrations_postgres import TempDatabase
@@ -75,10 +79,17 @@ async def run_authority(wp: NativeWordPress, target_factory) -> None:
                         return service.queue(ExecutionRequest.model_validate(payload), actor)
                     if path == "/reserve":
                         return service.reserve(ExecutionRequest.model_validate({key: payload[key] for key in ExecutionRequest.model_fields}),
-                            actor, WordPressBinding.model_validate(payload["binding"]), payload["before"], preparation_lease=payload["lease_id"])
+                            actor, WordPressBinding.model_validate(payload["binding"]), payload["before"], preparation_lease=payload["lease_id"],
+                            public_baseline=PublicObservation.model_validate(payload["public_baseline"]) if payload.get("public_baseline") else None)
+                    if path == "/verification/claim":
+                        return ExecutionVerification(session).claim(payload["operation_id"])
+                    if path.startswith("/verification/"):
+                        return ExecutionVerification(session).report(path.split("/")[2], VerificationReport.model_validate(payload))
                     operation_id = path.split("/")[1]
                     if method == "GET":
                         return service.read(operation_id, actor)
+                    if path.endswith("/rollback/queue"):
+                        return service.queue_rollback(operation_id, RollbackRequest.model_validate(payload), actor)
                     if path.endswith("/begin"):
                         return service.begin(operation_id, actor, preparation_lease=payload["lease_id"])
                     if path.endswith("/preparation/claim"):
@@ -92,7 +103,7 @@ async def run_authority(wp: NativeWordPress, target_factory) -> None:
                     raise AssertionError("unknown native authority call")
                 except ApprovalError as error:
                     raise HTTPException(error.http_status, error.code) from error
-        executor = HITLExecutor("Bearer fixture-session-tested-separately", authority=authority, target_factory=target_factory)
+        executor = HITLExecutor("Bearer fixture-session-tested-separately", authority=authority, target_factory=target_factory, public_reader=public_reader)
         def title():
             return wp.php("echo get_post_meta(" + str(entity_id) + ", '_seo_master_meta_title', true);")
         try:
@@ -107,9 +118,20 @@ async def run_authority(wp: NativeWordPress, target_factory) -> None:
             ApprovalService(session).decide(TASK_ID, actor, decision, "approve")
         assert title() == "Мастерская обуви"  # Approval alone has zero CMS effects.
         result = await executor.execute(references)
-        assert result["state"] == "applied_unverified" and title() == "Мастерская зимней обуви"
+        assert result["state"] == "applied_unverified" and title() == "Мастерская зимней обуви", (result["state"], result.get("preparation"))
         assert await executor.execute(references) == result
         with database.engine.connect() as conn:
             assert conn.scalar(text("SELECT count(*) FROM public.management_changelog WHERE source='hitl_executor_v1'")) == 1
             assert conn.scalar(text("SELECT metadata->'record'->>'actor_id' FROM public.management_changelog")) == actor_id
-        print("PASS native AR4 integration: actual Core+Management migrations; persisted AL5 version/evidence; unapproved denial; approve without CMS effect; one Gateway apply; signed receipt; idempotent operation. Session HTTP/browser/staging tested separately.")
+        verifier = PublicVerifier(authority=authority, reader=public_reader)
+        verified = await verifier.once(references.operation_id)
+        assert verified["state"] == "verified" and verified["verification"]["last_result"]["observation"]["status"] == 200
+        rollback_request = RollbackRequest(operation_id=str(uuid4()), reason="Native acceptance: restore exact before")
+        rolled_back = await executor.rollback(references.operation_id, rollback_request)
+        assert rolled_back["state"] == "rollback_applied_unverified" and title() == "Мастерская обуви"
+        assert rolled_back["record"]["after"] == result["record"]["before"]
+        assert (await verifier.once(rollback_request.operation_id))["state"] == "rollback_verified"
+        assert (await executor.rollback(references.operation_id, rollback_request))["state"] == "rollback_verified"
+        with Session(database.engine) as session:
+            assert session.get(Task, UUID(TASK_ID)).status == TaskStatus.CANCELLED
+        print("PASS native AR7: migrated authority, exact apply and signed receipt, anonymous public verified, explicit rollback restoring exact before, separate signed rollback receipt and independent rollback_verified. Session HTTP/browser/staging tested separately.")

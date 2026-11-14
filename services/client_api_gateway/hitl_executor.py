@@ -16,6 +16,11 @@ from services.client_api_gateway.config import settings
 from services.client_api_gateway.wordpress_v2 import WordPressV2
 from shared.hitl_execution import ExecutionError, ExecutionRequest, PreparationError, RecoveryError, RecoveryReport, UUID_PATTERN, WordPressBinding, canonical
 from shared.cms_http import CMSHttpClient
+from shared.hitl_rollback import RollbackRequest
+from services.client_api_gateway.public_verifier import PublicPageReader, PublicReadError
+
+CONFIRMED_STATES = frozenset({"applied_unverified", "no_op", "verifying", "verified", "verification_failed",
+    "rollback_applied_unverified", "rollback_verifying", "rollback_verified", "rollback_verification_failed", "rollback_in_progress", "rolled_back"})
 
 
 def wordpress_target(project_id: str, binding: WordPressBinding | None = None, *, http: CMSHttpClient | None = None) -> WordPressV2:
@@ -74,12 +79,14 @@ async def authority_request(method: str, path: str, payload: dict[str, Any] | No
 
 
 class HITLExecutor:
-    def __init__(self, authorization: str, *, authority: Authority | None = None, target_factory: TargetFactory | None = None):
+    def __init__(self, authorization: str, *, authority: Authority | None = None, target_factory: TargetFactory | None = None,
+                 public_reader: PublicPageReader | None = None):
         if (not authorization.lower().startswith("bearer ") or not authorization[7:].strip() or len(authorization) > 8192):
             raise HTTPException(401, "user_session_required")
         self.authorization = authorization
         self.authority = authority or self._authority
         self.target_factory = target_factory or wordpress_target
+        self.public_reader = public_reader or PublicPageReader()
 
     async def read(self, operation_id: str) -> dict[str, Any]:
         return await self.authority("GET", "/" + operation_id)
@@ -99,9 +106,26 @@ class HITLExecutor:
                 raise
             operation = await self.authority("POST", "/queue", references.model_dump())
         record = operation["record"]
+        if record.get("operation_type", "apply") != "apply":
+            raise HTTPException(409, "execution_operation_type_conflict")
+        return await self._execute_operation(references, operation)
+
+    async def rollback(self, original_id: str, request: RollbackRequest) -> dict[str, Any]:
+        # Queue is idempotent but still authorizes this explicit user request.
+        operation = await self.authority("POST", "/" + original_id + "/rollback/queue", request.model_dump())
+        record = operation["record"]
+        if (record.get("operation_type") != "rollback" or record.get("original_operation_id") != original_id
+                or record.get("reason") != request.reason or record.get("operation_id") != request.operation_id):
+            raise HTTPException(502, "execution_authority_invalid")
+        refs = ExecutionRequest.model_validate({key: record[key] for key in ExecutionRequest.model_fields})
+        return await self._execute_operation(refs, operation)
+
+    async def _execute_operation(self, references: ExecutionRequest, operation: dict[str, Any]) -> dict[str, Any]:
+        record = operation["record"]
+        operation_id = references.operation_id
         if any(record.get(key) != value for key, value in references.model_dump().items()):
             raise HTTPException(409, "execution_idempotency_conflict")
-        if operation["state"] in {"applied_unverified", "no_op"}:
+        if operation["state"] in CONFIRMED_STATES:
             return operation
         if operation["state"] in {"applying", "outcome_unknown", "needs_reconciliation"}:
             return await StatusReconciler(authority=self.authority, target_factory=self.target_factory).once(operation_id) or operation
@@ -120,8 +144,17 @@ class HITLExecutor:
             current = await target.preflight(record["version"])
             if operation.get("prepared", True) and current != record["before"]:
                 raise ExecutionError("cms_precondition_conflict")
+            public_baseline = None
+            if record.get("operation_type", "apply") == "apply" and not operation.get("public_baseline"):
+                try:
+                    observed = await self.public_reader.read(record["version"]["target"]["url"])
+                except PublicReadError:
+                    raise ExecutionError("public_baseline_unavailable") from None
+                if observed.status != 200 or observed.facts is None:
+                    raise ExecutionError("public_baseline_unavailable")
+                public_baseline = observed.model_dump(mode="json")
             operation = await self.authority("POST", "/reserve", {**references.model_dump(),
-                "binding": target.binding.model_dump(), "before": current, "lease_id": token})
+                "binding": target.binding.model_dump(), "before": current, "lease_id": token, "public_baseline": public_baseline})
             await target.dry_run(operation["record"])
             operation = await self.authority("POST", "/" + operation_id + "/preparation/ready", {"lease_id": token})
             if operation["state"] != "ready":

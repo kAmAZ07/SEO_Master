@@ -7,16 +7,16 @@ from sqlalchemy.orm import Session
 
 from services.management_service.approval_policy import ApprovalError
 from services.management_service.approval_service import TaskRow
-from services.management_service.execution_service import ENTITY, SOURCE, ExecutionService, OperationRow
+from services.management_service.execution_service import CONFIRMED_STATES, ENTITY, SOURCE, ExecutionService, OperationRow
 from services.management_service.models import Task
 from services.management_service.recovery_policy import RecoveryState
 from shared.hitl_execution import ExecutionError, RecoveryReport, validate_receipt
 
 
 class ExecutionRecovery:
-    def __init__(self, db: Session, *, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)):
+    def __init__(self, db: Session, *, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc), verification_deadline_seconds: int = 300):
         self.db, self.clock = db, clock
-        self.executions = ExecutionService(db, clock=clock)
+        self.executions = ExecutionService(db, clock=clock, verification_deadline_seconds=verification_deadline_seconds)
 
     def _locked(self, operation_id: str, *, skip_locked: bool = False) -> tuple[TaskRow, OperationRow] | None:
         initial = self.executions._row(operation_id)
@@ -73,7 +73,7 @@ class ExecutionRecovery:
             if locked is None:
                 raise ApprovalError("execution_not_found", 404)
             task, row = locked
-            if row.meta["state"] in {"applied_unverified", "no_op"} and report.receipt == row.meta.get("receipt"):
+            if row.meta["state"] in CONFIRMED_STATES and report.receipt == row.meta.get("receipt"):
                 self.db.rollback()
                 return self.executions.serialize(row)
             recovery = RecoveryState.load(row.meta.get("recovery"))

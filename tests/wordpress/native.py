@@ -151,10 +151,15 @@ file_put_contents(WPMU_PLUGIN_DIR.'/fixture-strict.php', '<?php global $wpdb; $w
 seo_master_v2_store()->install_schema();
 $id = wp_insert_post(['post_type'=>'post','post_status'=>'publish','post_name'=>'catalog','post_title'=>'Old title']);
 update_post_meta($id, '_seo_master_meta_title', 'Мастерская обуви');
+global $wp_rewrite;
+$wp_rewrite->init();
 flush_rewrite_rules(true);
 echo json_encode(['entity_id'=>$id]);
 """ % (json.dumps(admin_password), json.dumps(self.project_id), json.dumps(self.site_id)), installing=True)
             self.entity_id = int(json.loads(result)["entity_id"])
+            # Rewrite generation during WP_INSTALLING omits normal post rules.
+            # Rebuild after installation in a fresh, non-installing WordPress process.
+            self.php("global $wp_rewrite; $wp_rewrite->init(); flush_rewrite_rules(true);")
             return self
         except BaseException:
             self.__exit__(None, None, None)

@@ -41,11 +41,13 @@ class BackendToolingTests(unittest.TestCase):
             "tests/unit/test_management_proposals.py",
             "tests/unit/test_management_approvals.py",
             "tests/unit/test_management_recovery.py",
+            "tests/unit/test_verification_policy.py",
         ))
         self.assertEqual(client.tests, (
             "tests/unit/test_client_startup.py",
             "tests/unit/test_client_recovery.py",
             "tests/unit/test_client_preparation.py",
+            "tests/unit/test_public_verifier.py",
             "tests/unit/test_client_gateway_rollback.py",
             "tests/unit/test_client_model_imports.py",
         ))

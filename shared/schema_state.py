@@ -3,7 +3,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 CORE_HEAD = "20261109_001_hitl_barrier"
-MANAGEMENT_HEAD = "20261114_006_preparation"
+MANAGEMENT_HEAD = "20261114_007_verification"
 HITL_STATE_TABLES = ("audit_schema.crawl_results", "semantic_schema.recommendation_versions", "public.users",
                      "audit_schema.projects", "audit_schema.workspace_members", "audit_schema.domain_authorizations")
 CLIENT_COLUMNS = {

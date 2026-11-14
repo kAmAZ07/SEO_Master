@@ -1,6 +1,6 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit'
 import type { HITLTask, HITLApproval } from '@/types/hitl'
-import { fetchHITLTasks, fetchTaskDetails, approveTask, rejectTask, applyTask, cancelOperation } from '@/api/hitlAPI'
+import { fetchHITLTasks, fetchTaskDetails, approveTask, rejectTask, applyTask, cancelOperation, rollbackOperation } from '@/api/hitlAPI'
 import { getApiErrorMessage } from '@/api/authAPI'
 
 interface HITLState {
@@ -74,6 +74,18 @@ export const cancelHITLOperation = createAsyncThunk(
   },
 )
 
+export const rollbackHITLOperation = createAsyncThunk(
+  'hitl/rollback',
+  async ({ taskId, originalId, operationId, reason }: { taskId: string; originalId: string; operationId: string; reason: string }, { rejectWithValue }) => {
+    try {
+      await rollbackOperation(taskId, originalId, operationId, reason)
+      return await fetchTaskDetails(taskId)
+    } catch (error) {
+      return rejectWithValue(getApiErrorMessage(error, 'Не удалось подтвердить результат отката. Обновите статус операции.'))
+    }
+  },
+)
+
 const hitlSlice = createSlice({
   name: 'hitl',
   initialState,
@@ -119,6 +131,13 @@ const hitlSlice = createSlice({
       })
       .addCase(cancelHITLOperation.rejected, (state, action) => {
         state.error = typeof action.payload === 'string' ? action.payload : 'Не удалось отменить операцию'
+      })
+      .addCase(rollbackHITLOperation.fulfilled, (state, action) => {
+        state.error = null
+        state.tasks = state.tasks.map(task => task.taskId === action.payload.taskId ? action.payload : task)
+      })
+      .addCase(rollbackHITLOperation.rejected, (state, action) => {
+        state.error = typeof action.payload === 'string' ? action.payload : 'Не удалось подтвердить откат'
       })
   },
 })

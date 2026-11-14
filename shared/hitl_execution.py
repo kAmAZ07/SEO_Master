@@ -143,6 +143,9 @@ def validate_receipt(receipt: Any, command: dict[str, Any], before: dict[str, An
     required = {"protocol", "kind", "receipt_id", "operation_id", "project_id", "site_id", "entity_id", "task_id",
                 "proposal_version", "proposal_hash", "approval_ref", "request_hash", "before_digest", "after_digest",
                 "before", "after", "plugin_version", "key_id", "applied_at", "applied_fields", "outcome", "warnings", "signature"}
+    rollback = command.get("operation_type") == "rollback"
+    if rollback:
+        required |= {"operation_type", "original_operation_id", "original_receipt_id", "original_request_hash", "original_proposal_hash", "reason"}
     if not isinstance(receipt, dict) or set(receipt) != required:
         raise ExecutionError("cms_receipt_invalid")
     if (not isinstance(receipt["entity_id"], int) or isinstance(receipt["entity_id"], bool)
@@ -167,8 +170,11 @@ def validate_receipt(receipt: Any, command: dict[str, Any], before: dict[str, An
     expected.update(protocol="seo-master/v2", kind="receipt", request_hash=request_hash,
                     after_digest=digest(after), before=before, after=after,
                     receipt_id=hashlib.sha256(("SEO-MASTER-RECEIPT-ID-V2\n" + command["operation_id"] + "\n" + request_hash).encode()).hexdigest())
-    fields = [item["field"] for item in command["changes"] if before["fields"][item["field"]] != after["fields"][item["field"]]]
-    expected.update(applied_fields=fields, outcome="applied_unverified" if fields else "no_op")
+    field_names = ("title", "description", "jsonld") if rollback else tuple(item["field"] for item in command["changes"])
+    fields = [field for field in field_names if before["fields"][field] != after["fields"][field]]
+    expected.update(applied_fields=fields, outcome=("rollback_applied_unverified" if rollback else "applied_unverified") if fields else "no_op")
+    if rollback:
+        expected.update({key: command[key] for key in ("operation_type", "original_operation_id", "original_receipt_id", "original_request_hash", "original_proposal_hash", "reason")})
     if any(receipt.get(key) != value for key, value in expected.items()):
         raise ExecutionError("cms_receipt_binding_invalid")
     if secret is not None:

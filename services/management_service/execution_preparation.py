@@ -57,10 +57,9 @@ class ExecutionPreparation:
             if error is None:
                 refs = ExecutionRequest.model_validate({key: row.meta["record"][key] for key in ExecutionRequest.model_fields})
                 try:
-                    _, _, version, scope, decision, _ = self.executions._authorize(refs, actor)
+                    _, _, _, current, _ = self.executions._authorize_operation(refs, actor, row)
                     saved = row.meta.get("intent") or {key: item for key, item in row.meta["record"].items()
                         if key not in {"command", "request_hash", "binding", "before", "after"}}
-                    current = self.executions._intent(refs, actor, version, scope, decision)
                     if {**current, "actor_role": saved["actor_role"]} != saved:
                         raise ApprovalError("execution_revision_conflict")
                 except ApprovalError as exc:

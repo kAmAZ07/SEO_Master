@@ -13,6 +13,12 @@ export interface HITLTaskDetails {
   metadata: Record<string, unknown>
 }
 
+export interface HITLVerification {
+  status: string; attempts: number; maxAttempts: number; deadlineAt: string; stopReason: string | null
+  observation?: { url: string; observedAt: string; status: number } | null
+  checks: { field: string; matches: boolean }[]
+}
+
 export interface HITLTask {
   id: string
   taskId: string
@@ -25,6 +31,8 @@ export interface HITLTask {
   execution?: {
     operationId: string; state: string; recommendationVersionId: string; contentHash: string
     prepared?: boolean
+    verification?: HITLVerification | null
+    rollback?: { operationId: string; state: string; reason: string; verification: HITLVerification | null } | null
     preparation?: { attempts: number; maxAttempts: number; errorCode: string | null } | null
     recovery?: { attempts: number; maxAttempts: number; lastError: string | null; stopReason: string | null } | null
   } | null

@@ -71,6 +71,13 @@ def target(project_id,binding=None):
     client.dry_run=dry_run_interrupted
     return client
 executor.wordpress_target=target
+from services.client_api_gateway import public_verifier
+from shared.netpolicy import SafeHttpClient
+reader=public_verifier.PublicPageReader
+def public_reader():
+    return reader(http=SafeHttpClient(policy=NetPolicy(allow_private_hosts=frozenset({'wordpress.test'}))))
+public_verifier.PublicPageReader=public_reader
+executor.PublicPageReader=public_reader
 import uvicorn
 uvicorn.run('services.client_api_gateway.main:app',host='0.0.0.0',port=8005)
 """
@@ -376,22 +383,65 @@ def run_apps(wp: NativeWordPress) -> None:
             database.run("UPDATE public.users SET is_active=false WHERE id=:id", id=actor)
             wp.run("start", client_name)
             for _ in range(110):
-                if database.scalar("SELECT metadata->>'state' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == "applied_unverified":
+                if database.scalar("SELECT metadata->>'state' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == "verified":
                     break
                 time.sleep(1)
             else:
-                raise AssertionError("restarted status worker did not reconcile committed WordPress operation")
+                raise AssertionError("restarted status/public workers did not reconcile and independently verify the committed WordPress operation")
             assert database.scalar("SELECT metadata->'record' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == frozen
             assert database.scalar("SELECT jsonb_array_length(metadata->'recovery'->'attempts') FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == 1
             assert database.scalar("SELECT metadata->'recovery'->'attempts'->0->>'status' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == "succeeded"
             database.run("UPDATE public.users SET is_active=true WHERE id=:id", id=actor)
             result = request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references)
-            assert result["state"] == "applied_unverified" and title() == "Мастерская зимней обуви"
+            assert result["state"] == "verified" and title() == "Мастерская зимней обуви"
+            assert result["verification"]["last_result"]["observation"]["status"] == 200
             count = wp.php("global $wpdb; echo $wpdb->get_var(\"SELECT count(*) FROM {$wpdb->prefix}seo_master_operations_v2 WHERE operation_id='" + references["operation_id"] + "'\");")
             assert count.strip() == "1"
             assert request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references) == result
             assert database.scalar("SELECT count(*) FROM public.management_changelog WHERE source='hitl_executor_v1' AND id=:id", id=references["operation_id"]) == 1
             assert database.scalar("SELECT count(*) FROM public.management_changelog WHERE source='hitl_executor_v1'") == 2
+            # Explicit rollback suffers a real Client SIGKILL after CMS commit too.
+            # Restart may only read the same receipt and then anonymously verify it.
+            original_id = references["operation_id"]
+            rollback_id = str(uuid4())
+            rollback_body = {"operation_id": rollback_id, "reason": "Native HTTP acceptance: restore exact before"}
+            rollback_path = f"/api/hitl/tasks/{task_id}/executions/{original_id}/rollback"
+            wp.run("exec", client_name, "python", "-c", "from pathlib import Path; Path('/tmp/ar6-receipt-received').unlink(missing_ok=True); Path('/tmp/ar6-hold-receipt').touch()")
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(request, api, "POST", rollback_path, token=token, body=rollback_body)
+                for _ in range(80):
+                    try:
+                        marker = wp.run("exec", client_name, "cat", "/tmp/ar6-receipt-received", timeout=5).strip()
+                        if marker == rollback_id:
+                            break
+                    except RuntimeError:
+                        pass
+                    time.sleep(.25)
+                else:
+                    raise AssertionError("rollback did not reach the post-commit fault boundary")
+                assert title() == "Мастерская обуви"
+                assert database.scalar("SELECT metadata->>'state' FROM public.management_changelog WHERE id=:id", id=rollback_id) == "applying"
+                wp.run("kill", client_name)
+                try:
+                    pending.result(timeout=55)
+                except (AssertionError, httpx.RequestError):
+                    pass  # Genuine committed rollback, lost Gateway response.
+                else:
+                    raise AssertionError("interrupted rollback delivered an unexpected receipt")
+            database.run("UPDATE public.users SET is_active=false WHERE id=:id", id=actor)
+            wp.run("start", client_name)
+            for _ in range(110):
+                if database.scalar("SELECT metadata->>'state' FROM public.management_changelog WHERE id=:id", id=rollback_id) == "rollback_verified":
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError("rollback status/public recovery did not finish")
+            database.run("UPDATE public.users SET is_active=true WHERE id=:id", id=actor)
+            restored = request(api, "POST", rollback_path, token=token, body=rollback_body)
+            assert restored["state"] == "rollback_verified" and restored["record"]["after"] == frozen["before"]
+            assert restored["verification"]["last_result"]["observation"]["status"] == 200
+            assert database.scalar("SELECT metadata->>'state' FROM public.management_changelog WHERE id=:id", id=original_id) == "rolled_back"
+            assert wp.php("global $wpdb; echo $wpdb->get_var(\"SELECT count(*) FROM {$wpdb->prefix}seo_master_operations_v2 WHERE operation_id='" + rollback_id + "'\");").strip() == "1"
             # The actual publisher and live consumer run with the restricted Management role.
             wp.run("exec", wp.owner + "-management", "python", "-B", "-c", "from services.management_service.tasks.periodic_tasks import dispatch_hitl_outbox; result=dispatch_hitl_outbox(); assert result['published']>=1")
             for _ in range(50):
@@ -407,7 +457,7 @@ def run_apps(wp: NativeWordPress) -> None:
                     if service == "management":
                         assert conn.scalar(text("SELECT has_table_privilege(current_user,'audit_schema.workspace_members','UPDATE')")) is False
                 engine.dispose()
-            print("PASS actual HTTP apps: UID10001/read-only containers; migrated PG with distinct no-DDL roles; real Redis JWT sessions; queued intent persisted before CMS; SIGKILL before freeze and after dry-run, same ID and immutable command, zero CMS writes; explicit pre-write cancel; SIGKILL after WordPress commit and service-only receipt recovery with inactive user; one WP ledger mutation; real RabbitMQ outbox/inbox. CMS transport test-private host only; public verify/rollback/staging not claimed.")
+            print("PASS actual HTTP apps AR7: UID10001/read-only and no-DDL roles; Redis JWT sessions and RabbitMQ outbox/inbox; pre-write crash fences; apply and explicit rollback each survive real post-CMS-commit SIGKILL with inactive-user service-only status recovery and independent anonymous public verification; one ledger receipt per operation, exact before restored. Only fixture-private hostname is allowed; browser/staging remains separate.")
         finally:
             stand.stop_apps()
             for role, _local, _inside in credentials.values():

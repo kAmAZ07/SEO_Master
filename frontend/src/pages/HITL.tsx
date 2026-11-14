@@ -3,7 +3,7 @@ import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Loader from '../components/ui/Loader'
-import { applyHITLTask, approveHITLTask, cancelHITLOperation, loadHITLTasks, rejectHITLTask } from '../store/slices/hitlSlice'
+import { applyHITLTask, approveHITLTask, cancelHITLOperation, loadHITLTasks, rejectHITLTask, rollbackHITLOperation } from '../store/slices/hitlSlice'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import type { HITLTask } from '../types/hitl'
 
@@ -37,12 +37,16 @@ const getReadableMeta = (value: unknown) => {
   return String(value)
 }
 
+const validRollbackReason = (reason: string) => !!reason.trim() && !reason.includes('\u0000') && new TextEncoder().encode(reason.trim()).length <= 1024
+
 const HITL = () => {
   const dispatch = useAppDispatch()
   const { tasks, loading, error } = useAppSelector((state) => state.hitl)
   const [comments, setComments] = useState<Record<string, string>>({})
   const [processingTaskId, setProcessingTaskId] = useState<string | null>(null)
   const [operationIds, setOperationIds] = useState<Record<string, string>>({})
+  const [rollbackReasons, setRollbackReasons] = useState<Record<string, string>>({})
+  const [rollbackRequests, setRollbackRequests] = useState<Record<string, { operationId: string; reason: string }>>({})
 
   useEffect(() => {
     void dispatch(loadHITLTasks())
@@ -109,6 +113,44 @@ const HITL = () => {
     }
   }
 
+  const handleRollback = async (task: HITLTask) => {
+    if (!task.execution) return
+    const originalId = task.execution.operationId
+    const previous = task.execution.rollback
+    const saved = (previous?.state !== 'cancelled' ? previous : null) ||
+      (rollbackRequests[originalId]?.operationId !== previous?.operationId ? rollbackRequests[originalId] : null)
+    const reason = saved?.reason || rollbackReasons[originalId]?.trim()
+    if (!reason || !validRollbackReason(reason)) return
+    const operationId = saved?.operationId || crypto.randomUUID()
+    setRollbackRequests(current => ({ ...current, [originalId]: { operationId, reason } }))
+    setProcessingTaskId(task.taskId)
+    try {
+      await dispatch(rollbackHITLOperation({ taskId: task.taskId, originalId, operationId, reason })).unwrap()
+    } catch {
+      // Keep the same ID and reason after a lost response; the server chooses status-only recovery.
+    } finally {
+      setProcessingTaskId(null)
+    }
+  }
+
+  const handleCancelRollback = async (task: HITLTask) => {
+    if (!task.execution?.rollback) return
+    const originalId = task.execution.operationId
+    setProcessingTaskId(task.taskId)
+    try {
+      await dispatch(cancelHITLOperation({ taskId: task.taskId, operationId: task.execution.rollback.operationId })).unwrap()
+      setRollbackRequests(current => {
+        const next = { ...current }
+        delete next[originalId]
+        return next
+      })
+    } catch {
+      // A begun or unknown operation keeps its original ID and cannot be cancelled.
+    } finally {
+      setProcessingTaskId(null)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -151,6 +193,14 @@ const HITL = () => {
             const canCancel = task.execution && ['queued', 'preflight', 'dry_run', 'ready', 'rejected', 'unsupported', 'conflict', 'failed_before_apply', 'expired'].includes(task.execution.state)
             const canApply = task.authorizationStatus === 'approved' && task.managedTarget &&
               (!task.execution || ['queued', 'preflight', 'dry_run', 'ready', 'expired', 'cancelled'].includes(task.execution.state))
+            const lastRollback = task.execution?.rollback
+            const rollback = lastRollback?.state === 'cancelled' ? null : lastRollback
+            const originalId = task.execution?.operationId || ''
+            const savedRollback = rollback || (rollbackRequests[originalId]?.operationId !== lastRollback?.operationId ? rollbackRequests[originalId] : null)
+            const canRollback = task.execution && ['applied_unverified', 'no_op', 'verifying', 'verified', 'verification_failed'].includes(task.execution.state)
+            const canResumeRollback = rollback && ['queued', 'preflight', 'dry_run', 'ready', 'applying', 'outcome_unknown'].includes(rollback.state)
+            const canCancelRollback = rollback && ['queued', 'preflight', 'dry_run', 'ready', 'rejected', 'unsupported', 'conflict', 'failed_before_apply'].includes(rollback.state)
+            const verification = rollback?.verification || task.execution?.verification
             const executionLabel: Record<string, string> = {
               queued: 'Запрос публикации сохранён. Подготовка ещё не началась.',
               preflight: 'Проверяется подключение CMS и точное состояние страницы. Запись ещё не разрешена.',
@@ -163,6 +213,15 @@ const HITL = () => {
               outcome_unknown: 'Результат неизвестен — требуется проверка статуса',
               needs_reconciliation: 'Автоматическая сверка остановлена. Требуется ручной разбор; повторная публикация заблокирована.',
               applied_unverified: 'Изменения записаны. Независимая проверка ещё не выполнена.',
+              verifying: 'Проверяется публичная страница. Подтверждение CMS ещё не доказывает результат.',
+              verified: 'Изменения подтверждены независимым чтением публичной страницы.',
+              verification_failed: 'Публичная проверка не подтвердила результат. Требуется разбор расхождений.',
+              rollback_in_progress: 'Выполняется откат. Старая проверка публикации остановлена.',
+              rolled_back: 'CMS подтвердила откат. Результат публичной проверки показан отдельно.',
+              rollback_applied_unverified: 'Откат записан. Независимая проверка ещё не выполнена.',
+              rollback_verifying: 'Проверяется публичная страница после отката.',
+              rollback_verified: 'Откат подтверждён независимым чтением публичной страницы.',
+              rollback_verification_failed: 'Публичная проверка не подтвердила откат. Требуется ручной разбор.',
               no_op: 'Изменения не потребовались. Независимая проверка ещё не выполнена.', cancelled: 'Операция отменена',
               expired: 'Время подготовки публикации истекло. Можно подготовить новую операцию.',
             }
@@ -241,6 +300,25 @@ const HITL = () => {
                     {canCancel && <Button type="button" variant="outline" className="mt-3 w-full" disabled={isProcessing}
                       onClick={() => void handleCancel(task)}>Отменить операцию до публикации</Button>}
                     {task.execution && <p role="status" className="mt-2 text-sm text-gray-700">{executionLabel[task.execution.state] || 'Неизвестный статус операции'}</p>}
+                    {rollback && <p role="status" className="mt-2 text-sm text-gray-700">Откат: {executionLabel[rollback.state] || 'Статус требует обновления'}</p>}
+                    {verification && <div className="mt-2 text-sm text-gray-600">
+                      <p>Публичные проверки: {verification.attempts} из {verification.maxAttempts}. Дедлайн: {verification.deadlineAt}.</p>
+                      {verification.observation && <p>{verification.observation.url} — HTTP {verification.observation.status}, {verification.observation.observedAt}</p>}
+                      {verification.checks.map(check => <p key={check.field}>{check.field}: {check.matches ? 'совпадает' : 'расхождение'}</p>)}
+                      {verification.stopReason && <p>Автоматическая проверка остановлена: {verification.stopReason}.</p>}
+                    </div>}
+                    {((canRollback && !rollback) || canResumeRollback) && <div className="mt-3 space-y-2">
+                      <label className="block text-sm">Причина отката
+                        <input aria-label="Причина отката" className="ml-2 rounded border p-2" maxLength={1024}
+                          value={savedRollback?.reason || rollbackReasons[originalId] || ''}
+                          disabled={!!savedRollback || isProcessing}
+                          onChange={event => setRollbackReasons(current => ({ ...current, [originalId]: event.target.value }))} />
+                      </label>
+                      <Button type="button" variant="outline" disabled={isProcessing || !validRollbackReason(savedRollback?.reason || rollbackReasons[originalId] || '')}
+                        onClick={() => void handleRollback(task)}>{rollback ? 'Продолжить проверку отката' : 'Подтвердить откат к прежним значениям'}</Button>
+                    </div>}
+                    {canCancelRollback && <Button type="button" variant="outline" disabled={isProcessing}
+                      onClick={() => void handleCancelRollback(task)}>Отменить откат до записи</Button>}
                     {task.execution?.preparation?.errorCode && <p className="mt-2 text-sm text-gray-600">
                       {recoveryReason[task.execution.preparation.errorCode] || 'Подготовка требует проверки'}.
                     </p>}

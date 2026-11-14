@@ -179,6 +179,35 @@ def test_foreign_actor_cannot_cancel_an_operation(stand):
     assert all(call.method == "GET" for call in calls)
 
 
+def test_rollback_requires_deploy_and_exact_scoped_request_without_mutable_payload(stand):
+    import json
+    client, maker, calls = stand
+    path = f"/api/hitl/tasks/{TASK_ID}/executions/{BOB}/rollback"
+    body = {"operation_id": ALICE, "reason": "Restore exact saved snapshot"}
+    assert client.post(path, json=body).status_code == 403
+    assert all(call.method == "GET" for call in calls)
+    with maker() as db:
+        db.get(WorkspaceMember, (WORKSPACE, ALICE)).role = "deployer"
+        db.commit()
+    calls.clear()
+    assert client.post(path, json={**body, "before": {}}).status_code == 422
+    assert calls == []
+    assert client.post(path, json=body, headers={"Authorization": "Bearer original-access"}).status_code == 200
+    assert calls[-2].url.path == f"/internal/executions/{BOB}"
+    assert calls[-1].url.path == f"/internal/executions/{BOB}/rollback"
+    assert json.loads(calls[-1].content) == body
+    assert calls[-1].headers["authorization"] == "Bearer original-access"
+
+
+def test_foreign_actor_cannot_rollback_or_supply_force(stand):
+    client, _, calls = stand
+    path = f"/api/hitl/tasks/{TASK_ID}/executions/{BOB}/rollback"
+    body = {"operation_id": ALICE, "reason": "Restore"}
+    assert client.post(path, json=body, headers={"X-User": BOB}).status_code == 404
+    assert all(call.method == "GET" for call in calls)
+    assert client.post(path, json={**body, "force": True}).status_code == 422
+
+
 def test_cancel_rejects_an_operation_bound_to_another_task_before_post(stand):
     client, maker, calls = stand
     with maker() as db:

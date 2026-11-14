@@ -58,13 +58,13 @@ assertion($bootstrap_output === '', 'bootstrap emitted output/BOM');
 seo_master_bootstrap();
 seo_master_register_routes();
 seo_master_register_settings();
-assertion(count(AdapterFixture::$routes) === 14, 'route collection incomplete');
+assertion(count(AdapterFixture::$routes) === 16, 'route collection incomplete');
 foreach (['meta', 'schema', 'interlinks'] as $route) {
     $definition = AdapterFixture::$routes['seo-master/v1/' . $route];
     $result = $definition['callback']();
     assertion($result instanceof WP_Error && $result->code === 'upgrade_required' && $result->details['status'] === 426, 'v1 mutation reopened');
 }
-foreach (['challenge', 'snapshot', 'dry-run', 'apply', 'rollback', 'rollback/dry-run', 'target-bound/apply', 'target-bound/dry-run', 'operations/(?P<operation_id>[0-9a-f-]{36})'] as $route) {
+foreach (['challenge', 'snapshot', 'dry-run', 'apply', 'rollback', 'rollback/dry-run', 'target-bound/apply', 'target-bound/dry-run', 'target-bound/rollback', 'target-bound/rollback/dry-run', 'operations/(?P<operation_id>[0-9a-f-]{36})'] as $route) {
     assertion(AdapterFixture::$routes['seo-master/v2/' . $route]['permission_callback'] === 'seo_master_v2_permission', 'sensitive route missing boundary permission');
 }
 $capabilities = seo_master_capabilities();

@@ -24,7 +24,7 @@ SECRET_NAMES = (
     "JWT_SECRET_KEY", "INTERNAL_API_KEY", "MANAGEMENT_EXECUTOR_API_KEY", "TILDA_INTERNAL_API_KEY",
     "TILDA_WEBHOOK_SECRET", "MASTER_ENCRYPTION_KEY",
 )
-OPTIONAL_CONFIGURATION_NAMES = frozenset(("WORDPRESS_V2_TARGETS_JSON", "SEO_MASTER_HMAC_SECRET", "SEO_MASTER_RECEIPT_SECRET", "DOMAIN_VERIFICATION_FRESH_DAYS"))
+OPTIONAL_CONFIGURATION_NAMES = frozenset(("WORDPRESS_V2_TARGETS_JSON", "SEO_MASTER_HMAC_SECRET", "SEO_MASTER_RECEIPT_SECRET", "DOMAIN_VERIFICATION_FRESH_DAYS", "VERIFICATION_DEADLINE_SECONDS"))
 CONFIGURATION_NAMES = frozenset(("COMPOSE_PROJECT_NAME", *SECRET_NAMES))
 FRONTEND_ROOT_FILES = frozenset((
     "package.json", "package-lock.json", "index.html", "vite.config.ts",
@@ -184,6 +184,10 @@ def load_configuration(root: Path, mode: Mode, *, _legacy_executor: bool = False
             raise ValueError("Ожидалась карта привязок WordPress")
     if "DOMAIN_VERIFICATION_FRESH_DAYS" in values and re.fullmatch(r"(?:[1-9]|[1-9][0-9]|[12][0-9]{2}|3[0-5][0-9]|36[0-5])", values["DOMAIN_VERIFICATION_FRESH_DAYS"]) is None:
         raise ValueError("Недопустимый срок подтверждения домена")
+    if "VERIFICATION_DEADLINE_SECONDS" in values:
+        value = values["VERIFICATION_DEADLINE_SECONDS"]
+        if re.fullmatch(r"[0-9]{2,4}", value) is None or not 30 <= int(value) <= 3600:
+            raise ValueError("Недопустимый срок публичной проверки")
     return Configuration(
         environment_file, validate_project_name(values["COMPOSE_PROJECT_NAME"], mode),
     )

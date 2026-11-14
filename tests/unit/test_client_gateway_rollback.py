@@ -131,7 +131,8 @@ async def test_authority_rejection_after_preflight_leaves_cms_untouched():
     from shared.hitl_execution import ExecutionRequest, WordPressBinding
     refs = ExecutionRequest(operation_id=str(uuid4()), task_id=str(uuid4()), approval_id=str(uuid4()),
                             recommendation_version_id=str(uuid4()), content_hash="a" * 64)
-    record = {**refs.model_dump(), "project_id": str(uuid4()), "version": {}, "before": {"exact": "snapshot"},
+    from tests.fixtures.public_observation import public_observation
+    record = {**refs.model_dump(), "project_id": str(uuid4()), "version": {"target": {"url": "https://example.com/page"}}, "before": {"exact": "snapshot"},
               "binding": {"base_url": "https://example.com", "site_id": str(uuid4()), "key_id": "current"}}
     operation = {"state": "ready", "record": record}
     token = str(uuid4())
@@ -141,6 +142,7 @@ async def test_authority_rejection_after_preflight_leaves_cms_untouched():
     target = SimpleNamespace(preflight=AsyncMock(return_value=record["before"]), dry_run=AsyncMock(), apply=AsyncMock(),
         binding=WordPressBinding.model_validate(record["binding"]))
     executor = HITLExecutor("Bearer fixture", authority=authority, target_factory=lambda *args: target)
+    executor.public_reader = SimpleNamespace(read=AsyncMock(return_value=public_observation()))
     assert await executor.execute(refs) == failed
     target.apply.assert_not_called()
     assert authority.await_args_list[-2].args == ("POST", "/" + refs.operation_id + "/begin", {"lease_id": token})
@@ -149,12 +151,13 @@ async def test_authority_rejection_after_preflight_leaves_cms_untouched():
 
 @pytest.mark.asyncio
 async def test_lost_apply_response_marks_unknown_and_retries_only_status():
+    from tests.fixtures.public_observation import public_observation
     from unittest.mock import AsyncMock
     from services.client_api_gateway.hitl_executor import HITLExecutor
     from shared.hitl_execution import ExecutionRequest, WordPressBinding
     refs = ExecutionRequest(operation_id=str(uuid4()), task_id=str(uuid4()), approval_id=str(uuid4()),
                             recommendation_version_id=str(uuid4()), content_hash="a" * 64)
-    record = {**refs.model_dump(), "project_id": str(uuid4()), "version": {}, "before": {},
+    record = {**refs.model_dump(), "project_id": str(uuid4()), "version": {"target": {"url": "https://example.com/page"}}, "before": {},
               "binding": {"base_url": "https://example.com", "site_id": str(uuid4()), "key_id": "current"}}
     ready = {"state": "ready", "record": record}
     applying = {**ready, "state": "applying"}
@@ -169,6 +172,7 @@ async def test_lost_apply_response_marks_unknown_and_retries_only_status():
                              apply=AsyncMock(side_effect=TimeoutError()), status=AsyncMock(return_value=receipt),
                              binding=WordPressBinding.model_validate(record["binding"]))
     executor = HITLExecutor("Bearer fixture", authority=authority, target_factory=lambda *args: target)
+    executor.public_reader = SimpleNamespace(read=AsyncMock(return_value=public_observation()))
     with pytest.raises(TimeoutError):
         await executor.execute(refs)
     assert authority.call_args.args == ("POST", "/" + refs.operation_id + "/finish", {"receipt": None})

@@ -1,5 +1,5 @@
 import api from './axiosConfig'
-import type { HITLApproval, HITLDiffData, HITLTask, HITLTaskDetails } from '@/types/hitl'
+import type { HITLApproval, HITLDiffData, HITLTask, HITLTaskDetails, HITLVerification } from '@/types/hitl'
 
 const asObject = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
@@ -57,6 +57,24 @@ const normalizeDiffData = (value: unknown): HITLDiffData => {
   }
 }
 
+const normalizeVerification = (value: unknown): HITLVerification | null => {
+  const item = asObject(value)
+  if (typeof item.attempts !== 'number' || typeof item.max_attempts !== 'number') return null
+  const result = asObject(item.last_result)
+  const observation = asObject(result.observation)
+  return {
+    status: asString(item.status), attempts: item.attempts, maxAttempts: item.max_attempts,
+    deadlineAt: asString(item.deadline_at), stopReason: asString(item.stop_reason) || null,
+    observation: typeof observation.status === 'number' ? {
+      url: asString(observation.url), observedAt: asString(observation.observed_at), status: observation.status,
+    } : null,
+    checks: Array.isArray(result.checks) ? result.checks.map((value: unknown) => {
+      const check = asObject(value)
+      return { field: asString(check.field), matches: check.matches === true }
+    }) : [],
+  }
+}
+
 const normalizeHITLTask = (value: unknown): HITLTask => {
   const item = asObject(value)
   const task = normalizeTaskDetails(item.task)
@@ -65,6 +83,7 @@ const normalizeHITLTask = (value: unknown): HITLTask => {
   const execution = asObject(item.execution)
   const recovery = asObject(execution.recovery)
   const preparation = asObject(execution.preparation)
+  const rollback = asObject(execution.rollback)
 
   return {
     id: asString(item.id || taskId),
@@ -79,6 +98,9 @@ const normalizeHITLTask = (value: unknown): HITLTask => {
       operationId: execution.operation_id, state: asString(execution.state),
       recommendationVersionId: asString(execution.recommendation_version_id), contentHash: asString(execution.content_hash),
       prepared: typeof execution.prepared === 'boolean' ? execution.prepared : undefined,
+      verification: normalizeVerification(execution.verification),
+      rollback: typeof rollback.operation_id === 'string' ? { operationId: rollback.operation_id,
+        state: asString(rollback.state), reason: asString(rollback.reason), verification: normalizeVerification(rollback.verification) } : null,
       preparation: typeof preparation.attempts === 'number' && typeof preparation.max_attempts === 'number' ? {
         attempts: preparation.attempts, maxAttempts: preparation.max_attempts, errorCode: asString(preparation.error_code) || null,
       } : null,
@@ -147,4 +169,8 @@ export const applyTask = async (approval: HITLApproval, operationId: string): Pr
 
 export const cancelOperation = async (taskId: string, operationId: string): Promise<void> => {
   await api.post(`/hitl/tasks/${taskId}/executions/${operationId}/cancel`)
+}
+
+export const rollbackOperation = async (taskId: string, originalId: string, operationId: string, reason: string): Promise<void> => {
+  await api.post(`/hitl/tasks/${taskId}/executions/${originalId}/rollback`, { operation_id: operationId, reason })
 }

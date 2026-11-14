@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     INTERNAL_API_KEY: str
     EXECUTOR_API_KEY: str | None = None
     DOMAIN_VERIFICATION_FRESH_DAYS: int = Field(default=30, ge=1, le=365)
+    VERIFICATION_DEADLINE_SECONDS: int = Field(default=300, ge=30, le=3600)
 
     DEFAULT_CRAWL_SCHEDULE: str = '0 2 * * *'
     DEFAULT_FFSCORE_SCHEDULE: str = '0 3 * * *'

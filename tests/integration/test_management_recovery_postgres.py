@@ -53,11 +53,15 @@ def receipt_for(value):
     record = value["record"]
     cmd, before, after = record["command"], record["before"], record["after"]
     receipt = {key: cmd[key] for key in ("operation_id", "project_id", "site_id", "entity_id", "task_id", "proposal_version", "proposal_hash", "approval_ref", "before_digest")}
+    rollback = record.get("operation_type") == "rollback"
+    fields = ["title", "description", "jsonld"] if rollback else [item["field"] for item in cmd["changes"]]
     receipt.update(protocol="seo-master/v2", kind="receipt", request_hash=record["request_hash"], after_digest=digest(after),
         before=before, after=after, plugin_version="0.3.0-dev", key_id="test-key", applied_at="2026-11-09T12:00:00Z",
-        applied_fields=[item["field"] for item in cmd["changes"] if before["fields"][item["field"]] != after["fields"][item["field"]]],
-        outcome="applied_unverified", warnings=[], signature="a" * 64,
+        applied_fields=[field for field in fields if before["fields"][field] != after["fields"][field]],
+        outcome="rollback_applied_unverified" if rollback else "applied_unverified", warnings=[], signature="a" * 64,
         receipt_id=hashlib.sha256(("SEO-MASTER-RECEIPT-ID-V2\n" + cmd["operation_id"] + "\n" + record["request_hash"]).encode()).hexdigest())
+    if rollback:
+        receipt.update({key: cmd[key] for key in ("operation_type", "original_operation_id", "original_receipt_id", "original_request_hash", "original_proposal_hash", "reason")})
     return receipt
 
 

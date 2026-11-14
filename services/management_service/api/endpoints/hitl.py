@@ -68,6 +68,7 @@ def _serialize_approval(approval: HITLApproval, task: Optional[Task] = None) -> 
 def _execution_summary(db: Session, task_id: UUID, diff: dict[str, Any]) -> dict[str, Any] | None:
     version_id = (diff.get("recommendation_version") or {}).get("version_id")
     row = db.query(Changelog).filter(Changelog.task_id == task_id, Changelog.source == "hitl_executor_v1",
+        (Changelog.meta["operation_type"].astext.is_(None) | (Changelog.meta["operation_type"].astext == "apply")),
         Changelog.meta["record"]["recommendation_version_id"].astext == version_id).order_by(Changelog.created_at.desc()).first()
     if row is None:
         return None
@@ -77,10 +78,18 @@ def _execution_summary(db: Session, task_id: UUID, diff: dict[str, Any]) -> dict
         state = "expired"
     from services.management_service.recovery_policy import RecoveryState
     from services.management_service.preparation_policy import PreparationState
+    from services.management_service.verification_policy import VerificationState
+    rollback = db.query(Changelog).filter(Changelog.task_id == task_id, Changelog.source == "hitl_executor_v1",
+        Changelog.meta["record"]["original_operation_id"].astext == str(row.id)).order_by(Changelog.created_at.desc()).first()
     return {"operation_id": str(row.id), "state": state,
             "prepared": row.meta.get("prepared", True),
             "preparation": PreparationState.load(row.meta["preparation"]).summary() if "preparation" in row.meta else None,
             "recovery": RecoveryState.load(row.meta["recovery"]).summary() if "recovery" in row.meta else None,
+            "verification": VerificationState.load(row.meta["verification"]).summary() if "verification" in row.meta else None,
+            "rollback_operation_id": row.meta.get("rollback_operation_id"),
+            "rollback": {"operation_id": str(rollback.id), "state": rollback.meta["state"],
+                         "reason": rollback.meta["record"]["reason"],
+                         "verification": VerificationState.load(rollback.meta["verification"]).summary() if "verification" in rollback.meta else None} if rollback else None,
             "recommendation_version_id": record["recommendation_version_id"], "content_hash": record["content_hash"]}
 
 

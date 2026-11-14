@@ -100,14 +100,20 @@ class WordPressV2:
         return before
 
     async def dry_run(self, record: dict[str, Any]) -> None:
-        result = await self.call("/seo-master/v2/target-bound/dry-run", record["command"], operation_id=record["operation_id"])
+        rollback = record.get("operation_type") == "rollback"
+        route = "/seo-master/v2/target-bound/rollback/dry-run" if rollback else "/seo-master/v2/target-bound/dry-run"
+        result = await self.call(route, record["command"], operation_id=record["operation_id"])
         if (result.get("outcome") != "ready" or result.get("before") != record["before"] or result.get("after") != record["after"]
                 or result.get("before_digest") != digest(record["before"]) or result.get("after_digest") != digest(record["after"])
                 or result.get("proposal_hash") != record["command"]["proposal_hash"]):
             raise ExecutionError("cms_dry_run_conflict")
+        if rollback and (result.get("operation_type") != "rollback" or result.get("original_operation_id") != record["original_operation_id"]
+                         or result.get("original_receipt_id") != record["original_receipt_id"]):
+            raise ExecutionError("cms_dry_run_conflict")
 
     async def apply(self, record: dict[str, Any]) -> dict[str, Any]:
-        receipt = await self.call("/seo-master/v2/target-bound/apply", record["command"], operation_id=record["operation_id"])
+        route = "/seo-master/v2/target-bound/rollback" if record.get("operation_type") == "rollback" else "/seo-master/v2/target-bound/apply"
+        receipt = await self.call(route, record["command"], operation_id=record["operation_id"])
         return validate_receipt(receipt, record["command"], record["before"], record["after"], secret=self.receipt_secret, key_id=self.binding.key_id)
 
     async def status(self, record: dict[str, Any]) -> dict[str, Any]:

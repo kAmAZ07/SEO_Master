@@ -16,6 +16,7 @@ from services.client_api_gateway.db.models import DeploymentLog
 from services.client_api_gateway.hitl_executor import HITLExecutor
 from services.client_api_gateway import recovery
 from shared.hitl_execution import ExecutionError, ExecutionRequest
+from shared.hitl_rollback import RollbackRequest
 from services.client_api_gateway.routes import (
     health_router,
     key_management_router,
@@ -115,6 +116,15 @@ async def read_approved_operation(operation_id: uuid.UUID, request: Request,
 async def cancel_prepared_operation(operation_id: uuid.UUID, request: Request,
                                     _auth: None = Depends(_require_internal_api_key)) -> dict[str, Any]:
     return await HITLExecutor(request.headers.get('authorization', '')).cancel(str(operation_id))
+
+
+@app.post('/internal/executions/{operation_id}/rollback')
+async def rollback_operation(operation_id: uuid.UUID, payload: RollbackRequest, request: Request,
+                             _auth: None = Depends(_require_internal_api_key)) -> dict[str, Any]:
+    try:
+        return await HITLExecutor(request.headers.get('authorization', '')).rollback(str(operation_id), payload)
+    except ExecutionError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.on_event('startup')

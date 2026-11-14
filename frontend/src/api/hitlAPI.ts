@@ -1,5 +1,5 @@
 import api from './axiosConfig'
-import type { HITLApproval, HITLDiffData, HITLTask, HITLTaskDetails, HITLVerification } from '@/types/hitl'
+import type { HITLApproval, HITLDiffData, HITLTask, HITLTaskDetails, HITLVerification, HITLOperation, HITLOperationContext, HITLCMSReceipt } from '@/types/hitl'
 
 const asObject = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
@@ -173,4 +173,76 @@ export const cancelOperation = async (taskId: string, operationId: string): Prom
 
 export const rollbackOperation = async (taskId: string, originalId: string, operationId: string, reason: string): Promise<void> => {
   await api.post(`/hitl/tasks/${taskId}/executions/${originalId}/rollback`, { operation_id: operationId, reason })
+}
+
+const isHash = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value)
+
+export const fetchOperation = async (expected: HITLOperationContext, operationId: string, signal?: AbortSignal): Promise<HITLOperation> => {
+  const response = await api.get(`/hitl/tasks/${encodeURIComponent(expected.taskId)}/executions/${encodeURIComponent(operationId)}`, { signal })
+  const operation = asObject(response.data)
+  const record = asObject(operation.record)
+  if (!expected.recommendationVersionId || !expected.contentHash || operation.operation_id !== operationId || record.operation_id !== operationId ||
+      record.task_id !== expected.taskId || record.project_id !== expected.projectId ||
+      record.recommendation_version_id !== expected.recommendationVersionId || record.content_hash !== expected.contentHash ||
+      !isHash(operation.record_hash) || typeof operation.state !== 'string' ||
+      (record.operation_type !== undefined && record.operation_type !== 'apply' && record.operation_type !== 'rollback')) {
+    throw new Error('operation_binding_invalid')
+  }
+  let receipt: HITLCMSReceipt | null = null
+  const rollback = record.operation_type === 'rollback'
+  if (operation.receipt !== null && operation.receipt !== undefined) {
+    const raw = asObject(operation.receipt)
+    const command = asObject(record.command)
+    if (raw.protocol !== 'seo-master/v2' || raw.kind !== 'receipt' || raw.operation_id !== operationId ||
+        raw.project_id !== expected.projectId || raw.task_id !== expected.taskId || raw.proposal_version !== expected.recommendationVersionId ||
+        !isHash(record.request_hash) || raw.request_hash !== record.request_hash || raw.proposal_hash !== command.proposal_hash ||
+        typeof command.site_id !== 'string' || raw.site_id !== command.site_id ||
+        typeof command.entity_id !== 'number' || raw.entity_id !== command.entity_id ||
+        typeof command.approval_ref !== 'string' || command.approval_ref !== record.approval_id || raw.approval_ref !== command.approval_ref ||
+        !isHash(raw.signature) ||
+        (rollback ? (raw.operation_type !== 'rollback' || raw.outcome === 'applied_unverified' ||
+          ['original_operation_id', 'original_receipt_id', 'original_request_hash', 'original_proposal_hash', 'reason']
+            .some(key => typeof record[key] !== 'string' || command[key] !== record[key] || raw[key] !== record[key]))
+          : (raw.operation_type !== undefined && raw.operation_type !== 'apply') || raw.outcome === 'rollback_applied_unverified') ||
+        !isHash(raw.receipt_id) || !isHash(raw.before_digest) || !isHash(raw.after_digest) ||
+        raw.before_digest !== command.before_digest || raw.after_digest !== command.expected_after_digest ||
+        (raw.outcome !== 'applied_unverified' && raw.outcome !== 'rollback_applied_unverified' && raw.outcome !== 'no_op') ||
+        typeof raw.applied_at !== 'string' || !Number.isFinite(Date.parse(raw.applied_at)) ||
+        !Array.isArray(raw.applied_fields) || !raw.applied_fields.every((field: unknown) => typeof field === 'string' && ['title', 'description', 'jsonld'].includes(field))) {
+      throw new Error('operation_receipt_invalid')
+    }
+    receipt = { receiptId: raw.receipt_id, operationId, outcome: raw.outcome, appliedAt: raw.applied_at,
+      requestHash: record.request_hash, beforeDigest: raw.before_digest, afterDigest: raw.after_digest, appliedFields: raw.applied_fields }
+  }
+  const confirmed = ['applied_unverified', 'no_op', 'verifying', 'verified', 'verification_failed', 'rollback_in_progress', 'rolled_back',
+    'rollback_applied_unverified', 'rollback_verifying', 'rollback_verified', 'rollback_verification_failed']
+  if ((confirmed.includes(operation.state) && !receipt) ||
+      (rollback && ['applied_unverified', 'verifying', 'verified', 'verification_failed', 'rollback_in_progress', 'rolled_back'].includes(operation.state)) ||
+      (!rollback && ['rollback_applied_unverified', 'rollback_verifying', 'rollback_verified', 'rollback_verification_failed'].includes(operation.state))) {
+    throw new Error('operation_evidence_invalid')
+  }
+  if (operation.state === 'verified' || operation.state === 'rollback_verified') {
+    const verification = asObject(operation.verification)
+    const result = asObject(verification.last_result)
+    const observation = asObject(result.observation)
+    const target = asObject(asObject(record.version).target).url
+    const checks = Array.isArray(result.checks) ? result.checks.map(asObject) : []
+    const version = asObject(record.version)
+    const changes = Array.isArray(version.changes) ? version.changes.map(asObject) : []
+    const fields = new Set(['http', ...changes.filter(change => change.mode !== 'unchanged').map(change => change.cms_field)])
+    if (!normalizeVerification(operation.verification) || verification.status !== 'matched' || result.error_code !== null || typeof target !== 'string' ||
+        observation.status !== 200 || observation.url !== target || observation.final_url !== target ||
+        typeof observation.observed_at !== 'string' || !Number.isFinite(Date.parse(observation.observed_at)) ||
+        !isHash(observation.body_sha256) || observation.facts === null || typeof observation.facts !== 'object' ||
+        asObject(observation.headers)['content-type']?.toString().split(';')[0].trim().toLowerCase() !== 'text/html' ||
+        checks.length < 2 || checks.length > 4 || checks.filter(check => check.field === 'http').length !== 1 ||
+        fields.size !== checks.length || checks.some(check => !fields.has(check.field)) ||
+        new Set(checks.map(check => check.field)).size !== checks.length ||
+        checks.some(check => check.matches !== true || !['http', 'title', 'description', 'jsonld'].includes(asString(check.field)))) {
+      throw new Error('operation_evidence_invalid')
+    }
+  }
+  return { operationId, state: operation.state, operationType: record.operation_type === 'rollback' ? 'rollback' : 'apply',
+    recordHash: operation.record_hash, requestHash: isHash(record.request_hash) ? record.request_hash : null,
+    before: record.before, after: record.after, receipt, verification: normalizeVerification(operation.verification) }
 }

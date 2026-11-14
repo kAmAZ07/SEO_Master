@@ -24,7 +24,7 @@
 - Полное открытие общего `up/e2e`, миграции всех схем и readiness всех workers требуют устранения startup DDL и согласованной схемы/grants остальных сервисов. Наши собственные миграции/стенды можно разрабатывать и проверять сейчас.
 - Выдача нового ZIP через общий API, общие события, новые поля upstream proposal и полный end-to-end от аудита до отчёта оформляются явными небольшими стыками с ревью владельца. Чужие каталоги не переписываются автоматически.
 
-## Текущая задача: AR-8
+## Завершённый инкремент: AR-8
 
 Разрешённые файлы: `frontend/src/pages/HITL*`, `frontend/src/api/hitlAPI*`, `frontend/src/store/slices/hitlSlice.ts`, `frontend/src/types/hitl.ts`, `frontend/src/components/hitl/`, при необходимом совместимом дополнении — management HITL/execution DTO и `services/api_gateway/routes/protected/hitl_routes.py`, соответствующие тесты и docs. Схема рекомендации остаётся в Semantic, состояния операции — в Management; новый apply path не создаётся.
 
@@ -33,3 +33,9 @@
 Результат первого инкремента AR-8: реализованы видимые версия/hash, read-only receipt/snapshots и защита от stale responses; frontend 250/250, tsc/lint/build, независимое source review. Подробная матрица и границы — [AR8_ACCEPTANCE.md](AR8_ACCEPTANCE.md). Следующий самостоятельный этап после передачи этого изменения — тестовый пакет актуального плагина и нативная field-матрица AR-15/AR-5; browser acceptance остаётся AR-9.
 
 Каждый инкремент заканчивается применимыми проверками, документацией и отдельным PR. Слияние требует полного CI. Ни план, ни зелёный unit-набор не разрешают production deploy, миграцию общей БД, release tag или публикацию релиза.
+
+## Текущая задача: AR-15 + native field matrix AR-5
+
+AR-8 смержен PR #110, исходная ревизия этого шага `5dd235f551c0c1bad16072240883c0441aae1b4d`. Primary AC-08, REQ-WP §11.5. Разрешённая область: `adapters/wordpress-plugin/`, package builder/verifier в `scripts/` и `shared/`, соответствующие unit/PHP/native/platform тесты, CI и документация. Узкий стык выдачи проверенного ZIP — `services/api_gateway/routes/plugin_routes.py` и три настройки `config.py`; перед merge требуется ревью Александры как владельца API.
+
+Результат должен доказывать внешний trust bootstrap, воспроизводимость из Git blobs, exact inventory и asymmetric signature, отказ tamper/traversal/unknown key/missing trust, реальную установку/обновление ZIP и native title/description/JSON-LD set/remove/rollback с missing/empty/Unicode. Подробная трассировка — [AR15_ACCEPTANCE.md](AR15_ACCEPTANCE.md). Production release key, публикация релиза/tag, deploy и общий `up` в этот шаг не входят. Полная WP/theme/Yoast/RankMath матрица остаётся AR-17, browser acceptance — AR-9, H1/links — AR-12.

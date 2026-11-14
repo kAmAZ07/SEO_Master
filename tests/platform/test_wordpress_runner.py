@@ -30,6 +30,8 @@ REQUIRED_SOURCES = (
     "tests/wordpress/v2-contract.php",
     "tests/wordpress/vectors.php",
     "tests/wordpress/wp-adapter.php",
+    "tests/wordpress/package-fixture.php",
+    "tests/wordpress/package-contract.php",
 )
 SOURCE_DIRECTORIES = (
     "adapters/wordpress-plugin",

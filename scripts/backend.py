@@ -53,6 +53,7 @@ PROFILES = (
         "tests/unit/test_domain_verification.py",
         "tests/unit/test_domain_verification_network.py",
         "tests/unit/test_hitl_gateway.py",
+        "tests/unit/test_plugin_package.py",
         "tests/unit/test_netpolicy.py",
         "tests/unit/test_project_access.py",
         "tests/unit/test_project_core.py",

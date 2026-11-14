@@ -1,38 +1,36 @@
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, HTTPException, Response, status
+
+from services.api_gateway.config import settings
+from shared.plugin_package import PackageError, read_package_file, trust_keys, verify_package
 
 
 router = APIRouter(tags=["plugins"])
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-WORDPRESS_PLUGIN_DIST = REPO_ROOT / "adapters" / "wordpress-plugin" / "dist"
-
-
-def _latest_wordpress_plugin_zip() -> Path | None:
-    candidates = sorted(
-        WORDPRESS_PLUGIN_DIST.glob("seo-master-connector-*.zip"),
-        key=lambda item: item.stat().st_mtime,
-        reverse=True,
-    )
-    return candidates[0] if candidates else None
-
-
 @router.get("/api/wordpress-plugin")
-async def download_wordpress_plugin():
-    plugin_zip = _latest_wordpress_plugin_zip()
-    if plugin_zip is None or not plugin_zip.is_file():
+def download_wordpress_plugin() -> Response:
+    # Public download, bounded and fail-closed. Pinning a digest also prevents
+    # serving a different, otherwise valid signed historical artifact.
+    try:
+        if not settings.WORDPRESS_PLUGIN_PACKAGE_PATH or not settings.WORDPRESS_PLUGIN_PACKAGE_SHA256:
+            raise PackageError("package_not_configured")
+        keys = trust_keys(settings.WORDPRESS_PLUGIN_RELEASE_KEYS_JSON)
+        data = read_package_file(Path(settings.WORDPRESS_PLUGIN_PACKAGE_PATH))
+        verify_package(data, keys, expected_sha256=settings.WORDPRESS_PLUGIN_PACKAGE_SHA256)
+    except (PackageError, OSError, ValueError):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="WordPress plugin package is not available",
-        )
+        ) from None
 
-    return FileResponse(
-        path=plugin_zip,
-        filename="seo-master-connector.zip",
+    # Serve exactly the verified byte snapshot, never reopen a mutable path.
+    return Response(
+        content=data,
         media_type="application/zip",
         headers={
             "Cache-Control": "no-store",
+            "Content-Disposition": 'attachment; filename="seo-master-connector.zip"',
+            "X-Content-Type-Options": "nosniff",
         },
     )

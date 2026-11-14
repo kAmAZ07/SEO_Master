@@ -32,6 +32,8 @@ REQUIRED_PHP_SOURCES = (
     "tests/wordpress/v2-contract.php",
     "tests/wordpress/vectors.php",
     "tests/wordpress/wp-adapter.php",
+    "tests/wordpress/package-fixture.php",
+    "tests/wordpress/package-contract.php",
 )
 ARTIFACT_DIRECTORIES = frozenset({"dist", "generated", "vendor"})
 
@@ -87,8 +89,12 @@ def digest(value: str) -> str:
 
 
 def run_php(php: Path, root: Path, environment: dict[str, str], arguments: list[str], stdin: str | None = None) -> str:
+    probe = subprocess.run([str(php), "-n", "-r", "exit(extension_loaded('sodium') ? 0 : 1);"],
+                           cwd=root, env=environment, capture_output=True, timeout=10, check=False)
+    extensions = [] if probe.returncode == 0 else ["-d", "extension=" + (
+        str(php.parent / "ext/php_sodium.dll") if os.name == "nt" else "sodium")]
     result = subprocess.run(
-        [str(php), "-n", "-d", "disable_functions=ctype_digit", *arguments],
+        [str(php), "-n", *extensions, "-d", "disable_functions=ctype_digit", *arguments],
         cwd=root, env=environment, input=stdin,
         encoding="utf-8", capture_output=True, timeout=45, check=False,
     )
@@ -201,7 +207,7 @@ def main() -> int:
     ast.parse(Path(__file__).read_text(encoding="utf-8"))
     print(f"PHP syntax: {len(sources)} files passed; Python runner syntax passed")
     if not arguments.lint_only:
-        for harness in ("legacy-regression.php", "v2-contract.php", "wp-adapter.php", "store-contract.php"):
+        for harness in ("legacy-regression.php", "v2-contract.php", "wp-adapter.php", "store-contract.php", "package-contract.php"):
             print(run_php(php, root, environment, [f"tests/wordpress/{harness}"]), end="")
         check_vectors(php, root, environment)
         print("PASS: isolated unit/contracts only; real WordPress/InnoDB/concurrency/crash gates are NOT satisfied")

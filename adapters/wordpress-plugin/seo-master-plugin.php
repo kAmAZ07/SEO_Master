@@ -17,6 +17,16 @@ define('SEO_MASTER_CONNECTOR_VERSION', '0.3.0-dev');
 define('SEO_MASTER_CONNECTOR_PATH', plugin_dir_path(__FILE__));
 define('SEO_MASTER_CONNECTOR_URL', plugin_dir_url(__FILE__));
 
+require_once SEO_MASTER_CONNECTOR_PATH . 'includes/signature-verifier.php';
+// Activation must explicitly fail even when ordinary bootstrap returns early.
+register_activation_hook(__FILE__, 'seo_master_activate_plugin');
+if (!seo_master_verify_current_plugin_signature()) {
+    add_action('admin_notices', function () {
+        echo '<div class="notice notice-error"><p>SEO Master: release integrity or external trust is unavailable. Connector disabled.</p></div>';
+    });
+    return;
+}
+
 require_once SEO_MASTER_CONNECTOR_PATH . 'includes/compatibility-checker.php';
 
 if (!seo_master_is_compatible()) {
@@ -24,7 +34,6 @@ if (!seo_master_is_compatible()) {
     return;
 }
 
-require_once SEO_MASTER_CONNECTOR_PATH . 'includes/signature-verifier.php';
 require_once SEO_MASTER_CONNECTOR_PATH . 'includes/hmac-validator.php';
 require_once SEO_MASTER_CONNECTOR_PATH . 'includes/v2-protocol.php';
 require_once SEO_MASTER_CONNECTOR_PATH . 'includes/v2-service.php';
@@ -43,7 +52,7 @@ function seo_master_activate_plugin() {
     }
     if (!seo_master_verify_current_plugin_signature()) {
         wp_die(
-            esc_html__('SEO Master Connector signature verification failed. Check SEO_MASTER_PLUGIN_SIGNATURE before activation.', 'seo-master-connector')
+            esc_html__('SEO Master Connector release integrity verification failed. Check the externally pinned release key.', 'seo-master-connector')
         );
     }
 
@@ -55,7 +64,6 @@ function seo_master_activate_plugin() {
 
     delete_option('seo_master_hmac_secret');
 }
-register_activation_hook(__FILE__, 'seo_master_activate_plugin');
 
 /**
  * Register runtime hooks.

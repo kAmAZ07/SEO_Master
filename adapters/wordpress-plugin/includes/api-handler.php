@@ -52,6 +52,7 @@ function seo_master_v2_store() {
 }
 function seo_master_capabilities() {
     global $wp_version;
+    $integrity = seo_master_verify_current_plugin_signature();
     $paired = false;
     $storage = false;
     $gateway = false;
@@ -67,8 +68,9 @@ function seo_master_capabilities() {
     return array(
         'protocol' => 'seo-master/v2', 'plugin_version' => SEO_MASTER_CONNECTOR_VERSION, 'wordpress_version' => (string) $wp_version,
         'php_version' => PHP_VERSION, 'paired' => $paired, 'storage_ready' => $storage,
-        'apply_enabled' => $paired && $storage && $gateway, 'hitl_authority' => 'trusted_gateway_required',
-        'rollback_enabled' => $paired && $storage && $gateway, 'rollback_model' => 'per_original_single_use_guard_v2',
+        'release_integrity' => $integrity,
+        'apply_enabled' => $integrity && $paired && $storage && $gateway, 'hitl_authority' => 'trusted_gateway_required',
+        'rollback_enabled' => $integrity && $paired && $storage && $gateway, 'rollback_model' => 'per_original_single_use_guard_v2',
         'manual_target_aba_detection' => false,
         'targets' => array('published_unprotected_post', 'published_unprotected_page'),
         'managed_fields' => seo_master_has_supported_seo_plugin() ? array('title', 'description') : array('title', 'description', 'jsonld'),
@@ -77,7 +79,7 @@ function seo_master_capabilities() {
         'storage_model' => 'innodb_atomic_meta_and_ledger_v2', 'snapshot_digest' => 'canonical_json_sha256_v2',
         'runtime_validation' => 'pending_real_wordpress_innodb_matrix',
         'yoast' => 'unverified_title_description_filters_jsonld_manual', 'rank_math' => 'unverified_title_description_filters_jsonld_manual',
-        'limitations' => array('theme_head_duplicates_require_verification', 'no_global_hook_exactly_once', 'release_package_not_verified'),
+        'limitations' => array('theme_head_duplicates_require_verification', 'no_global_hook_exactly_once'),
         'limits' => array('body_bytes' => 16384, 'changes' => 3, 'title_bytes' => 512, 'description_bytes' => 2000, 'jsonld_bytes' => 8192, 'clock_skew_seconds' => 300),
     );
 }
@@ -94,6 +96,7 @@ function seo_master_v2_permission($request) {
 }
 function seo_master_v2_request($request) {
     try {
+        if (!seo_master_verify_current_plugin_signature()) { throw new SM_V2_Error('release_integrity_unavailable', 503); }
         $headers = array();
         foreach (array('project-id', 'site-id', 'key-id', 'timestamp', 'nonce', 'operation-id', 'signature') as $name) {
             $headers['x-seo-' . $name] = $request->get_header('x-seo-' . $name);

@@ -24,6 +24,8 @@ export interface HITLTask {
   managedTarget?: boolean
   execution?: {
     operationId: string; state: string; recommendationVersionId: string; contentHash: string
+    prepared?: boolean
+    preparation?: { attempts: number; maxAttempts: number; errorCode: string | null } | null
     recovery?: { attempts: number; maxAttempts: number; lastError: string | null; stopReason: string | null } | null
   } | null
   diffData: HITLDiffData

@@ -80,6 +80,7 @@ def require_schema(connection: Connection, *, expected_head: str = HEAD) -> None
         expected_triggers.add(("projects", "management_legacy_project_read_only"))
         expected_triggers.add(("management_changelog", "hitl_execution_immutable"))
         expected_triggers.add(("management_changelog", "hitl_execution_recovery_guard"))
+        expected_triggers.add(("management_changelog", "hitl_execution_preparation_guard"))
     if not expected_triggers <= triggers:
         raise RuntimeError("MANAGEMENT_SCHEMA_NOT_READY")
 

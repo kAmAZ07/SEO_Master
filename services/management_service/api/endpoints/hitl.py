@@ -76,7 +76,10 @@ def _execution_summary(db: Session, task_id: UUID, diff: dict[str, Any]) -> dict
     if state == "ready" and record["command"]["authorization_deadline"] <= int(datetime.now(timezone.utc).timestamp()):
         state = "expired"
     from services.management_service.recovery_policy import RecoveryState
+    from services.management_service.preparation_policy import PreparationState
     return {"operation_id": str(row.id), "state": state,
+            "prepared": row.meta.get("prepared", True),
+            "preparation": PreparationState.load(row.meta["preparation"]).summary() if "preparation" in row.meta else None,
             "recovery": RecoveryState.load(row.meta["recovery"]).summary() if "recovery" in row.meta else None,
             "recommendation_version_id": record["recommendation_version_id"], "content_hash": record["content_hash"]}
 

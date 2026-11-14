@@ -209,9 +209,42 @@ def revision(engine, direction, target):
         getattr(command, direction)(cfg, target)
 
 
+def seed_legacy_ready(engine, refs):
+    """Seed the actual005 wire format on005, without disabling any DB guard."""
+    from services.management_service.execution_service import ENTITY, SOURCE, record_hash
+    from shared.hitl_execution import bind_proposal_hash, make_command
+    from tests.integration.test_management_execution_postgres import BEFORE, BINDING
+    revision(engine, "downgrade", "20261114_005_recovery")
+    with Session(engine) as db:
+        service = ExecutionService(db, clock=lambda: NOW)
+        task, _, version, scope, decision, _ = service._authorize(refs, UserActor(ALICE))
+        command_body, after = make_command(version.model_dump(mode="json"), refs, BINDING, BEFORE)
+        command_body.update(target_url=version.target.url, authorization_deadline=int((NOW + timedelta(seconds=60)).timestamp()))
+        bind_proposal_hash(command_body)
+        record = {**service._intent(refs, UserActor(ALICE), version, scope, decision), "binding": BINDING.model_dump(),
+            "before": BEFORE, "after": after, "command": command_body, "request_hash": digest(command_body)}
+        row = Changelog(id=UUID(refs.operation_id), task_id=task.id, project_id=task.project_id, entity_id=refs.operation_id,
+            entity_type=ENTITY, change_type="execute_v1", source=SOURCE, applied=False, before_value=BEFORE, after_value=after,
+            meta={"record": record, "record_hash": record_hash(record), "state": "ready"})
+        db.add(row)
+        db.commit()
+        return service.serialize(row)
+
+
+def legacy_begin(writer, refs):
+    """Simulate the prior005 writer, so its downgrade race remains covered."""
+    from services.management_service.recovery_policy import RecoveryState
+    from shared.hitl_execution import canonical
+    value = RecoveryState.initial(NOW, int((NOW + timedelta(seconds=60)).timestamp()))
+    writer.execute(text("UPDATE public.management_changelog SET metadata=metadata || CAST(:patch AS jsonb) WHERE id=:id"),
+        {"id": refs.operation_id, "patch": canonical({"state": "applying", "began_at": NOW.isoformat(), "recovery": value.dump()})})
+    writer.execute(text("UPDATE public.tasks SET status='IN_PROGRESS' WHERE id=:id"), {"id": refs.task_id})
+    writer.commit()
+
+
 def test_upgrade_backfills_only_begun_rows_without_changing_frozen_payload(executable):
     engine, _, _, refs = executable
-    original = reserve(engine, refs)
+    original = seed_legacy_ready(engine, refs)
     revision(engine, "downgrade", "20261109_004_client_storage")
     with engine.begin() as conn:
         conn.execute(text("UPDATE public.management_changelog SET metadata=metadata || jsonb_build_object('state','applying','began_at',:began)"), {"began": NOW.isoformat()})
@@ -230,7 +263,7 @@ def test_upgrade_backfills_only_begun_rows_without_changing_frozen_payload(execu
 
 def test_downgrade_checks_budget_after_waiting_for_concurrent_begin(executable):
     engine, _, _, refs = executable
-    reserve(engine, refs)
+    seed_legacy_ready(engine, refs)
     with Session(engine) as writer, ThreadPoolExecutor(max_workers=1) as pool:
         # Take RowExclusive before the queued DDL, so begin needs no lock upgrade.
         writer.execute(text("UPDATE public.management_changelog SET applied=applied WHERE id=:id"), {"id": refs.operation_id})
@@ -244,7 +277,7 @@ def test_downgrade_checks_budget_after_waiting_for_concurrent_begin(executable):
                 time.sleep(.02)
             else:
                 raise AssertionError("downgrade did not wait on execution writer")
-            ExecutionService(writer, clock=lambda: NOW).begin(refs.operation_id, UserActor(ALICE))
+            legacy_begin(writer, refs)
             with pytest.raises(RuntimeError, match="HITL_RECOVERY_DOWNGRADE_WOULD_RESET_BUDGET"):
                 pending.result(timeout=10)
         finally:

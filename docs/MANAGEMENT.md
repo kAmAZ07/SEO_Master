@@ -143,7 +143,7 @@ Downgrade canonical revision допускается только без зада
 
 ## Runtime foundation AR-4 (09.11.2026)
 
-Последующее изменение схемы: recovery-инкремент AR-6 требует Management head `20261114_005_recovery` поверх описанного ниже storage foundation004. Core head не изменяется. Применять новый head только явным migration runner; startup остаётся read-only. Ограниченный журнал попыток, service-only status recovery, `needs_reconciliation`, настройки и доказательства описаны в [AR6_ACCEPTANCE.md](AR6_ACCEPTANCE.md). Весь AR-6 пока не закрыт: сохранение предпубликационных стадий остаётся следующим этапом.
+Последующее изменение схемы: AR-6 требует Management head `20261114_006_preparation` поверх storage foundation004 и recovery005. Core head не изменяется. Применять новый head только явным migration runner; startup остаётся read-only. Предпубликационные стадии и lease, immutable intent→command, отмена до write, bounded service-only recovery и доказательства описаны в [AR6_ACCEPTANCE.md](AR6_ACCEPTANCE.md). Реализация AR-6 завершена, зелёный полный CI остаётся условием слияния; следующий функциональный этап — AR-7 verify/rollback.
 
 Текущие heads: Core `20261109_001_hitl_barrier`, Management `20261109_004_client_storage`. Сначала Core, затем существующий проверенный Management runner; никаких миграций при application startup. Четвёртая control-plane revision содержит frozen Client storage (2 таблицы), точное безопасное adoption и запрет потери данных при downgrade. Model ownership и 6 Management tables не меняются. Partial schema/plaintext secret требуют отдельного административного решения и миграции, не неявного удаления данных.
 

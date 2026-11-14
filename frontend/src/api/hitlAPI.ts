@@ -64,6 +64,7 @@ const normalizeHITLTask = (value: unknown): HITLTask => {
   const version = asObject(asObject(item.diff_data || item.diffData).recommendation_version)
   const execution = asObject(item.execution)
   const recovery = asObject(execution.recovery)
+  const preparation = asObject(execution.preparation)
 
   return {
     id: asString(item.id || taskId),
@@ -77,6 +78,10 @@ const normalizeHITLTask = (value: unknown): HITLTask => {
     execution: typeof execution.operation_id === 'string' ? {
       operationId: execution.operation_id, state: asString(execution.state),
       recommendationVersionId: asString(execution.recommendation_version_id), contentHash: asString(execution.content_hash),
+      prepared: typeof execution.prepared === 'boolean' ? execution.prepared : undefined,
+      preparation: typeof preparation.attempts === 'number' && typeof preparation.max_attempts === 'number' ? {
+        attempts: preparation.attempts, maxAttempts: preparation.max_attempts, errorCode: asString(preparation.error_code) || null,
+      } : null,
       recovery: typeof recovery.attempts === 'number' && typeof recovery.max_attempts === 'number' ? {
         attempts: recovery.attempts, maxAttempts: recovery.max_attempts,
         lastError: asString(recovery.last_error) || null, stopReason: asString(recovery.stop_reason) || null,
@@ -138,4 +143,8 @@ export const applyTask = async (approval: HITLApproval, operationId: string): Pr
     operation_id: operationId, task_id: approval.taskId, approval_id: approval.approvalId,
     recommendation_version_id: approval.recommendationVersionId, content_hash: approval.contentHash,
   })
+}
+
+export const cancelOperation = async (taskId: string, operationId: string): Promise<void> => {
+  await api.post(`/hitl/tasks/${taskId}/executions/${operationId}/cancel`)
 }

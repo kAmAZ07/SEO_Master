@@ -111,6 +111,12 @@ async def read_approved_operation(operation_id: uuid.UUID, request: Request,
     return await HITLExecutor(request.headers.get('authorization', '')).read(str(operation_id))
 
 
+@app.post('/internal/executions/{operation_id}/cancel')
+async def cancel_prepared_operation(operation_id: uuid.UUID, request: Request,
+                                    _auth: None = Depends(_require_internal_api_key)) -> dict[str, Any]:
+    return await HITLExecutor(request.headers.get('authorization', '')).cancel(str(operation_id))
+
+
 @app.on_event('startup')
 async def startup_event():
     setup_logging(settings.SERVICE_NAME)

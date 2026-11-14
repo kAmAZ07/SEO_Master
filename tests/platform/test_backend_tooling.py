@@ -45,6 +45,7 @@ class BackendToolingTests(unittest.TestCase):
         self.assertEqual(client.tests, (
             "tests/unit/test_client_startup.py",
             "tests/unit/test_client_recovery.py",
+            "tests/unit/test_client_preparation.py",
             "tests/unit/test_client_gateway_rollback.py",
             "tests/unit/test_client_model_imports.py",
         ))

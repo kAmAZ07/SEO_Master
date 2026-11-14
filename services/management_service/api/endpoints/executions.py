@@ -4,7 +4,7 @@ from typing import Any, Callable, ParamSpec, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from services.management_service.approval_identity import authenticated_actor, require_service_identity
@@ -12,8 +12,9 @@ from services.management_service.approval_policy import ApprovalError, UserActor
 from services.management_service.config import settings
 from services.management_service.db.session import get_db
 from services.management_service.execution_service import ExecutionService
-from shared.hitl_execution import ExecutionError, ExecutionRequest, RecoveryClaim, RecoveryReport, WordPressBinding
+from shared.hitl_execution import ExecutionError, ExecutionRequest, PreparationFailure, PreparationLease, RecoveryClaim, RecoveryReport, UUID_PATTERN, WordPressBinding
 from services.management_service.execution_recovery import ExecutionRecovery
+from services.management_service.execution_preparation import ExecutionPreparation
 
 
 def executor_identity(x_executor_key: str | None = Header(default=None)) -> None:
@@ -34,6 +35,7 @@ def _service(db: Session) -> ExecutionService:
 class ReserveRequest(ExecutionRequest):
     binding: WordPressBinding
     before: dict[str, Any]
+    lease_id: str | None = Field(default=None, pattern=UUID_PATTERN)
 
 
 class FinishRequest(BaseModel):
@@ -61,8 +63,37 @@ def context(body: ExecutionRequest, actor: UserActor = Depends(authenticated_act
 
 @router.post("/reserve")
 def reserve(body: ReserveRequest, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
-    references = ExecutionRequest.model_validate(body.model_dump(exclude={"binding", "before"}))
-    return _call(_service(db).reserve, references, actor, body.binding, body.before)
+    references = ExecutionRequest.model_validate(body.model_dump(exclude={"binding", "before", "lease_id"}))
+    return _call(_service(db).reserve, references, actor, body.binding, body.before, preparation_lease=body.lease_id)
+
+
+@router.post("/queue")
+def queue(body: ExecutionRequest, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _call(_service(db).queue, body, actor)
+
+
+def _preparation(db: Session) -> ExecutionPreparation:
+    return ExecutionPreparation(db, fresh_days=settings.DOMAIN_VERIFICATION_FRESH_DAYS)
+
+
+@router.post("/{operation_id}/preparation/claim")
+def preparation_claim(operation_id: UUID, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _call(_preparation(db).claim, str(operation_id), actor)
+
+
+@router.post("/{operation_id}/preparation/ready")
+def preparation_ready(operation_id: UUID, body: PreparationLease, db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _call(_preparation(db).ready, str(operation_id), body.lease_id)
+
+
+@router.post("/{operation_id}/preparation/fail")
+def preparation_fail(operation_id: UUID, body: PreparationFailure, db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _call(_preparation(db).fail, str(operation_id), body)
+
+
+@router.post("/{operation_id}/cancel")
+def cancel(operation_id: UUID, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _call(_preparation(db).cancel, str(operation_id), actor)
 
 
 @router.post("/recovery/claim")
@@ -82,8 +113,8 @@ def read(operation_id: UUID, actor: UserActor = Depends(authenticated_actor), db
 
 
 @router.post("/{operation_id}/begin")
-def begin(operation_id: UUID, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
-    return _call(_service(db).begin, str(operation_id), actor)
+def begin(operation_id: UUID, body: PreparationLease, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _call(_service(db).begin, str(operation_id), actor, preparation_lease=body.lease_id)
 
 
 @router.post("/{operation_id}/finish")

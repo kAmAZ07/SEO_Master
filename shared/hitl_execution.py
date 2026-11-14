@@ -16,6 +16,18 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 HASH_PATTERN = r"^[0-9a-f]{64}$"
 RecoveryError = Literal["cms_unavailable", "operation_not_found", "receipt_invalid", "integration_changed"]
+PreparationError = Literal["cms_unavailable", "cms_precondition_conflict", "cms_unsupported", "cms_contract_invalid",
+                           "integration_changed", "authority_unavailable", "authorization_expired", "authorization_rejected", "preparation_expired"]
+PreparationPhase = Literal["queued", "preflight", "dry_run", "ready", "rejected", "unsupported", "conflict", "failed_before_apply", "cancelled"]
+
+
+class PreparationLease(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    lease_id: str = Field(pattern=UUID_PATTERN)
+
+
+class PreparationFailure(PreparationLease):
+    error_code: PreparationError
 
 
 class RecoveryClaim(BaseModel):

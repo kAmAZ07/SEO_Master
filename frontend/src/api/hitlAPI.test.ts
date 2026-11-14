@@ -26,6 +26,7 @@ describe('hitlAPI', () => {
             project_id: 'project-1',
             status: 'PENDING',
             execution: { operation_id: 'stable-operation', state: 'needs_reconciliation', recommendation_version_id: 'visible-version', content_hash: 'a'.repeat(64),
+              prepared: true, preparation: { attempts: 1, max_attempts: 4, error_code: null },
               recovery: { attempts: 4, max_attempts: 4, last_error: 'receipt_invalid', stop_reason: 'attempts_exhausted' } },
             authorization_status: 'pending',
             diff_data: {
@@ -59,7 +60,8 @@ describe('hitlAPI', () => {
       projectId: 'project-1',
       status: 'pending',
       authorizationStatus: 'pending',
-      execution: { operationId: 'stable-operation', state: 'needs_reconciliation', recovery: {
+      execution: { operationId: 'stable-operation', state: 'needs_reconciliation', prepared: true,
+        preparation: { attempts: 1, maxAttempts: 4, errorCode: null }, recovery: {
         attempts: 4, maxAttempts: 4, lastError: 'receipt_invalid', stopReason: 'attempts_exhausted',
       } },
       recommendationVersionId: 'visible-version',

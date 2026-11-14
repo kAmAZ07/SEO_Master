@@ -142,6 +142,7 @@ jobs:
                   "tests/integration/test_management_outbox_postgres.py",
                   "tests/integration/test_management_execution_postgres.py",
                   "tests/integration/test_management_recovery_postgres.py",
+                  "tests/integration/test_management_preparation_postgres.py",
                   "tests/integration/test_runtime_foundation_postgres.py",
               ], plugins=[RequiredTests()]))
           PY

@@ -13,6 +13,7 @@ const apiMocks = vi.hoisted(() => ({
   rejectTask: vi.fn(),
   fetchTaskDetails: vi.fn(),
   applyTask: vi.fn(),
+  cancelOperation: vi.fn(),
 }))
 
 vi.mock('../api/hitlAPI', () => ({
@@ -21,6 +22,7 @@ vi.mock('../api/hitlAPI', () => ({
   rejectTask: apiMocks.rejectTask,
   fetchTaskDetails: apiMocks.fetchTaskDetails,
   applyTask: apiMocks.applyTask,
+  cancelOperation: apiMocks.cancelOperation,
 }))
 
 vi.mock('react-diff-viewer-continued', () => ({
@@ -56,6 +58,7 @@ describe('HITL page', () => {
     apiMocks.rejectTask.mockReset()
     apiMocks.fetchTaskDetails.mockReset()
     apiMocks.applyTask.mockReset()
+    apiMocks.cancelOperation.mockReset()
   })
 
   it('renders pending diff data and approves a task', async () => {
@@ -196,6 +199,42 @@ describe('HITL page', () => {
     expect(screen.getByText(/Попытки сверки: 4 из 4/)).toHaveTextContent('Лимит попыток исчерпан')
     expect(screen.queryByRole('button', { name: 'Применить одобренные изменения' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Проверить результат публикации' })).not.toBeInTheDocument()
+    expect(apiMocks.applyTask).not.toHaveBeenCalled()
+  })
+
+  it('continues queued preparation with the saved operation ID', async () => {
+    const task = {
+      id: 'approval-1', taskId: 'task-1', projectId: 'project-1', status: 'approved',
+      authorizationStatus: 'approved', managedTarget: true, recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64),
+      diffData: { before: { title: 'Old' }, after: { title: 'New' } }, metadata: {},
+      execution: { operationId: 'queued-operation', state: 'queued', prepared: false, recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64) },
+    }
+    apiMocks.fetchHITLTasks.mockResolvedValueOnce([task])
+    apiMocks.applyTask.mockResolvedValueOnce(undefined)
+    apiMocks.fetchTaskDetails.mockResolvedValueOnce(task)
+    renderHITL()
+    await userEvent.click(await screen.findByRole('button', { name: 'Продолжить подготовку публикации' }))
+    await waitFor(() => expect(apiMocks.applyTask).toHaveBeenCalledWith(expect.anything(), 'queued-operation'))
+    expect(apiMocks.approveTask).not.toHaveBeenCalled()
+  })
+
+  it('shows pre-write conflict and requires explicit cancellation before another operation', async () => {
+    const task = {
+      id: 'approval-1', taskId: 'task-1', projectId: 'project-1', status: 'approved',
+      authorizationStatus: 'approved', managedTarget: true, recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64),
+      diffData: { before: { title: 'Old' }, after: { title: 'New' } }, metadata: {},
+      execution: { operationId: 'conflicted-operation', state: 'conflict', prepared: false, recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64),
+        preparation: { attempts: 1, maxAttempts: 4, errorCode: 'cms_precondition_conflict' } },
+    }
+    apiMocks.fetchHITLTasks.mockResolvedValueOnce([task])
+    apiMocks.cancelOperation.mockResolvedValueOnce(undefined)
+    apiMocks.fetchTaskDetails.mockResolvedValueOnce({ ...task, execution: { ...task.execution, state: 'cancelled' } })
+    renderHITL()
+    expect(await screen.findByRole('status')).toHaveTextContent('Команда записи не отправлена')
+    expect(screen.queryByRole('button', { name: 'Применить одобренные изменения' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Отменить операцию до публикации' }))
+    await waitFor(() => expect(apiMocks.cancelOperation).toHaveBeenCalledWith('task-1', 'conflicted-operation'))
+    expect(await screen.findByRole('button', { name: 'Применить одобренные изменения' })).toBeEnabled()
     expect(apiMocks.applyTask).not.toHaveBeenCalled()
   })
 })

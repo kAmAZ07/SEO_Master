@@ -3,14 +3,14 @@
 Поддерживаемый интерпретатор — Python 3.11, генератор locks — ровно uv 0.11.3. Исходные `services/*/requirements.txt` и `adapters/tilda-adapter/requirements.txt` не подменяются ради успешных тестов.
 `locks/<профиль>.txt` фиксирует полное дерево исходного manifest с SHA-256. `locks/<профиль>-test.txt` дополнительно содержит необходимые тестовые инструменты; runtime-lock является ограничением для test-lock. Это не означает, что исходные runtime manifests уже очищены от dev-зависимостей: например, audit и management сами объявляют pytest.
 Профили:
-- `management`: `services/management_service/requirements.txt`, 3 unit-файла.
-- `client`: `services/client_api_gateway/requirements.txt`, 1 unit-файл.
-- `api`: `services/api_gateway/requirements.txt`, 13 unit-файлов, включая shared projects/netpolicy и project integrations.
-- `audit`: `services/audit_service/requirements.txt`, 8 unit-файлов.
-- `semantic`: `services/semantic_service/requirements.txt`, 6 unit-файлов.
-- `reporting`: `services/reporting_service/requirements.txt`, 2 unit-файла.
-- `tilda`: `adapters/tilda-adapter/requirements.txt`, 1 unit-файл.
-Все 36 существующих `tests/unit/test_*.py` распределены. Неизвестный unit-файл или изменение обнаруженного набора сервиса останавливает проверку до pytest; нельзя просто добавить тест и оставить его за пределами обязательного gate.
+- `management`: `services/management_service/requirements.txt`.
+- `client`: `services/client_api_gateway/requirements.txt`.
+- `api`: `services/api_gateway/requirements.txt`, включая shared projects/netpolicy и project integrations.
+- `audit`: `services/audit_service/requirements.txt`.
+- `semantic`: `services/semantic_service/requirements.txt`.
+- `reporting`: `services/reporting_service/requirements.txt`.
+- `tilda`: `adapters/tilda-adapter/requirements.txt`.
+Точный состав тестов задаётся профилями в `scripts/backend.py`. Неизвестный unit-файл или изменение обнаруженного набора сервиса останавливает проверку до pytest; новый тест должен входить в обязательный gate.
 ## Почему locks раздельны
 Management требует httpx 0.26, client — 0.27, audit/reporting используют другие версии FastAPI, SQLAlchemy и pytest. Объединение manifests подменило бы реальные контейнерные зависимости.
 `locks/pytest7.in` закрепляет pytest 7.4.4 / pytest-asyncio 0.23.8, `locks/pytest8.in` — pytest 8.3.3 / pytest-asyncio 0.24.0. Audit и reporting получают второй набор; остальные новые профили — первый. API test-lock добавляет respx 0.21.1, уже объявленный в audit manifest: без него целый файл public-gateway тестов превращался бы в module-level skip. Исходный httpx API при этом остаётся 0.26.0.
@@ -35,19 +35,6 @@ Runner копирует в новый temporary snapshot только отсле
 - Стандартный socketpair для Windows asyncio разрешён узко внутри синхронного вызова socketpair.
 Это защита от случайного I/O, **не security sandbox** для недоверенного Python/C-кода. Прямые нативные syscalls, другие процессы и конкурентная подмена состояния socket требуют OS/container isolation; такой гарантии эти hooks не дают.
 IPv4 fixture lifecycle проверен реальными локальными socket. IPv6 authorization проверена с mock исходного connect syscall: native Windows host отказывает live IPv6 connect с WinError 10013. Это не заявляется как live IPv6 networking evidence.
-## Проверенный результат и открытые gates
-На Windows / Python 3.11.9 чистая установка с hashes прошла для всех семи профилей:
-- management: 8 passed.
-- client: 4 passed.
-- api: 507 passed, без skip после добавления test-only respx.
-- semantic: 2 passed.
-- reporting: 4 passed.
-- tilda: 6 passed.
-- audit: общий `project test` после интеграции дал 65 passed, 2 failed; предыдущий отдельный запуск — 66 passed, 1 failed. Зелёного стабильного audit gate нет.
-Audit остаётся красным, приложение и его тесты не подменены:
-- `tests/unit/test_public_audit_core.py::test_request_budget_is_enforced` не подключает PSI fixture и пытается обратиться к `www.googleapis.com` через `technical_audit.py` / `psi_api.py`. Guard блокирует DNS до исходящего запроса. Нужна корректировка тестовой зависимости владельцем AL, не глобальная подмена PSI в платформенном runner.
-- `tests/unit/test_public_audit_lifecycle.py::test_cancel_running_job_releases_resources` дважды получал SQLite `database is locked` при `cancel_public_audit` → `_finalize` → commit, но прошёл в финальном запуске: это незакрытый intermittent/flaky defect, не стабильный green. Финальный запуск также зафиксировал PytestUnhandledThreadExceptionWarning от aiosqlite с `Event loop is closed`. БД временная, рабочая PostgreSQL не используется; отказы нельзя скрывать retry/skip.
-- Повторный общий прогон воспроизвёл тот же cancellation-тест иначе: статус `cancelled`, но resource cleanup не подтверждён (`cleaned == []`). Старые lock/thread сбои и новый assertion относятся к открытой lifecycle-проверке AL, а не к основанию ослабить тест.
-Платформенные regressions и strict mypy/ruff изменяемых инструментов проверяются отдельно. Управляемая CI-зона — `scripts/backend.py`, `scripts/pytest_required.py`, интегрируемый `scripts/project.py`, `tests/platform` и отдельный WordPress runner после интеграции AR-5.
-Legacy full-scripts quality не является зелёным: `scripts/cleanup_demo_data.py` и `scripts/seed_demo_data.py` импортируют прикладной стек и содержат E402. Попытка проверки всего `scripts/` в чистом tooling-окружении дала 255 mypy ошибок в 12 файлах и 8 ruff E402. Скрипты не переносились и исключения ради green не добавлялись; полный project lint остаётся самостоятельным блокирующим gate.
-Зелёный unit-профиль также не доказывает container startup, Playwright browser installation, PostgreSQL migrations, consumer readiness, E2E topology, реальный WordPress/PHP lifecycle, производительность или deploy. Docker daemon на проверяемой машине недоступен; сборка/запуск сервисов и рабочие БД не использовались.
+
+
+Матрица требований, среды и уровни доказательств — [TESTING.md](TESTING.md).

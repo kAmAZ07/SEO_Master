@@ -145,5 +145,5 @@ Reporting-обработчик сохраняет `eeat` как есть; что
 ## 7. Известные ограничения
 - Полный FF-Score `null`, пока нет источников свежести, сдвига SERP и динамики ссылок.
 - `before` берётся из аудита страницы, а не из снимка CMS; точная сверка — на стороне плагина по `before_digest`.
-- Management-оркестратор (`_wait_for_scores_completion`) считает `ff_score is None` ошибкой, а `/semantic/drafts` больше не существует: переход на `ff_score = null` и `/semantic/proposals` — AR-3.
+- Management-оркестратор принимает валидный `ff_score = null` с `insufficient_data` и запрашивает `/semantic/proposals`; обработка evidence и решений описана в [MANAGEMENT.md](MANAGEMENT.md).
 - Автоматическая генерация `content_edit` и `internal_link` не реализована (AL-14); схема и проверки готовы.

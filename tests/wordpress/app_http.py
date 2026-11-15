@@ -85,8 +85,8 @@ uvicorn.run('services.client_api_gateway.main:app',host='0.0.0.0',port=8005)
 
 def request(base: str, method: str, path: str, *, token: str | None = None,
             body: dict[str, Any] | None = None, headers: dict[str, str] | None = None,
-            expected: int = 200) -> dict[str, Any]:
-    with httpx.Client(timeout=50, trust_env=False, follow_redirects=False) as client:
+            expected: int = 200, timeout: float = 50) -> dict[str, Any]:
+    with httpx.Client(timeout=timeout, trust_env=False, follow_redirects=False) as client:
         response = client.request(method, base + path, json=body,
             headers={**({"Authorization": "Bearer " + token} if token else {}), **(headers or {})})
     if response.status_code != expected:
@@ -111,7 +111,9 @@ class AppStand:
     def build(self) -> None:
         for service, directory in (("api", "api_gateway"), ("management", "management_service"), ("client", "client_api_gateway")):
             image = self.wp.owner + "-" + service + ":test"
-            self.wp.run("build", "--file", str(self.wp.root / "services" / directory / "Dockerfile"), "--tag", image, str(self.wp.root), timeout=600)
+            self.wp.resources.append(('image', image))
+            self.wp.run("build", "--file", str(self.wp.root / "services" / directory / "Dockerfile"), "--tag", image,
+                        "--label", "seo.test.owner=" + self.wp.owner, str(self.wp.root), timeout=600)
             self.images[service] = image
 
     def infrastructure(self) -> None:
@@ -133,7 +135,7 @@ class AppStand:
                 time.sleep(1)
         raise RuntimeError("own RabbitMQ startup timed out")
 
-    def start(self, service: str, role_url: str, *, project_id: str | None = None) -> str:
+    def start(self, service: str, role_url: str, *, project_id: str | None = None, client_entry: str = CLIENT_ENTRY) -> str:
         port = {"api": 8000, "management": 8004, "client": 8005}[service]
         name = self.wp.owner + "-" + service
         environment = {"ENVIRONMENT": "production", "DATABASE_URL": role_url, "LOG_LEVEL": "WARNING",
@@ -156,7 +158,7 @@ class AppStand:
         for key, value in environment.items():
             args.extend(["-e", key + "=" + value])
         if service == "client":
-            args.extend(["--entrypoint", "python", self.images[service], "-B", "-c", CLIENT_ENTRY])
+            args.extend(["--entrypoint", "python", self.images[service], "-B", "-c", client_entry])
         else:
             args.append(self.images[service])
         self.wp.run(*args)

@@ -209,6 +209,7 @@ def update_locks(check: bool) -> int:
         *[(profile.runtime_input, profile.name, ()) for profile in PROFILES],
         *[(f"locks/{profile.name}-test.in", f"{profile.name}-test",
            (ROOT / f"locks/{profile.name}.txt",)) for profile in PROFILES],
+        ("locks/browser.in", "browser", (ROOT / "locks/audit.txt",)),
     ]
     with tempfile.TemporaryDirectory(prefix="seo-lock-check-") as directory:
         for source, name, constraints in specifications:

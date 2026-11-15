@@ -1,0 +1,11 @@
+FROM python:3.11-slim-bookworm@sha256:94a8fee35252d06ab75856f15f12c7bae67b10e8a6da93c7fded82b2610926cd
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+COPY locks/browser.txt /app/requirements.lock
+RUN python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.lock && \
+    python -m playwright install --with-deps chromium && \
+    groupadd --gid 10001 browser && useradd --uid 10001 --gid browser --create-home browser && \
+    chmod -R a+rX /ms-playwright
+COPY tests/e2e/browser_flow.py /app/browser_flow.py
+USER 10001:10001
+CMD ["python", "-B", "/app/browser_flow.py"]

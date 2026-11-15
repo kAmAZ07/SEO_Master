@@ -1,0 +1,2 @@
+# Dedicated browser process; keep Playwright compatible with the audit runtime.
+playwright==1.49.1

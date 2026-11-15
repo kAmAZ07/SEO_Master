@@ -1,4 +1,5 @@
 import api from './axiosConfig'
+import type { PriorityChange, PriorityHistory, PrioritySnapshot } from '@/types/hitl'
 import type { HITLApproval, HITLDiffData, HITLTask, HITLTaskDetails, HITLVerification, HITLOperation, HITLOperationContext, HITLCMSReceipt } from '@/types/hitl'
 
 const asObject = (value: unknown): Record<string, unknown> =>
@@ -15,11 +16,54 @@ const asString = (value: unknown, fallback = ''): string => {
 }
 
 const asNullableNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') return null
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value
   }
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+export const normalizePriority = (value: unknown): PrioritySnapshot | null => {
+  const item = asObject(value), inputs = asObject(item.inputs), override = asObject(item.override)
+  const bounded = (v: unknown, low: number, high: number) => v === null ||
+    (typeof v === 'number' && Number.isFinite(v) && v >= low && v <= high)
+  if (item.formula_version !== 'priority_v1' || !Number.isInteger(item.revision) || Number(item.revision) < 0 ||
+      item.heuristic !== true || !['unknown', 'estimated', 'manual_override'].includes(String(item.status)) ||
+      !Number.isInteger(item.urgency_rank) || Number(item.urgency_rank) < 0 || Number(item.urgency_rank) > 4 ||
+      !['critical', 'high', 'medium', 'low', 'unknown'].includes(String(inputs.urgency)) ||
+      !(inputs.urgency_reason === null || typeof inputs.urgency_reason === 'string') ||
+      !bounded(inputs.impact, 0, 1) || !bounded(inputs.confidence, 0, 1) || !bounded(inputs.effort, 1, 5) ||
+      !bounded(item.computed_score, 0, 1) || !bounded(item.effective_score, 0, 1) ||
+      !(item.override === null || (typeof override.score === 'number' && bounded(override.score, 0, 1) &&
+        ['actor_id', 'reason', 'at'].every(key => typeof override[key] === 'string')))) return null
+  const missing = [inputs.impact, inputs.confidence, inputs.effort].some(v => v === null)
+  const overridden = item.override !== null
+  if ((item.computed_score === null) !== missing ||
+      item.urgency_rank !== ['critical', 'high', 'medium', 'low', 'unknown'].indexOf(String(inputs.urgency)) ||
+      (inputs.urgency !== 'unknown' && !String(inputs.urgency_reason ?? '').trim()) ||
+      item.effective_score !== (overridden ? override.score : item.computed_score) ||
+      item.status !== (overridden ? 'manual_override' : missing ? 'unknown' : 'estimated')) return null
+  return item as unknown as PrioritySnapshot
+}
+
+export const changePriority = async (taskId: string, command: PriorityChange): Promise<PrioritySnapshot> => {
+  const response = await api.post(`/hitl/tasks/${encodeURIComponent(taskId)}/priority`, command)
+  const priority = normalizePriority(response.data)
+  if (!priority) throw new Error('Некорректный ответ сервиса приоритетов')
+  return priority
+}
+
+export const fetchPriorityHistory = async (taskId: string): Promise<PriorityHistory[]> => {
+  const response = await api.get(`/hitl/tasks/${encodeURIComponent(taskId)}/priority/history`)
+  if (!Array.isArray(response.data)) throw new Error('Журнал приоритетов недоступен')
+  return response.data.map((value: unknown) => {
+    const item = asObject(value), before = normalizePriority(item.before), after = normalizePriority(item.after)
+    if (!before || !after || !Number.isInteger(item.revision) ||
+        !['id', 'action', 'actor_id', 'reason', 'at'].every(key => typeof item[key] === 'string'))
+      throw new Error('Некорректная запись журнала приоритетов')
+    return { ...item, before, after } as unknown as PriorityHistory
+  })
 }
 
 const normalizeStatus = (value: unknown): HITLTask['status'] => {
@@ -109,6 +153,7 @@ const normalizeHITLTask = (value: unknown): HITLTask => {
         lastError: asString(recovery.last_error) || null, stopReason: asString(recovery.stop_reason) || null,
       } : null,
     } : null,
+    priority: normalizePriority(item.priority),
     diffData: normalizeDiffData(item.diff_data || item.diffData),
     impactScore: asNullableNumber(item.impact_score ?? item.impactScore),
     recommendation: asString(item.recommendation) || undefined,

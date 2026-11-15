@@ -20,6 +20,7 @@ export interface HITLVerification {
 }
 
 export interface HITLTask {
+  priority?: PrioritySnapshot | null
   id: string
   taskId: string
   projectId: string
@@ -48,6 +49,25 @@ export interface HITLTask {
   createdAt?: string
   updatedAt?: string
   task?: HITLTaskDetails | null
+}
+
+export type PriorityUrgency = 'critical' | 'high' | 'medium' | 'low' | 'unknown'
+export interface PriorityInputs {
+  impact: number | null; confidence: number | null; effort: number | null
+  urgency: PriorityUrgency; urgency_reason: string | null
+}
+export interface PrioritySnapshot {
+  formula_version: 'priority_v1'; revision: number; inputs: PriorityInputs
+  computed_score: number | null; effective_score: number | null; urgency_rank: number
+  status: 'unknown' | 'estimated' | 'manual_override'; heuristic: true
+  override: { score: number; actor_id: string; reason: string; at: string } | null
+}
+export type PriorityChange = {
+  expected_revision: number; reason: string
+} & ({ action: 'estimate'; inputs: PriorityInputs } | { action: 'override'; score: number } | { action: 'clear_override' })
+export interface PriorityHistory {
+  id: string; action: string; actor_id: string; reason: string; revision: number; at: string
+  before: PrioritySnapshot; after: PrioritySnapshot
 }
 
 export interface HITLApproval {

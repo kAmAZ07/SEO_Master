@@ -13,6 +13,8 @@ from services.management_service.approval_identity import authenticated_actor
 from services.management_service.approval_policy import ApprovalError, DecisionRequest, UserActor
 from services.management_service.approval_service import ApprovalService
 from services.management_service.config import settings
+from services.management_service.prioritizer import priority_order
+from services.management_service.priority_policy import load_priority
 
 router = APIRouter()
 
@@ -36,6 +38,7 @@ def _status_from_query(value: Optional[str]) -> HITLStatus | None:
 
 def _serialize_approval(approval: HITLApproval, task: Optional[Task] = None) -> dict[str, Any]:
     return {
+        "priority": load_priority(task.meta if task else None).snapshot(),
         "id": str(approval.id),
         "task_id": str(approval.task_id),
         "project_id": str(approval.project_id),
@@ -111,17 +114,14 @@ def list_hitl_tasks(
         raise HTTPException(404, "hitl_task_not_found")
     if not projects:
         return []
-    query = db.query(HITLApproval).filter(HITLApproval.project_id.in_(projects))
+    query = db.query(HITLApproval).join(Task, Task.id == HITLApproval.task_id).filter(HITLApproval.project_id.in_(projects))
     status_value = _status_from_query(status or status_filter or "pending")
     if status_value:
         query = query.filter(HITLApproval.status == status_value)
     if project_id:
         query = query.filter(HITLApproval.project_id == project_id)
 
-    approvals = query.order_by(
-        HITLApproval.impact_score.desc().nullslast(),
-        HITLApproval.created_at.asc(),
-    ).offset(offset).limit(limit).all()
+    approvals = query.order_by(*priority_order()).offset(offset).limit(limit).all()
     task_ids = [approval.task_id for approval in approvals]
     tasks_by_id = {
         task.id: task

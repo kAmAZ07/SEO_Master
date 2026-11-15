@@ -15,3 +15,9 @@ HITL UI использует существующий механизм approval/
 При закрытии/смене операции запрос прерывается; результат, пришедший после abort, игнорируется даже при transport, игнорирующем отмену. Loaded state связан с task/project/version/hash/operation. Redux использует list request ID и generation: POST → boundary → GET detail; boundary инвалидирует более старые list reads, более поздний список может завершиться до/после detail и не заменяется старым detail. Старые list errors игнорируются. Reject тоже перечитывает authoritative карточку и сохраняет её причину, не удаляет task по старому ID.
 
 Профильные проверки: `frontend/src/pages/HITL.test.tsx`, `frontend/src/api/hitlAPI.test.ts`, `frontend/src/components/hitl/hitlState.test.ts` и component tests просмотра операции. Матрица проверок и границы unit/browser acceptance — [TESTING.md](TESTING.md).
+
+## Приоритет очереди
+
+HITL сохраняет порядок страниц Management. Блок «Приоритет» показывает `priority_v1`, impact/confidence/effort, расчётный и effective score, класс/причину срочности, эвристическую природу оценки и действующий override с actor/reason/time. Неполные входы отображаются как unknown, ноль сохраняется. Некорректный или внутренне противоречивый wire-контракт скрывается как недоступный; UI не подставляет балл.
+
+Форма позволяет оценить входы, задать ручной балл или снять его; каждое изменение требует причины и текущей revision. Пустые числовые поля означают null. Backend разрешает запись только owner/admin; ошибка прав, конфликт revision или неизвестный исход не превращаются в локальный success. После подтверждения перечитывается authoritative очередь. Чтение последних записей журнала не вызывает write; история и комментарии отображаются как escaped text. Полная пагинация доступна через [API приоритетов](MANAGEMENT.md).

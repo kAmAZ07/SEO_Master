@@ -42,8 +42,6 @@ python -B -m tests.wordpress.native_contract --docker-context <context> --plugin
 | REQ-HITL §10, REQ-REPORTS §14.4, AC-07/08/09 | HITL page, API-client, Redux и OperationDetails frontend tests | Видимые version/hash совпадают с решением; scoped GET и malformed identity не показывают чужие данные; late responses не восстанавливают старую операцию; snapshots инертны; просмотр не вызывает write. Unit/component, не browser E2E. |
 | REQ-PLATFORM, AC-12 | `tests/platform`, `scripts/image_checks.py`, workflow image job | Locks/source inventory, guards и ownership cleanup; отдельно настоящие image builds и UID. UID probe переопределяет entrypoint и не доказывает lifespans/consumer readiness. |
 
-## Уровни доказательств и ограничения
-
 ## Браузерная проверка согласования
 
 ```text
@@ -54,11 +52,17 @@ python -u -B -m tests.e2e.hitl_browser --docker-context <context> --plugin-revis
 
 Браузер входит через форму, проверяет видимые version/hash, отдельно одобряет и применяет предложение, читает receipt, ожидает независимый public verified и явно запрашивает rollback. Отдельно проверяются потеря настоящего ответа после apply, status-only обновление интерфейса, последовательные/конкурентные same-command retries и отказ rollback при manual drift. Матрица сравнивает UI с authoritative Management и настоящим WP ledger/полями.
 
+До approval браузер отдельно задаёт входы priority_v1, сохраняет нулевой override, читает журнал и снимает override. Host сверяет revision и journal с PostgreSQL и подтверждает отсутствие approval и CMS-мутации от изменения очереди.
+
 Конкурентный `503 storage_failure` не считается успешным apply: после завершения всех write-запросов тест требует подписанный status той же операции с исходными ID/hash. Новые apply/ID для такого исхода не создаются. Остальные ошибки проваливают проверку. Каждый итоговый receipt должен совпасть с исходным, managed snapshot — с ожидаемым after, ledger — содержать одну логическую операцию; число восстановленных через status результатов выводится отдельно от успешных ответов apply.
 
 Проект, подтверждённые права, завершённый аудит/evidence и версия Semantic задаются persisted fixtures. Это проверка пути от готового предложения до отката; она не доказывает браузерное получение evidence, DomainAuthorization или генерацию предложения. Фикстура не открывает общий `up/e2e` и не запускает legacy mock/seed/cleanup scripts.
 
 Все Compose-контейнеры используют уникальный owner/project и проверенные labels; очистка обращается только к этим ресурсам. Browser работает под UID10001/read-only в network namespace frontend с единственной внутренней сетью и настоящим loopback origin `http://127.0.0.1:8080`. WebCrypto использует штатную secure-context модель loopback origin. Context блокирует service workers и запросы вне этого origin. Конфигурация с синтетическими credentials находится в приватном temporary каталоге. Playwright traces, видео и полные call logs не публикуются: они могут содержать токены и введённый пароль.
+
+## Проверка priority_v1
+
+REQ-SEMANTIC §9.5 / DEC-04 / часть AC-06 проверяются `tests/unit/test_prioritizer.py`, `tests/integration/test_management_priority_postgres.py`, `tests/unit/test_hitl_gateway.py` и frontend tests `PriorityPanel`, `HITL`, `hitlAPI`. Unit проверяет контрольные значения, монотонность effort, границы, missing/zero и стабильные tie-break. Настоящий PostgreSQL проверяет формулу модели, SQL order до пагинации, scoped MANAGE/READ, атомарность журнала и rollback транзакции, гонку revision и сохранение override после audit/score/scheduler при stale identity map. Gateway проверяется на общей очереди двух проектов. Компонентные тесты проверяют authoritative order, unknown/zero, явный reason/revision, конфликт и инертный журнал. Это не доказывает остальные части AC-06 о score API/UI/CSV и источниках данных.
 
 ## Уровни доказательств и ограничения
 

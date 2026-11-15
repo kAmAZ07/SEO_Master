@@ -64,6 +64,7 @@ class DenyRuntimeImports(importlib.abc.MetaPathFinder):
         allowed_services = {
             "services", "services.management_service", "services.client_api_gateway",
             "services.management_service.models", "services.client_api_gateway.models",
+            "services.management_service.priority_policy",
         }
         # Legacy mode нужен только для сохранённого исходного RED: разрешаем
         # package evaluation, но не settings/logging/runtime collaborators.
@@ -307,7 +308,9 @@ with (
         assert task.hitl_approval is approval and approval.task is task, "APPROVAL_RELATIONSHIP"
         assert approval.project is project and project.hitl_approvals == [], "LEGACY_RELATIONSHIP_WRITES_OWNERSHIP"
         assert changelog.project is project and project.changelogs == [] and changelog in task.changelogs, "CHANGELOG_RELATIONSHIP"
-        assert math.isclose(task.calculate_priority(), 0.68), "PRIORITY_BEHAVIOR_DRIFT"
+        assert task.calculate_priority() is None, "LEGACY_PRIORITY_WAS_IMPUTED"
+        task.meta = {"priority": {"inputs": {"impact": 0.4, "confidence": 0.5, "effort": 2.0}}}
+        assert math.isclose(task.calculate_priority(), 0.1), "PRIORITY_BEHAVIOR_DRIFT"
         enum_contracts = {
             "TaskType": (
                 "UPDATE_META", "UPDATE_CONTENT", "ADD_INTERNAL_LINKS", "UPDATE_SCHEMA",

@@ -32,7 +32,7 @@ def handle_crawl_completed_event(
     updated_project = False
 
     if task_id:
-        task = db.query(Task).filter(Task.id == task_id).first()
+        task = db.query(Task).filter(Task.id == task_id).populate_existing().with_for_update().first()
         if not task:
             raise ValueError(f"Task {task_id} not found")
         task.meta = {

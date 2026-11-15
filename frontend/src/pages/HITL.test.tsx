@@ -64,6 +64,19 @@ describe('HITL page', () => {
     apiMocks.rollbackOperation.mockReset()
   })
 
+  it('preserves the authoritative queue order instead of resorting by impact', async () => {
+    apiMocks.fetchHITLTasks.mockResolvedValueOnce([
+      { id: 'critical', taskId: 'first', projectId: 'project-1', status: 'pending',
+        recommendation: 'Critical first', impactScore: 0, diffData: { before: {}, after: {} }, metadata: {} },
+      { id: 'low', taskId: 'second', projectId: 'project-2', status: 'pending',
+        recommendation: 'Low second', impactScore: 1, diffData: { before: {}, after: {} }, metadata: {} },
+    ])
+    renderHITL()
+    const first = await screen.findByRole('heading', { name: 'Critical first' })
+    const second = screen.getByRole('heading', { name: 'Low second' })
+    expect(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('requires an explicit rollback reason and keeps one operation after a lost response', async () => {
     const task = { id: 'approval-1', taskId: 'task-1', projectId: 'project-1', status: 'approved',
       authorizationStatus: 'approved', managedTarget: true, recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64),

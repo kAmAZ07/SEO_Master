@@ -42,7 +42,7 @@ def handle_ff_score_recalculated_event(
         db.add(project)
         updated_project = True
 
-    tasks = db.query(Task).filter(Task.project_id == project_id).all()
+    tasks = db.query(Task).filter(Task.project_id == project_id).order_by(Task.id.asc()).populate_existing().with_for_update().all()
     for task in tasks:
         # Новое insufficient_data должно удалить устаревший полный балл.
         # Новый dict также нужен для отслеживания JSONB SQLAlchemy.

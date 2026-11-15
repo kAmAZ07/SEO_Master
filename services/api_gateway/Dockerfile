@@ -16,6 +16,7 @@ COPY database/ ./database/
 COPY shared/ ./shared/
 COPY adapters/wordpress-plugin/dist/ ./adapters/wordpress-plugin/dist/
 COPY services/api_gateway/ ./services/api_gateway/
+COPY services/management_service/priority_policy.py ./services/management_service/priority_policy.py
 COPY services/project_integrations/ ./services/project_integrations/
 
 RUN groupadd --gid 10001 appuser && useradd --uid 10001 --gid appuser --no-create-home appuser && \

@@ -32,6 +32,23 @@ const verifiedEvidence = () => ({ status: 'matched', attempts: 1, max_attempts: 
 const operationContext = { taskId: 'task-1', projectId: 'project-1', recommendationVersionId: 'version-1', contentHash: 'a'.repeat(64) }
 
 describe('hitlAPI', () => {
+  it('preserves unknown and zero priority and rejects malformed priority contracts', async () => {
+    const { normalizePriority } = await import('./hitlAPI')
+    const priority = { formula_version: 'priority_v1', revision: 0,
+      inputs: { impact: null, confidence: null, effort: null, urgency: 'unknown', urgency_reason: null },
+      computed_score: null, effective_score: null, status: 'unknown', heuristic: true, urgency_rank: 4, override: null }
+    expect(normalizePriority(priority)?.effective_score).toBeNull()
+    expect(normalizePriority({ ...priority, inputs: { ...priority.inputs, impact: 0, confidence: 1, effort: 1 },
+      computed_score: 0, effective_score: 0, status: 'estimated' })?.effective_score).toBe(0)
+    for (const invalid of [undefined, {}, { ...priority, effective_score: '0' },
+      { ...priority, inputs: { ...priority.inputs, confidence: undefined } },
+      { ...priority, effective_score: NaN }, { ...priority, formula_version: 'old' },
+      { ...priority, computed_score: .5, effective_score: .5, status: 'estimated' },
+      { ...priority, urgency_rank: 0 }, { ...priority, status: 'estimated' },
+      { ...priority, override: { score: .3, actor_id: 'owner', reason: 'Triage', at: 'now' }, effective_score: .4, status: 'manual_override' }]) {
+      expect(normalizePriority(invalid)).toBeNull()
+    }
+  })
   beforeEach(() => {
     apiMock.get.mockReset()
     apiMock.post.mockReset()

@@ -105,9 +105,9 @@ class Task(Base):
     title = Column(String(500))
     description = Column(Text)
 
-    impact_score = Column(Float, default=0.5)
-    effort_score = Column(Float, default=0.5)
-    priority_score = Column(Float, default=0.5)
+    impact_score = Column(Float)
+    effort_score = Column(Float)
+    priority_score = Column(Float)
 
     meta = Column("metadata", JSONB, default={})
 
@@ -133,7 +133,10 @@ class Task(Base):
     )
 
     def calculate_priority(self):
-        self.priority_score = self.impact_score * (2 - self.effort_score)
+        from services.management_service.priority_policy import load_priority
+        record = load_priority(self.meta)
+        self.meta = {**(self.meta or {}), "priority": record.model_dump(mode="json")}
+        self.priority_score = record.snapshot()["effective_score"]
         return self.priority_score
 
 

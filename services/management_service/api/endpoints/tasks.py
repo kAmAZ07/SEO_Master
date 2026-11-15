@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -8,7 +9,9 @@ from sqlalchemy.orm import Session
 from services.management_service.db.models import Task, TaskStatus, TaskType
 from services.management_service.db.session import get_db
 from services.management_service.events.task_created import publish_task_created_event
-from services.management_service.prioritizer import prioritize_project_tasks
+from services.management_service.prioritizer import prioritize_project_tasks, priority_order
+from services.management_service.priority_policy import PriorityChange, load_priority
+from services.management_service.priority_service import PriorityService
 from services.management_service.schemas.task import TaskCreate, TaskUpdate
 from services.management_service.approval_identity import authenticated_actor
 from services.management_service.approval_policy import ApprovalError, UserActor
@@ -40,6 +43,7 @@ def _status_from_query(value: Optional[str]) -> TaskStatus | None:
 
 
 def _serialize_task(task: Task) -> dict[str, Any]:
+    priority = load_priority(task.meta).snapshot()
     return {
         "id": str(task.id),
         "project_id": str(task.project_id),
@@ -48,9 +52,10 @@ def _serialize_task(task: Task) -> dict[str, Any]:
         "url": task.url,
         "title": task.title,
         "description": task.description,
-        "impact_score": task.impact_score,
-        "effort_score": task.effort_score,
-        "priority_score": task.priority_score,
+        "impact_score": priority['inputs']['impact'],
+        "effort_score": priority['inputs']['effort'],
+        "priority_score": priority['effective_score'],
+        "priority": priority,
         "metadata": task.meta or {},
         "assigned_to": task.assigned_to,
         "created_at": task.created_at.isoformat() if task.created_at else None,
@@ -82,7 +87,7 @@ def list_tasks(
     status_value = _status_from_query(status_filter)
     if status_value:
         query = query.filter(Task.status == status_value)
-    rows = query.order_by(Task.priority_score.desc(), Task.created_at.desc()).offset(offset).limit(limit).all()
+    rows = query.order_by(*priority_order()).offset(offset).limit(limit).all()
     return [_serialize_task(task) for task in rows]
 
 
@@ -161,6 +166,30 @@ def update_task(task_id: str, payload: TaskUpdate, actor: UserActor = Depends(au
 
 @router.post("/{task_id}/prioritize")
 def reprioritize_task_project(task_id: str, actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    task = _task(db, task_id, actor, Permission.MANAGE, lock=True)
-    tasks = prioritize_project_tasks(db, str(task.project_id))
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if task is None:
+        raise HTTPException(404, 'task_not_found')
+    try:
+        tasks = prioritize_project_tasks(db, str(task.project_id), actor=actor)
+    except ApprovalError as exc:
+        db.rollback()
+        raise HTTPException(exc.http_status, exc.code) from exc
     return [_serialize_task(item) for item in tasks]
+
+
+@router.post('/{task_id}/priority')
+def change_priority(task_id: UUID, payload: PriorityChange, actor: UserActor = Depends(authenticated_actor),
+                    db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        return PriorityService(db).change(str(task_id), actor, payload)
+    except ApprovalError as exc:
+        raise HTTPException(exc.http_status, exc.code) from exc
+
+
+@router.get('/{task_id}/priority/history')
+def priority_history(task_id: UUID, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0, le=100_000),
+                     actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    try:
+        return PriorityService(db).history(str(task_id), actor, limit=limit, offset=offset)
+    except ApprovalError as exc:
+        raise HTTPException(exc.http_status, exc.code) from exc

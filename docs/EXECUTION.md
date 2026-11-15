@@ -1,0 +1,85 @@
+# Исполнение CMS-операций, сверка и откат
+
+Контракты REQ-HITL §10, REQ-VERIFY §12 и REQ-WP §11. `ExecutionService` в Management владеет бизнес-состояниями; `HITLExecutor` в Client Gateway — единственный исполнитель CMS-команд. Проверки и уровни доказательств описаны в [TESTING.md](TESTING.md).
+
+## Авторитет и состояния
+
+- Management владеет approvals, создаёт intent операции через queue и замораживает DeploymentOperation через `ExecutionService.reserve`. Операции хранятся в `management_changelog`. Frozen `record` содержит ссылки, project/workspace, actor/role, decision hash, полную AL-5 версию, server binding, exact before/after и CMS command/request hash.
+- Revision `20261109_003_execution` добавляет partial unique index на task/version и защиту frozen record/переходов/удаления. Полный Management head — `20261114_007_verification`; Core head — `20261109_001_hitl_barrier`. Сначала применяется Core, затем явный Management runner; startup читает schema/index/trigger/role, не создаёт их.
+- Подготовка проходит `queued → preflight → dry_run → ready`; после begin — `applying → applied_unverified | no_op | outcome_unknown`. Отмена разрешена только до begin. Отправленная или неизвестная операция не возвращается в ready и не освобождает version fence для новой записи.
+- `begin` — точка принятия исполнения: enforced advisory barrier Core, fresh Task/Approval/operation locks и проверки после ожиданий. Проверяются original actor/DEPLOY, активный canonical project, approver/APPROVE, версия/hash/target/evidence, решение, domain verification и время. Подготовленная версия и человеческое решение заморожены для in-flight операции; новое решение/late saga failure не заменяет её. Позднее изменение membership относится к будущим операциям.
+- Domain challenge `expires_at` не является сроком владения: действительность verified ownership определяется `verified_at + DOMAIN_VERIFICATION_FRESH_DAYS`, как в Core. Срок CMS command ограничен минимумом approval/domain expiry и 60 секунд. Нужны доверенные синхронизированные часы; native fixture использует один хост.
+- Client Gateway выполняет readonly preflight/dry-run, вызывает begin и отправляет ровно frozen command. При неизвестном результате повторяется только signed status/reconciliation; новые transport timestamp/nonce не меняют operation ID/body/hash.
+- WordPress target-bound routes проверяют target URL из заблокированных post/options/parents, не из WP caches. Unknown rewrite/URL/Options filters дают unsupported. Поддержаны plain URLs и ограниченный набор postname/post_id, index.php, page hierarchy/static front page; taxonomy/author/custom rewrite остаются unsupported. Deadline проверяется свежими часами после CMS locks и непосредственно перед первым write.
+- Поддержанные CMS-поля: title, description, JSON-LD; H1/content/interlinks/Tilda и отсутствие подтверждённого entity дают manual/unsupported, без успешной записи. Exact before сохраняет missing/value/пустую строку.
+- HITLApproved создаётся из реального решения в immutable history/outbox. Consumer сверяет exact outbox envelope, проверяет history, вставляет Core `processed_events` и commit до ACK. Повтор не создаёт решение/apply. Runtime inbox DDL отсутствует; ограниченные broker retries идут в существующие 10/60/300s очереди, затем DLQ.
+
+## API, интерфейс и конфигурация
+
+`POST /api/hitl/tasks/{task_id}/apply` принимает только `operation_id`, `task_id`, `approval_id`, `recommendation_version_id`, `content_hash`. API требует DEPLOY, пересылает original Bearer JWT в Client Gateway, который перепроверяет его через Management. `GET /api/hitl/tasks/{task_id}/executions/{operation_id}` читает scoped статус. Arbitrary changes, body actor и несовпадение path/task отвергаются.
+
+В HITL UI кнопки «Одобрить» и «Применить одобренные изменения» отдельные. Одобрённая карточка остаётся видимой. In-flight/unknown предлагает проверку результата той же операции, включая потерю ответа после замены expired ready. `applied_unverified` прямо сообщает об отсутствии независимой проверки. Отображение и защита от устаревших ответов описаны в [HITL_UI.md](HITL_UI.md).
+
+Management internal execution endpoints требуют обычный service key и **отдельный** executor credential. Только Management web и Client получают его; worker/beat Compose его не получают. Bootstrap добавляет отсутствующий `MANAGEMENT_EXECUTOR_API_KEY` в старую проверенную private dev-конфигурацию без ротации существующих ключей. Прямой Management запуск использует `EXECUTOR_API_KEY`; Compose отображает один credential в два соответствующих settings.
+
+Server-owned binding задаётся через `WORDPRESS_V2_TARGETS_JSON`, например:
+
+```json
+{"11111111-1111-4111-8111-111111111111":{"base_url":"https://your-site.example","site_id":"33333333-3333-4333-8333-333333333333","key_id":"current","secret_ref":"env:SEO_MASTER_HMAC_SECRET","receipt_secret_ref":"env:SEO_MASTER_RECEIPT_SECRET"}}
+```
+
+Оба независимых случайных CMS секрета — 64–128 lowercase hex, как у плагина. JSON содержит только env references. В штатном Compose эти два имени явно передаются Client; для нескольких targets отдельные имена передаются через контролируемый deployment override/secret provider. Caller не выбирает адрес или credentials. Без binding/ключей публикация отвечает 503.
+
+Private dev-файл `.seo-local/dev/environment.env` допускает эти три optional поля и `DOMAIN_VERIFICATION_FRESH_DAYS`; рабочий корневой `.env` runner не читает. Общий срок freshness передаётся API и Management одинаково. Секреты не попадают в ответы/образы/отчёт.
+
+## Подготовка до write и совместимость
+
+Gateway сначала создаёт `queued` через Management. В той же `management_changelog` строке `metadata.intent` фиксирует operation/task/approval/version/hash, canonical project/workspace, original actor/role, decision hash и полную AL-5 версию. До snapshot `record == intent`, `record_hash` хеширует intent, `intent_hash` сохраняется навсегда; `before_value` и `after_value` — SQL NULL, а не `{}` и не выдуманный снимок. Существующий unique index task/version действует сразу, поскольку version ID есть на прежнем уровне `record` уже в queued.
+
+Один preparation lease охватывает readonly preflight → snapshot → freeze → dry-run → ready. Он сохраняется до CMS I/O, действует не более 60 секунд; весь пользовательский запрос ограничен 900 секундами и четырьмя попытками подготовки. Журнал событий дописывается, старый префикс/бюджет/срок нельзя переписать. Активная последняя попытка не отменяется дополнительным claim: конкурент получает409. Рестарт до write не запускает публикацию автоматически; следующий явный apply продолжает тот же ID после окончания прежнего lease.
+
+После snapshot `reserve` один раз дополняет frozen record привязкой CMS, exact before/after, command и request hash; состояние становится `dry_run`. Версия, intent и actor не меняются. Перед freeze заново проверяются approval/version/evidence/права/ownership и свежий lease после ожидания блокировок. Затем Gateway выполняет readonly dry-run и сообщает готовность. `begin` ещё раз проверяет права, точную версию, lease и неизменённый срок команды. Перед CMS write Gateway требует `begin.state == applying`, прежний canonical JSON record и record hash. Потеря/подмена ответа begin не разрешает apply.
+
+После freeze никакая новая попытка не пересоздаёт command/request hash/authorization deadline. При изменившемся snapshot — `conflict`; после истечения срока — `failed_before_apply/authorization_expired`. CMS-неподдерживаемость даёт `unsupported`, потеря одобрения/прав — `rejected`, остальные известные readonly сбои — `failed_before_apply`. `authority_unavailable` отличается от `cms_unavailable`. Эти исходы означают отсутствие отправки write; они не ставят Task FAILED и не меняют новую approval/version. Невалидное согласование до enqueue даёт отказ HTTP и не создаёт разрешённую операцию.
+
+Отменить можно только ещё не начатую операцию. `POST /api/hitl/tasks/{task_id}/executions/{operation_id}/cancel` проверяет исходную сессию, DEPLOY и task/project binding; Management сериализует cancel с begin через Task → operation locks. Cancel-first запрещает старым callbacks/lease продолжить write; begin-first даёт cancel409. Сохраняются actor, UTC time и причина отмены. Явная отмена доказанно неотправленного запроса освобождает version fence для нового ID; `applying`/`outcome_unknown`/`needs_reconciliation` так освободить нельзя. UI показывает исходы и отдельную кнопку отмены, не повторяет apply при неизвестном результате.
+
+Внутренний протокол включает `/queue`, `/{id}/preparation/claim|ready|fail`, `/{id}/cancel`; reserve/begin требуют preparation lease. Claim и cancel требуют user actor; readonly ready/fail callback требует обе service keys и matching live lease. Callback после cancel/новой lease/begin не понижает состояние. Публичный operation/task summary содержит phases, причины и счётчик, но не lease token. HTTP200 с ресурсом `conflict`/`failed_before_apply` не означает публикацию.
+
+Migration006 не меняет старые record/hash/snapshots/receipts/recovery. Legacy ready можно продолжить только readonly preparation с тем же frozen command; старый reserve больше не создаёт новые old-format ready операции без queue. Миграция разрешает ровно один intent→frozen переход, защищает journal и отказывает в downgrade при истории подготовки под ACCESS EXCLUSIVE. Revision `20261114_006_preparation` является частью Management-линии до head `20261114_007_verification`; Core head — `20261109_001_hitl_barrier`. Обновлять согласованно Management/Client; readiness требует новый head, startup DDL не добавлен. Публичные существующие `/api` apply/status сохраняются; новый supported transport использует `/seo-master/v2/target-bound/*`, а старые write-пути и `/schema/schema` не являются обходом executor.
+
+## Контракт восстановления и эксплуатация
+
+Recovery policy хранится начиная с revision `20261114_005_recovery`; подготовка — с `20261114_006_preparation`, публичная проверка — с `20261114_007_verification`. Эти revisions применяются существующим явным migration runner, без startup DDL.
+
+Бюджет фиксирован в policy v1: максимум 4 CMS status-попытки, интервалы 10/60/300 секунд после неудачного завершения, lease 60 секунд, общий deadline 900 секунд от `begin`. CMS transport ограничен 10 секундами. До каждого HTTP запроса Management транзакционно сохраняет попытку и lease. Падение процесса расходует попытку; по истечении lease backoff считается от его исходного срока, а не от момента нового запуска. Повтор пользователя использует тот же claim/budget, что и фоновый процесс.
+
+Запись операции остаётся в `public.management_changelog`; `metadata.recovery` содержит журнал. Новых таблиц/очереди apply нет. Миграция005 сохраняет старые frozen command/hash/before/after и backfill делает только для `applying`/`outcome_unknown` от исходного `began_at`. Истёкшая старая операция не получает новый срок. Терминальные старые записи не меняются. DB trigger запрещает сокращение/перезапись завершённого префикса журнала; downgrade под ACCESS EXCLUSIVE отказывает при recovery-данных, чтобы последующий upgrade не обнулил бюджет. UTC backfill не зависит от timezone сессии мигратора.
+
+Внутренние `POST /internal/executions/recovery/claim` и `POST /internal/executions/recovery/{operation_id}/report` требуют `X-Internal-API-Key` и `X-Executor-Key`, но не пользовательский JWT. Claim разрешён только после `begin`; lease не разрешает CMS apply. Устаревший report отклоняется без изменения журнала. Поздний проверенный initial receipt может уточнить `needs_reconciliation`; поздний `finish(null)` не сбрасывает результат/бюджет/lease. Receipt проверяется на схему, подпись отдельным ключом и точную привязку к command/request hash и snapshots.
+
+Client запускает одну lifespan-задачу опроса каждые 5 секунд. `EXECUTION_RECOVERY_ENABLED=true` по умолчанию; нужны обе настроенные service keys длиной ≥32. Enabled с ненастроенными ключами/неработающей задачей даёт readiness503. Явный `false` отключает автоматический опрос; такой режим не является доказательством автоматического recovery. Несколько Client экземпляров безопасно делят lease через Management; бюджет общий, а не на процесс.
+
+Ошибки различаются: `cms_unavailable`, `operation_not_found`, `receipt_invalid`, `integration_changed`, отдельно `lease_expired`; причины остановки — `attempts_exhausted`/`deadline_exceeded`. UI объясняет их по-русски. В `needs_reconciliation` Task остаётся IN_PROGRESS, действуют version fence и запрет повторного apply. Ручной выход означает видимый обязательный разбор: автоматического force/reset/new ID или небезопасной кнопки «повторить запись» нет. Сверка CMS подтверждает запись, но не публичную видимость страницы.
+
+## Независимая публичная проверка и rollback
+
+Management остаётся владельцем состояния, Client Gateway — единственным CMS executor. Развивается существующая операция в `management_changelog`, новые таблицы и независимые пути apply не вводятся. Тип apply (включая legacy без поля type) или rollback неизменяем; rollback ссылается на authoritative original operation/receipt/hash/binding и точные snapshots. Caller передаёт original ID, новый operation ID и reason; не присылает before/after или receipt. Старый approval не разрешает повторный apply. Явный rollback проверяет текущие DEPLOY, scope/ownership и собственный короткий deadline перед первой мутацией.
+
+Публичное чтение независимо от CMS/admin-клиента: SafeHttpClient с DNS/connect/TLS policy, без cookie/Authorization, без redirects, 1MiB/10sec; фиксированные anonymous headers. Сохраняются URL/UTC time, HTTP/cache headers, extract, body hash и per-field differences. HTML не исполняется, JSON-LD contexts не загружаются; сравниваются decoded title/description и canonical JSON-LD, не весь динамический HTML. Missing, null и empty различаются. Дубли/invalid/unsupported predicates не дают verified. Managed H1/links остаются unsupported/manual до соответствующего CMS-контракта AR-12.
+
+До write сохраняется неизменяемый публичный baseline: он нужен, чтобы rollback отсутствующего/пустого managed поля можно было проверить с учётом fallback темы и сторонних JSON-LD блоков. Baseline нельзя дописать после begin/unknown или пересчитать существующий legacy record/hash. При отсутствии нужного baseline старой операции проверка честно требует данных, не заявляет rollback_verified по CMS receipt.
+
+Verify deadline по умолчанию 300sec фиксируется от первого durable сохранения подтверждённого receipt в Management; попытки/lease/backoff сохраняются, restart/status reconciliation не обнуляет их. При stale CDN — verifying/pending с differences, затем bounded retry; окончательный mismatch/deadline — verification_failed. Verified означает наблюдённое совпадение в момент чтения. Начало rollback сериализуется с original verify и инвалидирует старую lease; поздний ответ не может воскресить verified.
+
+Rollback использует точный original before, сохраняет отсутствие поля, получает собственный signed receipt и независимый verify (`rollback_applied_unverified`/`rollback_verified`). Drift блокирует запись. После неизвестного write результата только status/receipt той же операции, без нового ID/force. Автоматического rollback без заранее согласованной политики нет.
+
+## API публичной проверки и rollback
+
+- `POST /api/hitl/tasks/{task_id}/executions/{original_id}/rollback`: строго `{operation_id, reason}`; текущий DEPLOY и object scope, новый UUID и непустая причина до 1024 UTF-8 bytes. Management берёт оригинальные receipt/hash/binding/before сам. Смена reason с тем же ID даёт conflict. Никакого `force` или caller inverse payload.
+- Существующий scoped `.../executions/{operation_id}/cancel` отменяет и rollback **до begin**; UI отменяет именно rollback ID и выдаёт новый ID только после подтверждённой отмены. При applying/unknown/manual ID сохраняется, доступен status-only reconciliation.
+- Внутренние `/internal/executions/verification/claim` и `/verification/{id}/report` требуют обе service identities, не user JWT. Попытка/lease сохраняются до публичного HTTP; Management пересчитывает predicates из frozen version, caller `matches` не является доказательством.
+- `VERIFICATION_DEADLINE_SECONDS=300`, диапазон 30…3600; 8 попыток, lease30sec, backoff5/10/20/40/60/60/60. Значение фиксируется на операции, config/restart его не обнуляет. Existing receipts без policy получают старый `finished_at`/signed `applied_at`, не новый бюджет. Общий Client worker обслуживает status recovery и public verify; `EXECUTION_RECOVERY_ENABLED=false` явно отключает оба.
+- Management schema head007, Core head прежний. Readiness проверяет guard и оба уникальных индекса. Downgrade под ACCESS EXCLUSIVE отказывает при сохранённой verification/baseline/rollback истории. Startup DDL отсутствует; разворачивать Management/Client согласованно.
+
+Public parser v1 поддерживает только `text/html`. XHTML, неоднозначная структура и неподдержанные predicates не дают verified. H1/links требуют поддерживаемого CMS-контракта; полная theme/Yoast/RankMath/CDN и browser/staging проверка выполняется отдельно.

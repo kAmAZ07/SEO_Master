@@ -12,6 +12,20 @@ from services.client_api_gateway.hitl_executor import StatusReconciler, authorit
 from shared.hitl_execution import ExecutionError
 
 
+def test_client_tilda_import_supports_the_native_public_reader_factory():
+    import subprocess
+    import sys
+    source = (
+        'from services.client_api_gateway import public_verifier\n'
+        'reader = public_verifier.PublicPageReader\n'
+        'public_verifier.PublicPageReader = lambda: reader()\n'
+        'from services.client_api_gateway import tilda_manual\n'
+        'assert callable(tilda_manual.verify_manual)\n'
+    )
+    result = subprocess.run([sys.executable, '-B', '-c', source], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('case', ['valid', 'missing_session', 'wrong_project', 'viewer_manage', 'inactive', 'denied'])
 async def test_tilda_user_controls_require_live_canonical_management_scope(monkeypatch, case):

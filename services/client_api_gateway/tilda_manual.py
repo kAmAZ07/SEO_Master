@@ -1,4 +1,6 @@
 """Independent manual comparison, never a CMS receipt or automatic verified state."""
+from __future__ import annotations
+
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable

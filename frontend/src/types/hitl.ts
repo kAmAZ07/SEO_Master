@@ -29,6 +29,8 @@ export interface HITLTask {
   recommendationVersionId?: string | null
   contentHash?: string | null
   managedTarget?: boolean
+  tildaTarget?: boolean
+  manualCheckFields?: string[]
   execution?: {
     operationId: string; state: string; recommendationVersionId: string; contentHash: string
     prepared?: boolean

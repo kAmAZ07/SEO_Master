@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     TILDA_PROJECT_ID: Optional[str] = None
     TILDA_ADAPTER_URL: Optional[str] = None
     TILDA_INTERNAL_API_KEY: Optional[str] = None
+    TILDA_WEBHOOK_SECRET: Optional[str] = None
+    TILDA_WEBHOOK_PUBLIC_URL: Optional[str] = None
+    TILDA_SYNC_ENABLED: bool = False
+    TILDA_REQUESTS_PER_HOUR: int = Field(default=150, ge=1, le=150)
 
     MANAGEMENT_SERVICE_URL: str = 'http://localhost:8004'
     MANAGEMENT_EXECUTOR_API_KEY: Optional[str] = None

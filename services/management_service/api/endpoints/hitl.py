@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -15,8 +15,21 @@ from services.management_service.approval_service import ApprovalService
 from services.management_service.config import settings
 from services.management_service.prioritizer import priority_order
 from services.management_service.priority_policy import load_priority
+from shared.projects.roles import Permission
 
 router = APIRouter()
+
+
+@router.get('/projects/{project_id}/scope')
+def read_project_scope(project_id: UUID, permission: Literal['read', 'manage'] = 'read',
+                       actor: UserActor = Depends(authenticated_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        scope = dict(ApprovalService(db).project_scope(str(project_id), actor, Permission(permission)))
+        if scope['status'] != 'active':
+            raise ApprovalError('hitl_project_not_active', 409)
+        return {**scope, 'actor_id': actor.user_id}
+    except ApprovalError as error:
+        raise HTTPException(error.http_status, error.code) from error
 
 
 def _service(db: Session) -> ApprovalService:

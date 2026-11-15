@@ -8,7 +8,9 @@ ENV PYTHONUNBUFFERED=1
 COPY locks/tilda.txt ./requirements.lock
 RUN python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.lock
 
+ENV PYTHONPATH=/app
 COPY adapters/tilda-adapter /app/adapters/tilda-adapter
+COPY shared/ /app/shared/
 RUN groupadd --gid 10001 appuser && useradd --uid 10001 --gid appuser --no-create-home appuser
 USER appuser
 

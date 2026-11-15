@@ -22,14 +22,17 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         start_time = time.time()
         
         client_host = request.client.host if request.client else "unknown"
+        callback = request.url.path.startswith('/api/tilda/webhook/')
+        safe_url = '/api/tilda/webhook/[redacted]' if callback else str(request.url)
+        safe_path = '/api/tilda/webhook/[redacted]' if callback else request.url.path
         
         logger.info(
             "Request started",
             extra={
                 "request_id": request_id,
                 "method": request.method,
-                "url": str(request.url),
-                "path": request.url.path,
+                "url": safe_url,
+                "path": safe_path,
                 "client_host": client_host,
                 "user_agent": request.headers.get("user-agent", "unknown"),
                 "service": settings.SERVICE_NAME
@@ -49,8 +52,8 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 extra={
                     "request_id": request_id,
                     "method": request.method,
-                    "url": str(request.url),
-                    "path": request.url.path,
+                    "url": safe_url,
+                    "path": safe_path,
                     "status_code": response.status_code,
                     "process_time": process_time,
                     "client_host": client_host,
@@ -68,8 +71,8 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 extra={
                     "request_id": request_id,
                     "method": request.method,
-                    "url": str(request.url),
-                    "path": request.url.path,
+                    "url": safe_url,
+                    "path": safe_path,
                     "error": str(e),
                     "error_type": type(e).__name__,
                     "process_time": process_time,

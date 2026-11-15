@@ -264,3 +264,60 @@ def test_priority_history_is_scoped_and_bounds_pagination(stand):
     assert client.get(path, params={'limit': 101}).status_code == 422 and not calls
     assert client.get(path, params={'limit': 10, 'offset': 20}).status_code == 200
     assert calls[-1].url.params['offset'] == '20' and calls[-1].url.params['limit'] == '10'
+
+
+@pytest.mark.parametrize('failure', ['validation', 'not_found', 'unavailable'])
+def test_tilda_callback_errors_never_log_the_capability_path(monkeypatch, failure):
+    from unittest.mock import Mock
+    from fastapi import HTTPException
+    from services.api_gateway.routes import tilda_routes
+    from services.api_gateway.middleware import error_handler
+    from services.api_gateway.middleware import logging as request_logging
+    captured = Mock()
+    monkeypatch.setattr(error_handler, 'logger', captured)
+    monkeypatch.setattr(request_logging, 'logger', captured)
+    async def proxy(*args, **kwargs):
+        raise HTTPException(404 if failure == 'not_found' else 503, 'tilda_hint_not_accepted')
+    monkeypatch.setattr(tilda_routes, '_hitl_json', proxy)
+    app = FastAPI(); app.include_router(tilda_routes.router)
+    error_handler.setup_error_handlers(app)
+    app.add_middleware(request_logging.LoggingMiddleware)
+    path = '/api/tilda/webhook/' + PROJECT_ID + '/' + 'a' * 64 + '/published'
+    params = {'projectid': '42', 'publickey': 'fixture-public', 'published': '1790000000'}
+    if failure != 'validation':
+        params['pageid'] = '123'
+    with TestClient(app) as client:
+        response = client.get(path, params=params)
+    assert response.status_code == (422 if failure == 'validation' else 404 if failure == 'not_found' else 503)
+    assert 'a' * 64 not in str(captured.mock_calls)
+    assert 'fixture-public' not in str(captured.mock_calls)
+
+
+@pytest.mark.parametrize('outcome', ['queued', 'duplicate', 'not_saved', 'missing_id', 'timeout'])
+def test_tilda_callback_ack_requires_durable_result_and_has_a_total_deadline(monkeypatch, outcome):
+    import asyncio
+    from services.api_gateway.routes import tilda_routes
+    calls = []
+    cancelled = []
+    async def proxy(method, path, request, **kwargs):
+        calls.append((method, path, kwargs))
+        if outcome == 'timeout':
+            try:
+                await asyncio.sleep(4)
+            except asyncio.CancelledError:
+                cancelled.append(True)
+                raise
+        return {'status': outcome, 'job_id': 'committed-job'} if outcome != 'missing_id' else {'status': 'queued'}
+    monkeypatch.setattr(tilda_routes, '_hitl_json', proxy)
+    app = FastAPI(); app.include_router(tilda_routes.router)
+    with TestClient(app) as client:
+        response = client.get(f'/api/tilda/webhook/{PROJECT_ID}/' + 'a' * 64 + '/published',
+            params={'projectid': '42', 'pageid': '123', 'published': '1790000000', 'publickey': 'fixture-public'})
+    assert response.status_code == (200 if outcome in {'queued', 'duplicate'} else 503)
+    if response.status_code == 200:
+        assert response.text == 'ok' and response.headers['content-type'].startswith('text/plain')
+        assert response.headers['cache-control'] == 'no-store'
+    assert calls[0][0:2] == ('POST', '/internal/tilda/webhook/published')
+    assert calls[0][2]['timeout'] == 2 and calls[0][2]['execution'] is True
+    assert calls[0][2]['payload']['binding'] == PROJECT_ID
+    assert cancelled == ([True] if outcome == 'timeout' else [])

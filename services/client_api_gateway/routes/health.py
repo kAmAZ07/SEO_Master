@@ -15,6 +15,10 @@ def readiness_check(request: Request) -> dict[str, str]:
     task = getattr(request.app.state, "execution_recovery_task", None)
     if recovery.settings.EXECUTION_RECOVERY_ENABLED and (not recovery.configured() or task is None or task.done()):
         raise HTTPException(503, "client_recovery_not_ready")
+    from services.client_api_gateway import tilda_worker
+    tilda_task = getattr(request.app.state, 'tilda_read_task', None)
+    if tilda_worker.settings.TILDA_SYNC_ENABLED and (not tilda_worker.configured() or tilda_task is None or tilda_task.done()):
+        raise HTTPException(503, 'tilda_reader_not_ready')
     return {"status": "ready", "service": "client-api-gateway"}
 
 

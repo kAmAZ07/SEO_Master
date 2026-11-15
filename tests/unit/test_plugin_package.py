@@ -6,6 +6,8 @@ import json
 import os
 import stat
 import subprocess
+import traceback
+from unittest.mock import patch
 from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -355,3 +357,21 @@ def test_unapproved_git_inventory_rejected(source_repository, fault):
     commit()
     with pytest.raises(PackageError):
         committed_payload(root, "HEAD")
+
+
+def test_native_runner_timeout_redacts_command():
+    from tests.wordpress.native import NativeWordPress
+
+    stand = object.__new__(NativeWordPress)
+    stand.docker = ['docker', '--context', 'fixture']
+    stand.tool_environment = {}
+    stand.private_values = ['PUBLIC_TEST_SENTINEL']
+    stand.container_launcher = None
+    arguments = ('run', '-e', 'FIXTURE_VALUE=' + stand.private_values[0], 'fixture-image')
+    command = [*stand.docker, *arguments]
+    with patch('tests.wordpress.native.subprocess.run', side_effect=subprocess.TimeoutExpired(command, 1)):
+        with pytest.raises(RuntimeError) as rejected:
+            stand.run(*arguments)
+    formatted = ''.join(traceback.format_exception(rejected.value))
+    assert 'PUBLIC_TEST_SENTINEL' not in formatted and 'FIXTURE_VALUE' not in formatted
+    assert rejected.value.__suppress_context__ is True

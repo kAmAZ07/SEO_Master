@@ -44,6 +44,24 @@ python -B -m tests.wordpress.native_contract --docker-context <context> --plugin
 
 ## Уровни доказательств и ограничения
 
+## Браузерная проверка согласования
+
+```text
+python -u -B -m tests.e2e.hitl_browser --docker-context <context> --plugin-revision HEAD
+```
+
+Запуск требует management-test окружения и Docker Compose. Он использует контейнеры существующего native fixture, реальные Core/Management migrations, собранные API/Management/Client и frontend, подписанный WordPress ZIP и настоящий Chromium. `locks/browser.txt` задаёт отдельное окружение браузерного образа; версия Playwright согласована с audit через constraint.
+
+Браузер входит через форму, проверяет видимые version/hash, отдельно одобряет и применяет предложение, читает receipt, ожидает независимый public verified и явно запрашивает rollback. Отдельно проверяются потеря настоящего ответа после apply, status-only обновление интерфейса, последовательные/конкурентные same-command retries и отказ rollback при manual drift. Матрица сравнивает UI с authoritative Management и настоящим WP ledger/полями.
+
+Конкурентный `503 storage_failure` не считается успешным apply: после завершения всех write-запросов тест требует подписанный status той же операции с исходными ID/hash. Новые apply/ID для такого исхода не создаются. Остальные ошибки проваливают проверку. Каждый итоговый receipt должен совпасть с исходным, managed snapshot — с ожидаемым after, ledger — содержать одну логическую операцию; число восстановленных через status результатов выводится отдельно от успешных ответов apply.
+
+Проект, подтверждённые права, завершённый аудит/evidence и версия Semantic задаются persisted fixtures. Это проверка пути от готового предложения до отката; она не доказывает браузерное получение evidence, DomainAuthorization или генерацию предложения. Фикстура не открывает общий `up/e2e` и не запускает legacy mock/seed/cleanup scripts.
+
+Все Compose-контейнеры используют уникальный owner/project и проверенные labels; очистка обращается только к этим ресурсам. Browser работает под UID10001/read-only в network namespace frontend с единственной внутренней сетью и настоящим loopback origin `http://127.0.0.1:8080`. WebCrypto использует штатную secure-context модель loopback origin. Context блокирует service workers и запросы вне этого origin. Конфигурация с синтетическими credentials находится в приватном temporary каталоге. Playwright traces, видео и полные call logs не публикуются: они могут содержать токены и введённый пароль.
+
+## Уровни доказательств и ограничения
+
 Source review, unit/stub, native library, real database/CMS, image build/UID и staging/browser E2E — разные уровни. PHP memory/scripted SQL fixtures не доказывают InnoDB atomicity и crash recovery; такие свойства проверяет реальный стенд. HTTP 200, pending-list и CMS receipt не доказывают публичное verified. Обязательный skip/xfail, недоступная зависимость или стенд считаются незавершённой проверкой.
 
-Полная WordPress/theme/Yoast/RankMath/CDN matrix, браузерный сценарий и реальная production release trust/key rotation требуют собственных разрешённых сред и доказательств. Общие `up/e2e` не открываются обходом migration gate. Технические ограничения CMS и trust bootstrap описаны в [WORDPRESS.md](WORDPRESS.md) и [PUBLISHING.md](../adapters/wordpress-plugin/PUBLISHING.md).
+Полная WordPress/theme/Yoast/RankMath/CDN matrix, браузерный путь получения evidence/подтверждения прав/генерации предложения и реальная production release trust/key rotation требуют собственных разрешённых сред и доказательств. Общие `up/e2e` не открываются обходом migration gate. Технические ограничения CMS и trust bootstrap описаны в [WORDPRESS.md](WORDPRESS.md) и [PUBLISHING.md](../adapters/wordpress-plugin/PUBLISHING.md).

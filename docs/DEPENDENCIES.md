@@ -38,3 +38,5 @@ IPv4 fixture lifecycle проверен реальными локальными 
 
 
 Матрица требований, среды и уровни доказательств — [TESTING.md](TESTING.md).
+
+`locks/browser.in` / `locks/browser.txt` — отдельный Playwright runtime браузерного E2E-образа, не дополнительный backend-профиль. Он генерируется той же командой `lock` и проверяется `lock --check` с constraint `locks/audit.txt`, чтобы версия Playwright совпадала с audit. Пакеты не устанавливаются в Management/API runtime или рабочий frontend.

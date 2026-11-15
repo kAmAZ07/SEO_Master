@@ -7,6 +7,7 @@ import secrets
 import subprocess
 import time
 from typing import Any
+from collections.abc import Callable
 import uuid
 from scripts.project import build_environment
 from scripts.plugin_package import committed_payload
@@ -32,6 +33,7 @@ class NativeWordPress(AbstractContextManager["NativeWordPress"]):
         self.port = 0
         self.entity_id = 0
         self.postgres_url: str | None = None
+        self.container_launcher: Callable[[tuple[str, ...]], str] | None = None
         # Test-only provenance (all-zero commit), never a published release or
         # a claim that dirty working bytes correspond to HEAD.
         key = Ed25519PrivateKey.generate()
@@ -53,15 +55,23 @@ class NativeWordPress(AbstractContextManager["NativeWordPress"]):
         self.baseline_package = build_package(old_payload, '0' * 40, key)
 
     def run(self, *args: str, stdin: str | None = None, timeout: int = 90) -> str:
-        result = subprocess.run([*self.docker, *args], input=stdin, env=self.tool_environment,
-                                capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+        if args and args[0] == 'run' and self.container_launcher is not None:
+            if stdin is not None:
+                raise ValueError('fixture_container_stdin_unsupported')
+            return self.container_launcher(args)
+        try:
+            result = subprocess.run([*self.docker, *args], input=stdin, env=self.tool_environment,
+                                    capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # TimeoutExpired.__str__ includes argv, including docker run -e values.
+            raise RuntimeError(f"native WordPress Docker {args[0]} timed out; diagnostics redacted") from None
         if result.returncode:
             # argv/env may contain randomly generated fixture credentials: never dump them.
-            diagnostic = result.stderr + result.stdout if args[0] == "exec" and "php" in args else ""
+            diagnostic = result.stderr + result.stdout if args[0] == "exec" and any(name in args for name in ("php", "python")) else ""
             for value in self.private_values:
                 diagnostic = diagnostic.replace(value, "[fixture-secret]")
             raise RuntimeError(f"native WordPress Docker {args[0]} failed (exit {result.returncode}): {diagnostic[-2500:]}")
-        return result.stdout
+        return result.stdout + result.stderr if args[0] == 'logs' else result.stdout
 
     def php(self, source: str, *, installing: bool = False) -> str:
         prelude = "define('WP_DISABLE_FATAL_ERROR_HANDLER', true); $_SERVER['HTTP_HOST']='wordpress.test'; $_SERVER['REQUEST_URI']='/';\n"
@@ -292,6 +302,14 @@ echo 'denied';
 
     def __exit__(self, *args: Any) -> None:
         for kind, name in reversed(self.resources):
+            if kind == 'image':
+                if not self.run('image', 'ls', '--filter', 'reference=' + name, '--format', '{{.ID}}').strip():
+                    continue  # Build may have failed/interrupted before creating the tag.
+                info = json.loads(self.run('image', 'inspect', name))[0]
+                if info['Config'].get('Labels', {}).get('seo.test.owner') != self.owner or not name.startswith(self.owner + '-'):
+                    raise RuntimeError('refusing native image cleanup: ownership mismatch')
+                self.run('image', 'rm', name)
+                continue
             info = json.loads(self.run(kind if kind == "network" else "container", "inspect", name))[0]
             labels = info.get("Labels", {}) if kind == "network" else info["Config"].get("Labels", {})
             if labels.get("seo.test.owner") != self.owner or not name.startswith(self.owner + "-"):

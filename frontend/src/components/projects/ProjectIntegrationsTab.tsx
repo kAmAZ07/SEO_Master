@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
+import TildaReadPanel from '../hitl/TildaReadPanel'
 import {
   BarChart3,
   CheckCircle2,
@@ -45,7 +46,7 @@ const SUPPORTED_PLATFORMS: SupportedIntegrationPlatform[] = ['tilda', 'wordpress
 const platformMeta: Record<SupportedIntegrationPlatform, { label: string; description: string; accent: string; icon: typeof Layers3 }> = {
   tilda: {
     label: 'Tilda',
-    description: 'Сохраните API-ключи Tilda для публикации страниц через SEO Master.',
+    description: 'API-ключи Tilda используются для чтения. Внедрение и публикация — вручную в редакторе Tilda.',
     accent: 'emerald',
     icon: Layers3,
   },
@@ -378,7 +379,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
     if (typeof activeIntegration.pageMappingsCount === 'number') {
       rows.push({ label: 'Сопоставлено страниц', value: String(activeIntegration.pageMappingsCount) })
     }
-    rows.push({ label: 'Подключено', value: formatDate(activeIntegration.connectedAt) })
+    rows.push({ label: activePlatform === 'tilda' ? 'Ключи сохранены' : 'Подключено', value: formatDate(activeIntegration.connectedAt) })
 
     return (
       <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-5">
@@ -387,7 +388,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
             <div className="flex items-center gap-3">
               <CheckCircle2 className="h-6 w-6 text-emerald-600" />
               <div>
-                <h4 className="text-xl font-semibold text-emerald-950">{platformMeta[activePlatform as SupportedIntegrationPlatform].label} подключён</h4>
+                <h4 className="text-xl font-semibold text-emerald-950">{activePlatform === 'tilda' ? 'Ключи Tilda сохранены; чтение проверяется отдельно' : `${platformMeta[activePlatform as SupportedIntegrationPlatform].label} подключён`}</h4>
                 <p className="text-sm text-emerald-800">Секреты хранятся в зашифрованном виде и не передаются в интерфейс.</p>
               </div>
             </div>
@@ -647,7 +648,7 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="text-lg font-semibold text-gray-900">{meta.label}</h3>
                     <span className={cn('rounded-full px-3 py-1 text-xs font-semibold', isConnected ? 'bg-emerald-100 text-emerald-700' : integration?.connected ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600')}>
-                      {isConnected ? 'Подключено' : integration?.connected ? 'Настройка' : 'Не настроено'}
+                      {platform === 'tilda' && integration?.connected ? 'Ключи сохранены' : isConnected ? 'Подключено' : integration?.connected ? 'Настройка' : 'Не настроено'}
                     </span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-gray-600">{meta.description}</p>
@@ -684,7 +685,9 @@ const ProjectIntegrationsTab = ({ projectId, projectUrl }: ProjectIntegrationsTa
           </div>
         )}
 
-        <div className="p-5 md:p-6">{renderForm()}</div>
+        <div className="p-5 md:p-6">{renderForm()}
+          {activePlatform === 'tilda' && activeIntegration?.connected && <TildaReadPanel projectId={projectId} />}
+        </div>
       </Card>
     </div>
   )

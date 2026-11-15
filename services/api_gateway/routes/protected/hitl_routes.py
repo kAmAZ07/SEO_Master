@@ -35,12 +35,12 @@ class ApprovalRequest(BaseModel):
     comment: Optional[str] = Field(default=None, max_length=1000)
 
 
-async def _hitl_json(method: str, path: str, request: Request, *, params=None, payload=None, execution=False):
+async def _hitl_json(method: str, path: str, request: Request, *, params=None, payload=None, execution=False, timeout=None):
     if len(settings.INTERNAL_API_KEY) < 32:
         raise HTTPException(503, "service_identity_unconfigured")
     authorization = request.headers.get("authorization", "")
     try:
-        async with httpx.AsyncClient(timeout=50 if execution else 10, trust_env=False, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=timeout if timeout is not None else 50 if execution else 10, trust_env=False, follow_redirects=False) as client:
             response = await client.request(
                 method, (settings.CLIENT_GATEWAY_URL if execution else settings.MANAGEMENT_SERVICE_URL).rstrip("/") + path,
                 params=params, json=payload,

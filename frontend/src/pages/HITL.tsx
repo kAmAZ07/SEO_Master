@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
@@ -7,6 +7,7 @@ import { applyHITLTask, approveHITLTask, cancelHITLOperation, loadHITLTasks, rej
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import type { HITLTask } from '../types/hitl'
 import OperationDetails from '../components/hitl/OperationDetails'
+import PriorityPanel from '../components/hitl/PriorityPanel'
 
 const formatJson = (value?: Record<string, unknown>) => {
   if (!value || Object.keys(value).length === 0) {
@@ -53,10 +54,7 @@ const HITL = () => {
     void dispatch(loadHITLTasks())
   }, [dispatch])
 
-  const sortedTasks = useMemo(
-    () => [...tasks].sort((left, right) => (right.impactScore ?? 0) - (left.impactScore ?? 0)),
-    [tasks],
-  )
+  const sortedTasks = tasks
 
   const handleDecision = async (task: HITLTask, approved: boolean) => {
     if (!task.recommendationVersionId || !task.contentHash || task.authorizationStatus !== 'pending') return
@@ -271,6 +269,8 @@ const HITL = () => {
                       </div>
                     </div>
 
+                    <PriorityPanel key={`${task.taskId}:${task.priority?.revision}`} taskId={task.taskId} priority={task.priority}
+                      onSaved={() => dispatch(loadHITLTasks()).unwrap()} />
                     <label htmlFor={`hitl-comment-${task.taskId}`} className="mt-5 block text-sm font-medium text-gray-700">
                       Комментарий к решению
                     </label>

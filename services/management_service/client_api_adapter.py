@@ -840,19 +840,6 @@ def _extract_changes_from_task(task: Task) -> Dict[str, Any]:
     }
 
 
-def _calculate_priority(task: Task) -> int:
-    metadata = task.meta or {}
-
-    impact_score = metadata.get("impact_score", 0.5)
-
-    if "average_impact_score" in metadata:
-        impact_score = metadata["average_impact_score"]
-
-    priority = int(impact_score * 10)
-
-    return max(1, min(priority, 10))
-
-
 def _log_to_changelog(
     db: Session,
     task: Task,

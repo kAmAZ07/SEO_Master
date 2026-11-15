@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -14,14 +14,13 @@ from services.api_gateway.config import settings
 from shared.projects.roles import Permission
 from shared.hitl_execution import ExecutionRequest
 from shared.hitl_rollback import RollbackRequest
+from services.management_service.priority_policy import PriorityChange
 from services.api_gateway.auth import (
     get_current_user,
 )
 
 from services.api_gateway.routes.protected.common import (
     _get_owned_project,
-    _get_owned_projects,
-    _project_ids,
 )
 
 logger = get_logger(__name__)
@@ -134,33 +133,32 @@ async def get_management_tasks(
     project_id: Optional[str] = Query(None, alias="project_id"),
     status_filter: Optional[str] = Query(None, alias="status"),
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0, le=100_000),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if project_id:
-        project_ids = [str(_get_owned_project(project_id, current_user, db).id)]
-    else:
-        project_ids = _project_ids(_get_owned_projects(current_user, db))
+        _get_owned_project(project_id, current_user, db)
+    # Management authorizes the bearer across all projects and paginates once.
+    # Resorting per-project pages here breaks both priority order and global limits.
+    return await _hitl_json('GET', '/api/v1/tasks', request,
+        params={'project_id': project_id, 'status': status_filter, 'limit': limit, 'offset': offset})
 
-    items: List[Dict[str, Any]] = []
-    for owned_project_id in project_ids:
-        data = await _hitl_json(
-            "GET",
-            "/api/v1/tasks", request,
-            params={
-                "project_id": owned_project_id,
-                "status": status_filter,
-                "limit": limit,
-            },
-        )
-        if isinstance(data, list):
-            items.extend(item for item in data if isinstance(item, dict))
 
-    return sorted(
-        items,
-        key=lambda item: item.get("updated_at") or item.get("created_at") or "",
-        reverse=True,
-    )[:limit]
+@router.post('/hitl/tasks/{task_id}/priority')
+async def change_task_priority(task_id: str, body: PriorityChange, request: Request,
+                                current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    await _get_owned_hitl_task(task_id, current_user, db, request, Permission.MANAGE)
+    return await _hitl_json('POST', f'/api/v1/tasks/{task_id}/priority', request, payload=body.model_dump())
+
+
+@router.get('/hitl/tasks/{task_id}/priority/history')
+async def task_priority_history(task_id: str, request: Request, limit: int = Query(50, ge=1, le=100),
+                                 offset: int = Query(0, ge=0, le=100_000),
+                                 current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    await _get_owned_hitl_task(task_id, current_user, db, request)
+    return await _hitl_json('GET', f'/api/v1/tasks/{task_id}/priority/history', request,
+                            params={'limit': limit, 'offset': offset})
 
 
 @router.get("/hitl/tasks")
@@ -169,20 +167,11 @@ async def get_hitl_tasks(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     status_filter: Optional[str] = "pending",
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0, le=100_000),
 ):
-    items: List[Dict[str, Any]] = []
-    project_ids = _project_ids(_get_owned_projects(current_user, db))
-    for project_id in project_ids:
-        data = await _hitl_json(
-            "GET",
-            "/api/v1/hitl/tasks", request,
-            params={"status": status_filter, "limit": limit, "project_id": project_id},
-        )
-        if isinstance(data, list):
-            items.extend(item for item in data if isinstance(item, dict))
-
-    return sorted(items, key=lambda item: item.get("created_at") or item.get("createdAt") or "", reverse=True)[:limit]
+    return await _hitl_json('GET', '/api/v1/hitl/tasks', request,
+                            params={'status': status_filter, 'limit': limit, 'offset': offset})
 
 
 @router.get("/hitl/tasks/{task_id}")

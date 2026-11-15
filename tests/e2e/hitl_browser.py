@@ -187,6 +187,13 @@ def run(root: Path, directory: Path, wp: 'NativeWordPress') -> None:
                 phase('viewed')
                 assert title() == 'Мастерская обуви' and ledger_count() == 0
                 resume('viewed')
+                phase('priority_changed')
+                assert title() == 'Мастерская обуви' and ledger_count() == 0
+                assert database.scalar("SELECT metadata->'priority'->>'revision' FROM public.tasks WHERE id=:id", id=task_id) == '3'
+                assert database.scalar("SELECT count(*) FROM public.management_changelog WHERE source='priority_v1' AND task_id=:id", id=task_id) == 3
+                assert database.scalar("SELECT status::text FROM public.hitl_approvals WHERE task_id=:id", id=task_id) == 'PENDING'
+                print('PASS priority: browser estimate, zero override, journal, clear; no approval or CMS mutation')
+                resume('priority_changed')
                 phase('approved')
                 assert title() == 'Мастерская обуви' and ledger_count() == 0
                 resume('approved')

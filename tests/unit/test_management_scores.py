@@ -142,6 +142,15 @@ class Query:
     def filter(self, *args):
         return self
 
+    def order_by(self, *args):
+        return self
+
+    def populate_existing(self):
+        return self
+
+    def with_for_update(self):
+        return self
+
     def first(self):
         return self.rows[0] if self.rows else None
 

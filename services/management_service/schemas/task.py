@@ -41,8 +41,8 @@ class TaskBase(BaseModel):
     url: str = Field(..., max_length=2048)
     title: Optional[str] = Field(None, max_length=500)
     description: Optional[str] = None
-    impact_score: Optional[float] = Field(0.5, ge=0.0, le=1.0)
-    effort_score: Optional[float] = Field(0.5, ge=0.0, le=1.0)
+    impact_score: Optional[float] = Field(None, ge=0.0, le=1.0, json_schema_extra={"deprecated": True})
+    effort_score: Optional[float] = Field(None, ge=0.0, le=1.0, json_schema_extra={"deprecated": True})
     metadata: TaskMetadata = Field(default_factory=dict)
 
 
@@ -95,9 +95,10 @@ class TaskResponse(BaseModel):
     url: str
     title: Optional[str]
     description: Optional[str]
-    impact_score: float
-    effort_score: float
-    priority_score: float
+    impact_score: Optional[float]
+    effort_score: Optional[float]
+    priority_score: Optional[float]
+    priority: Dict[str, Any]
     metadata: TaskMetadata
     assigned_to: Optional[str]
     created_at: datetime
@@ -128,7 +129,7 @@ class TaskPrioritizationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     tasks: List[TaskResponse]
-    prioritization_method: str = 'Impact x Effort'
+    prioritization_method: str = 'priority_v1'
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 

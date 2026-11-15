@@ -215,3 +215,52 @@ def test_cancel_rejects_an_operation_bound_to_another_task_before_post(stand):
         db.commit()
     assert client.post(f"/api/hitl/tasks/{BOB}/executions/{BOB}/cancel").status_code == 404
     assert all(call.method == "GET" for call in calls)
+
+
+@pytest.mark.parametrize('path,upstream', [('/api/hitl/tasks', '/api/v1/hitl/tasks'), ('/api/tasks', '/api/v1/tasks')])
+def test_queue_preserves_global_authority_order_and_paginates_once(stand, monkeypatch, path, upstream):
+    from unittest.mock import AsyncMock
+    client, maker, _ = stand
+    with maker() as db:
+        db.add(Project(id=BOB, name='Second project', owner_id=ALICE, workspace_id=WORKSPACE,
+                       url='https://other.example/', origin='https://other.example', path_prefix='/'))
+        db.commit()
+    rows = [{'id': 'critical', 'project_id': PROJECT_ID, 'created_at': '2020-01-01'},
+            {'id': 'unknown', 'project_id': BOB, 'created_at': '2026-11-15'}]
+    proxy = AsyncMock(return_value=rows)
+    monkeypatch.setattr(hitl_routes, '_hitl_json', proxy)
+    assert client.get(path, params={'limit': 2}).json() == rows
+    proxy.assert_awaited_once()
+    assert proxy.call_args.args[:2] == ('GET', upstream)
+    assert not proxy.call_args.kwargs['params'].get('project_id')
+    assert proxy.call_args.kwargs['params']['limit'] == 2
+
+
+def test_priority_change_requires_manage_and_forwards_exact_revision_without_actor(stand):
+    import json
+    client, maker, calls = stand
+    body = {'action': 'override', 'expected_revision': 3, 'score': 0., 'reason': 'Reviewed triage'}
+    path = f'/api/hitl/tasks/{TASK_ID}/priority'
+    assert client.post(path, json=body).status_code == 403
+    assert all(call.method == 'GET' for call in calls)
+    calls.clear()
+    with maker() as db:
+        db.get(WorkspaceMember, (WORKSPACE, ALICE)).role = 'admin'
+        db.commit()
+    assert client.post(path, json={**body, 'actor_id': BOB}).status_code == 422 and not calls
+    assert client.post(path, json=body, headers={'Authorization': 'Bearer original-access'}).status_code == 200
+    forwarded = json.loads(calls[-1].content)
+    assert {key: forwarded[key] for key in body} == body and 'actor_id' not in forwarded
+    assert calls[-1].url.path == f'/api/v1/tasks/{TASK_ID}/priority'
+    assert calls[-1].headers['authorization'] == 'Bearer original-access'
+
+
+def test_priority_history_is_scoped_and_bounds_pagination(stand):
+    client, _, calls = stand
+    path = f'/api/hitl/tasks/{TASK_ID}/priority/history'
+    assert client.get(path, headers={'X-User': BOB}).status_code == 404
+    assert all(not call.url.path.endswith('/priority/history') for call in calls)
+    calls.clear()
+    assert client.get(path, params={'limit': 101}).status_code == 422 and not calls
+    assert client.get(path, params={'limit': 10, 'offset': 20}).status_code == 200
+    assert calls[-1].url.params['offset'] == '20' and calls[-1].url.params['limit'] == '10'

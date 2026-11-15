@@ -35,6 +35,7 @@ def main() -> None:
         context.set_default_timeout(15000)
         denied = []
         writes = []
+        priority_writes = []
 
         def policy(route: Route) -> None:
             target = urlsplit(route.request.url)
@@ -56,7 +57,8 @@ def main() -> None:
         def observe(request: Request) -> None:
             path = urlsplit(request.url).path
             if request.method == 'POST' and '/api/hitl/' in path:
-                writes.append({'path': path, 'body': request.post_data_json})
+                target = priority_writes if path.endswith('/priority') else writes
+                target.append({'path': path, 'body': request.post_data_json})
 
         page.on('request', observe)
         PHASE = 'login'
@@ -78,10 +80,51 @@ def main() -> None:
         expect(diff.get_by_text(fixture['before_title'], exact=False)).to_be_visible()
         expect(diff.get_by_text(fixture['after_title'], exact=False)).to_be_visible()
         expect(page.get_by_role('button', name='Применить одобренные изменения', exact=True)).to_have_count(0)
-        if writes or denied:
+        if writes or priority_writes or denied:
             print('BROWSER_BOUNDARY_DENIED count=' + str(len(denied)) + ' writes=' + str(len(writes)), file=sys.stderr)
             raise AssertionError('unexpected_boundary_traffic')
         checkpoint('viewed')
+
+        PHASE = 'priority'
+        priority_summary = page.locator('summary').filter(has_text='Приоритет:')
+        priority = page.locator('details').filter(has=priority_summary)
+
+        def save_priority(revision: int) -> dict:
+            with page.expect_response(lambda response: urlsplit(response.url).path.endswith('/priority') and
+                                      response.request.method == 'POST') as result:
+                page.get_by_role('button', name='Сохранить приоритет', exact=True).click()
+            assert result.value.status == 200
+            snapshot = result.value.json()
+            assert snapshot['revision'] == revision
+            score = str(snapshot['effective_score']).removesuffix('.0')
+            expect(priority_summary).to_have_text('Приоритет: ' + score)
+            return snapshot
+
+        priority_summary.click()
+        page.get_by_label('Impact (0…1)', exact=True).fill('0.8')
+        page.get_by_label('Confidence (0…1)', exact=True).fill('0.75')
+        page.get_by_label('Effort (1…5)', exact=True).fill('2')
+        page.get_by_label('Срочность', exact=True).select_option('high')
+        page.get_by_label('Причина срочности', exact=True).fill('Release triage')
+        page.get_by_label('Причина изменения', exact=True).fill('Explicit manual estimate')
+        assert abs(save_priority(1)['computed_score'] - .3) < 1e-12
+        priority_summary.click()
+        page.get_by_label('Изменение приоритета', exact=True).select_option('override')
+        page.get_by_label('Ручной балл (0…1)', exact=True).fill('0')
+        page.get_by_label('Причина изменения', exact=True).fill('Defer after review')
+        assert save_priority(2)['effective_score'] == 0
+        priority_summary.click()
+        expect(priority.get_by_text('Ручной приоритет 0:', exact=False)).to_be_visible()
+        page.get_by_role('button', name='Журнал приоритетов', exact=True).click()
+        expect(priority.locator('li').filter(has_text='Defer after review')).to_contain_text('→ 0')
+        page.get_by_label('Изменение приоритета', exact=True).select_option('clear_override')
+        page.get_by_label('Причина изменения', exact=True).fill('Use formula again')
+        assert abs(save_priority(3)['effective_score'] - .3) < 1e-12
+        assert [entry['body']['expected_revision'] for entry in priority_writes] == [0, 1, 2]
+        assert not writes
+        expect(version).to_contain_text(fixture['version_id'])
+        expect(version).to_contain_text(fixture['content_hash'])
+        checkpoint('priority_changed', priority_writes=priority_writes)
 
         page.get_by_role('button', name='Одобрить', exact=True).click()
         apply = page.get_by_role('button', name='Применить одобренные изменения', exact=True)

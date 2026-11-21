@@ -250,6 +250,23 @@ $tests = [
         check($result['outcome'] === 'ready', 'dry-run not ready');
         check($fixture->store->fields === $before && $fixture->store->operations === [] && $fixture->store->writes === 0, 'dry-run mutated');
     },
+    'Rank Math setup blocks new mutations and preserves existing receipts' => function (): void {
+        foreach ([false, true] as $already_applied) {
+            $fixture = new ContractFixture();
+            $command = $fixture->command();
+            $receipt = $already_applied ? $fixture->send($command) : null;
+            $config = new SM_V2_Config(ContractFixture::PROJECT, ContractFixture::SITE, 'test-key',
+                $fixture->secret, $fixture->receipt_secret, true, false, false);
+            $fixture->service = new SM_V2_Service($config, $fixture->store, '0.3.0-dev');
+            expect_error(fn() => $fixture->send($command, '/seo-master/v2/dry-run'), 'rank_math_setup_required');
+            if ($already_applied) {
+                check($fixture->send($command) === $receipt && $fixture->store->writes === 1, 'recovery changed the operation');
+            } else {
+                expect_error(fn() => $fixture->send($command), 'rank_math_setup_required');
+                check($fixture->store->operations === [] && $fixture->store->writes === 0, 'setup rejection mutated state');
+            }
+        }
+    },
     'CAS conflict and expected-after mismatch write nothing' => function (): void {
         $fixture = new ContractFixture();
         $command = $fixture->command();

@@ -31,7 +31,8 @@ function sm_v2_uuid($value): bool {
 final class SM_V2_Config {
     public function __construct(
         private string $project, private string $site, private string $key_id,
-        private string $secret, private string $receipt_secret, private bool $trusted_gateway, private bool $allow_jsonld = true
+        private string $secret, private string $receipt_secret, private bool $trusted_gateway,
+        private bool $allow_jsonld = true, private bool $rank_math_ready = true
     ) {
         if (!sm_v2_uuid($project) || !sm_v2_uuid($site) ||
             preg_match('/\A[A-Za-z0-9_-]{1,64}\z/D', $key_id) !== 1 ||
@@ -48,6 +49,7 @@ final class SM_V2_Config {
     public function key_id(): string { return $this->key_id; }
     public function can_publish(): bool { return $this->trusted_gateway; }
     public function can_write_jsonld(): bool { return $this->allow_jsonld; }
+    public function rank_math_ready(): bool { return $this->rank_math_ready; }
     public function verify(string $message, string $signature): bool {
         return hash_equals(hash_hmac('sha256', $message, $this->secret), $signature);
     }

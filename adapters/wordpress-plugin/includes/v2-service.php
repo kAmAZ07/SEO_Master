@@ -117,6 +117,7 @@ final class SM_V2_Service {
                     return $existing;
                 }
             }
+            if (!$this->config->rank_math_ready()) { throw new SM_V2_Error('rank_math_setup_required', 422); }
             $before = $this->store->snapshot($payload['entity_id']);
             sm_v2_validate_snapshot($before, true);
             if ($target_bound) {

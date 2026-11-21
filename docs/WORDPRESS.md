@@ -69,6 +69,21 @@ Unknown op/field, missing/null/empty/whitespace-only set values, лишние к
 `post_title`, H1, content/HTML, internal links не изменяются. Прежний `the_title` hook отключён. Наличие старых `_seo_master_h1`/`_seo_master_interlinks` не превращает их в реализованную capability.
 Title/description выводятся через core/Yoast/RankMath filters; без SEO-плагина description выводится в `wp_head` с `esc_attr`. JSON-LD выводится с `JSON_HEX_TAG|AMP|APOS|QUOT`, не может закрыть script element. Существующие значения повторно проверяются перед выводом.
 С Yoast/RankMath JSON-LD **manual/unsupported**: v2 отклоняет такую запись (`unsupported_field`, 422), graph filters оставляют сторонние узлы без изменений. Эта консервативная граница сохраняется до реальной merge/conflict compatibility matrix. Произвольная тема/плагин может создавать второй description/schema: публичный verifier обязателен, универсальное отсутствие дублей не заявляется.
+
+### Матрица метаданных со сторонними плагинами
+
+На WordPress 6.8.3, PHP 8.3.28, MariaDB 10.11.19 и Twenty Twenty-Five 1.3 проверяются два отдельных сочетания. [Yoast SEO 26.2](https://downloads.wordpress.org/plugin/wordpress-seo.26.2.zip) и [Rank Math 1.0.282](https://downloads.wordpress.org/plugin/seo-by-rank-math.1.0.282.zip) устанавливаются по одному в отдельный одноразовый WordPress.
+
+Для опубликованных post и page матрица проверяет signed pairing, dry-run без изменений, подписанную квитанцию, ровно один анонимно прочитанный title и description, rollback с восстановлением отсутствовавших и ранее заданных значений и запрет JSON-LD без записи в ledger. Заголовок записи и тело страницы сохраняются. Новая установка Rank Math требует подключить аккаунт или выбрать «Skip Now» в мастере настройки. До этого новые dry-run/apply возвращают `rank_math_setup_required` (422). Проверяются доступность сохранённой квитанции, повтор с тем же operation ID и откат даже после снятия настройки. [Мастер настройки Rank Math](https://rankmath.com/kb/how-to-setup/)
+
+Скачайте указанные ZIP в отдельный каталог и запустите команду из checkout с окружением для `native_contract` и доступом к тестовому Docker context. Скрипт сверяет закреплённые SHA-256 и устанавливает плагины в закрытую контейнерную сеть без публикации портов. Ревизия коннектора задаётся явно.
+
+```sh
+python -B -m tests.wordpress.seo_plugin_matrix --docker-context default --plugin-revision HEAD --plugins-dir /path/to/seo-plugin-zips
+```
+
+Эти сочетания покрывают title/description для части AC-08. Для приёмки RC также требуются проверенные H1 и внутренние ссылки, полный сценарий согласования и staging pilot. Другие темы, настройки и версии требуют собственных прогонов.
+
 ## Транзакционная модель и fail-closed
 Реализация в `includes/v2-store.php` требует обычный single-site-table mysqli/mysqlnd backend с trusted `$wpdb->prefix/posts/postmeta`, без `db.php` drop-in/sharding. Multisite/network activation и нестандартные database backends не сертифицированы.
 Проверяются:

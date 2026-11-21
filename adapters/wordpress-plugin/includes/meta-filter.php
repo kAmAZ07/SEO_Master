@@ -77,6 +77,11 @@ function seo_master_has_rank_math() {
     return defined('RANK_MATH_VERSION') || class_exists('RankMath') || function_exists('rank_math');
 }
 
+function seo_master_rank_math_ready(): bool {
+    return !seo_master_has_rank_math() || (is_callable(array('RankMath\\Helper', 'is_invalid_registration')) &&
+        !\RankMath\Helper::is_invalid_registration());
+}
+
 function seo_master_has_supported_seo_plugin() {
     return seo_master_has_yoast_seo() || seo_master_has_rank_math();
 }

@@ -103,10 +103,10 @@ class AppStand:
         self.wp = wp
         self.apps: list[str] = []
         self.images: dict[str, str] = {}
-        self.internal, self.executor, self.jwt = (secrets.token_hex(32) for _ in range(3))
+        self.internal, self.executor, self.client_execution, self.jwt = (secrets.token_hex(32) for _ in range(4))
         self.redis_password, self.rabbit_password = secrets.token_hex(32), secrets.token_hex(32)
         self.master = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
-        wp.private_values.extend([self.internal, self.executor, self.jwt, self.redis_password, self.rabbit_password, self.master])
+        wp.private_values.extend([self.internal, self.executor, self.client_execution, self.jwt, self.redis_password, self.rabbit_password, self.master])
 
     def build(self) -> None:
         for service, directory in (("api", "api_gateway"), ("management", "management_service"), ("client", "client_api_gateway")):
@@ -141,11 +141,15 @@ class AppStand:
         environment = {"ENVIRONMENT": "production", "DATABASE_URL": role_url, "LOG_LEVEL": "WARNING",
             "REDIS_URL": "redis://:" + self.redis_password + "@redis:6379/0", "RABBITMQ_HOST": "rabbitmq",
             "RABBITMQ_USER": "ar4", "RABBITMQ_PASSWORD": self.rabbit_password, "INTERNAL_API_KEY": self.internal,
-            "EXECUTOR_API_KEY": self.executor, "MANAGEMENT_EXECUTOR_API_KEY": self.executor,
             "JWT_SECRET_KEY": self.jwt, "MASTER_ENCRYPTION_KEY": self.master, "CORS_ORIGINS": "http://localhost",
             "CORS_ALLOW_CREDENTIALS": "false", "MANAGEMENT_SERVICE_URL": "http://management:8004",
             "API_GATEWAY_URL": "http://api:8000", "CLIENT_GATEWAY_URL": "http://client:8005", "NETPOLICY_PROFILE": "test"}
+        if service in {"api", "client"}:
+            environment["CLIENT_EXECUTION_API_KEY"] = self.client_execution
+        if service == "management":
+            environment["EXECUTOR_API_KEY"] = self.executor
         if service == "client":
+            environment["MANAGEMENT_EXECUTOR_API_KEY"] = self.executor
             assert project_id is not None
             environment.update(SEO_MASTER_HMAC_SECRET=self.wp.secret, SEO_MASTER_RECEIPT_SECRET=self.wp.receipt_secret,
                 WORDPRESS_V2_TARGETS_JSON=json.dumps({project_id: {"base_url": "http://wordpress.test", "site_id": self.wp.site_id,
@@ -278,6 +282,10 @@ def run_apps(wp: NativeWordPress) -> None:
                     issued_at=now-timedelta(days=1), expires_at=now-timedelta(hours=23), verified_at=now))
                 session.commit()
             request(client, "POST", "/internal/executions", token=token, body=references, headers={"X-Internal-API-Key": "forged"}, expected=401)
+            request(client, "POST", "/internal/executions", token=token, body=references,
+                headers={"X-Internal-API-Key": stand.internal}, expected=401)
+            request(client, "POST", "/internal/executions", body=references,
+                headers={"X-Client-Execution-Key": stand.client_execution}, expected=401)
             request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", body=references, expected=403)  # Existing HTTPBearer missing-header contract.
             request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=user["refreshToken"], body=references, expected=401)
             request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body={**references, "changes": {"title": "unreviewed"}}, expected=422)

@@ -60,6 +60,8 @@ Recovery policy хранится начиная с revision `20261114_005_recove
 
 Client запускает одну lifespan-задачу опроса каждые 5 секунд. `EXECUTION_RECOVERY_ENABLED=true` по умолчанию; нужны обе настроенные service keys длиной ≥32. Enabled с ненастроенными ключами/неработающей задачей даёт readiness503. Явный `false` отключает автоматический опрос; такой режим не является доказательством автоматического recovery. Несколько Client экземпляров безопасно делят lease через Management; бюджет общий, а не на процесс.
 
+Для входящих `/internal/executions` Client Gateway требует `X-Client-Execution-Key`. Этот ключ выдаётся только API Gateway и Client Gateway и применяется к входу apply, status, cancel и rollback. Пустой, короткий или совпавший с другими настроенными сервисными ключами credential блокирует обработку. Management по-прежнему независимо проверяет bearer, актуальный scope actor и версию approval. Прежний `X-Internal-API-Key` не авторизует этот вход.
+
 Ошибки различаются: `cms_unavailable`, `operation_not_found`, `receipt_invalid`, `integration_changed`, отдельно `lease_expired`; причины остановки — `attempts_exhausted`/`deadline_exceeded`. UI объясняет их по-русски. В `needs_reconciliation` Task остаётся IN_PROGRESS, действуют version fence и запрет повторного apply. Ручной выход означает видимый обязательный разбор: автоматического force/reset/new ID или небезопасной кнопки «повторить запись» нет. Сверка CMS подтверждает запись, но не публичную видимость страницы.
 
 ## Независимая публичная проверка и rollback

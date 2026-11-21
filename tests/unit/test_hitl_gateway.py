@@ -65,6 +65,7 @@ def stand(tmp_path, monkeypatch):
     monkeypatch.setattr(hitl_routes.httpx, "AsyncClient",
                         lambda **kwargs: original_client(transport=httpx.MockTransport(respond), **kwargs))
     monkeypatch.setattr(hitl_routes.settings, "INTERNAL_API_KEY", "k" * 32)
+    monkeypatch.setattr(hitl_routes.settings, "CLIENT_EXECUTION_API_KEY", "e" * 32)
     with TestClient(app) as client:
         yield client, maker, calls
 
@@ -146,6 +147,10 @@ def test_apply_requires_deploy_role_and_sends_only_original_references_to_client
     assert calls[-1].url.path == "/internal/executions"
     assert json.loads(calls[-1].content) == body
     assert calls[-1].headers["authorization"] == "Bearer original-access"
+    assert calls[-1].headers.get("x-client-execution-key") == "e" * 32
+    assert "x-internal-api-key" not in calls[-1].headers
+    assert calls[-2].headers["x-internal-api-key"] == "k" * 32
+    assert "x-client-execution-key" not in calls[-2].headers
 
 
 def test_apply_rejects_mutable_changes_and_path_task_mismatch_before_proxy(stand):

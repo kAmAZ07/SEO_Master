@@ -33,7 +33,7 @@ def main() -> None:
         browser = playwright.chromium.launch()
         context = browser.new_context(service_workers='block')
         context.set_default_timeout(15000)
-        for path in ('/internal/executions', '/api/internal/executions', '/api/client/keys'):
+        for path in ('/internal/executions', '/api/internal/executions', '/api/client/keys', '/changes/pending/example'):
             response = context.request.get('http://127.0.0.1:8080' + path)
             assert response.status == 404 and response.headers.get('content-type', '').startswith('text/html'), 'internal_ingress_boundary'
         denied = []

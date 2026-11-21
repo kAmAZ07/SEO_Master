@@ -10,6 +10,26 @@ from services.client_api_gateway import db
 from services.client_api_gateway.models import Base
 
 
+def test_retired_http_key_management_never_accesses_the_key_store(monkeypatch):
+    from services.client_api_gateway import main
+
+    secret = 'i' * 32
+    monkeypatch.setattr(main.settings, 'INTERNAL_API_KEY', secret)
+    # A dependency that fails before any database or key configuration can be read.
+    store = Mock(side_effect=AssertionError('retired key endpoint accessed DB'))
+    monkeypatch.setitem(main.app.dependency_overrides, db.get_db, lambda: store())
+    client = TestClient(main.app)
+    try:
+        prefix = '/api/client/keys/' + str(uuid4())
+        for method, path in [('GET', prefix), ('POST', prefix + '/rotate')]:
+            response = client.request(method, path, headers={'X-Internal-API-Key': secret})
+            assert response.status_code == 410
+            assert response.json() == {'detail': 'client_keys_managed_by_environment'}
+    finally:
+        client.close()
+    store.assert_not_called()
+
+
 @pytest.mark.parametrize('kind', ['missing', 'shared', 'executor', 'wrong', 'reused', 'unconfigured'])
 def test_execution_routes_reject_wrong_service_authority_before_executor(monkeypatch, kind):
     from services.client_api_gateway import main

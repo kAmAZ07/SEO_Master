@@ -47,6 +47,18 @@ def record_hash(value: dict[str, Any]) -> str:
     return hashlib.sha256(("SEO-MASTER-DEPLOYMENT-RECORD-V1\n" + canonical(value)).encode()).hexdigest()
 
 
+CMS_WRITE_QUARANTINE_SCHEMA = 'seo_master_restore_quarantine'
+
+
+def require_cms_dispatch(db: Session) -> None:
+    # The restore owner marks the database before attaching any runtime process.
+    # Check the catalog on every request, including on existing pooled connections.
+    quarantined = db.scalar(text('SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname=:schema)'),
+                            {'schema': CMS_WRITE_QUARANTINE_SCHEMA})
+    if quarantined is not False:
+        raise ApprovalError('cms_write_quarantined', 503)
+
+
 class ExecutionService:
     def __init__(self, db: Session, *, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc), fresh_days: int = 30,
                  verification_deadline_seconds: int = 300):
@@ -147,6 +159,7 @@ class ExecutionService:
 
     def queue_rollback(self, original_id: str, request: RollbackRequest, actor: UserActor) -> dict[str, Any]:
         try:
+            require_cms_dispatch(self.db)
             original = self._row(original_id)
             task = cast(TaskRow | None, self.db.query(Task).filter(Task.id == original.task_id).populate_existing().with_for_update().first())
             if task is None:
@@ -208,6 +221,7 @@ class ExecutionService:
 
     def queue(self, references: ExecutionRequest, actor: UserActor) -> dict[str, Any]:
         try:
+            require_cms_dispatch(self.db)
             task, _, version, scope, decision, _ = self._authorize(references, actor)
             existing = self.db.query(Changelog).filter(Changelog.id == references.operation_id).first()
             if existing is not None:
@@ -295,6 +309,7 @@ class ExecutionService:
     def reserve(self, references: ExecutionRequest, actor: UserActor, binding: WordPressBinding, before: Any,
                 *, preparation_lease: str | None = None, public_baseline: PublicObservation | None = None) -> dict[str, Any]:
         try:
+            require_cms_dispatch(self.db)
             initial = self._row(references.operation_id)
             _, version, _, intent, valid_until = self._authorize_operation(references, actor, initial)
             if parse_scope(binding.base_url).origin != version.target.origin:
@@ -356,6 +371,7 @@ class ExecutionService:
 
     def begin(self, operation_id: str, actor: UserActor, *, preparation_lease: str | None = None) -> dict[str, Any]:
         try:
+            require_cms_dispatch(self.db)
             initial = self._row(operation_id)
             record = initial.meta["record"]
             references = ExecutionRequest.model_validate({key: record[key] for key in ExecutionRequest.model_fields})

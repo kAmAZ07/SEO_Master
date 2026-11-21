@@ -7,6 +7,7 @@ import secrets
 import time
 
 from services.project_integrations.credentials_vault import CredentialsVault
+from services.management_service.execution_service import CMS_WRITE_QUARANTINE_SCHEMA
 from shared.hitl_execution import validate_receipt
 from tests.wordpress.native import POSTGRES, NativeWordPress
 
@@ -84,8 +85,20 @@ def check_restore(wp: NativeWordPress, source_db: str, *, master_key: str, expec
     dump = wp.run('exec', source_name, 'pg_dump', '-U', 'postgres', '-d', source_db,
                   '--no-owner', '--no-privileges', '--encoding=UTF8', timeout=40)
     assert expected_source_key not in dump and master_key not in dump
+    restore_sql = dump + f'\nCREATE SCHEMA IF NOT EXISTS {CMS_WRITE_QUARANTINE_SCHEMA};\n'
     wp.run('exec', '-i', target, 'psql', '-Xq', '--single-transaction', '-v', 'ON_ERROR_STOP=1',
-           '-U', 'postgres', '-d', RESTORE_DB, stdin=dump, timeout=50)
+           '-U', 'postgres', '-d', RESTORE_DB, stdin=restore_sql, timeout=50)
+    assert query(target, RESTORE_DB, f"SELECT to_regnamespace('{CMS_WRITE_QUARANTINE_SCHEMA}') IS NOT NULL") == 't'
+    query(target, RESTORE_DB, 'CREATE ROLE seo_restore_inspector NOSUPERUSER NOINHERIT NOLOGIN')
+    marker = query(target, RESTORE_DB, f'''SET ROLE seo_restore_inspector;
+        DO $$ BEGIN
+            BEGIN DROP SCHEMA {CMS_WRITE_QUARANTINE_SCHEMA};
+                RAISE EXCEPTION 'unprivileged role removed the quarantine';
+            EXCEPTION WHEN insufficient_privilege THEN NULL;
+            END;
+        END $$;
+        SELECT to_regnamespace('{CMS_WRITE_QUARANTINE_SCHEMA}') IS NOT NULL''')
+    assert marker.splitlines()[-1] == 't'
     assert snapshot(target, RESTORE_DB) == before
 
     ciphertext = query(target, RESTORE_DB, 'SELECT encrypted_creds FROM audit_schema.project_integrations')

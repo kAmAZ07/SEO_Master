@@ -187,3 +187,5 @@ Execution authority использует отдельные no-DDL runtime roles
 `legacy_project_id_map` и совпадение host не доказывают owner/workspace старой строки. При переносе нельзя выдавать права по одному `matched`; нужны проверенная карта владельцев и сохранность истории. Alembic source adapter блокирует autogeneration при неполной metadata и не заменяет проверку самих revisions.
 
 Bootstrap production-ключей намеренно отсутствует; `--mode prod` не является production deploy-процессом. Для настоящего staging/production необходимы внешний secret provider, TLS/ingress, миграционное разрешение, backup/restore, immutable artifact promotion и согласованная проверка. Никакая сборка или проверка Compose не меняет рабочую БД и не включает старый автодеплой.
+
+При восстановлении разворачивайте отдельную БД без подключённых сервисов и CMS-ключей. Владелец целевой БД создаёт `CREATE SCHEMA IF NOT EXISTS seo_master_restore_quarantine;` и проверяет наличие схемы до выдачи доступа runtime. Схема остаётся во владении роли восстановления. Полный порядок сверки данных и допуска среды описан в [BACKUP.md](BACKUP.md).

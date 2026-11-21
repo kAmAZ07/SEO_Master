@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from services.management_service.approval_policy import ApprovalError, UserActor
 from services.management_service.approval_service import TaskRow
-from services.management_service.execution_service import ExecutionService, OperationRow
+from services.management_service.execution_service import ExecutionService, OperationRow, require_cms_dispatch
 from services.management_service.models import Task
 from services.management_service.preparation_policy import FAILED_PHASES, MAX_ATTEMPTS, OPEN_PHASES, PreparationState, failure_phase
 from shared.hitl_execution import ExecutionRequest, PreparationError, PreparationFailure
@@ -35,6 +35,7 @@ class ExecutionPreparation:
     def claim(self, operation_id: str, actor: UserActor) -> dict[str, Any]:
         result: dict[str, Any]
         try:
+            require_cms_dispatch(self.db)
             _, row = self._locked(operation_id)
             self.executions.approvals.project_scope(str(row.project_id), actor, Permission.READ)
             if row.meta["record"]["actor_id"] != actor.user_id:
@@ -86,6 +87,7 @@ class ExecutionPreparation:
 
     def ready(self, operation_id: str, token: str) -> dict[str, Any]:
         try:
+            require_cms_dispatch(self.db)
             _, row = self._locked(operation_id)
             value = PreparationState.load(row.meta.get("preparation"))
             now = self.clock()

@@ -15,6 +15,7 @@ from services.client_api_gateway.db import get_db, init_db
 from services.client_api_gateway.db.models import DeploymentLog
 from services.client_api_gateway.hitl_executor import HITLExecutor
 from services.client_api_gateway import recovery
+from services.client_api_gateway import tilda_worker
 from shared.hitl_execution import ExecutionError, ExecutionRequest
 from shared.hitl_rollback import RollbackRequest
 from services.client_api_gateway.routes import (
@@ -147,6 +148,7 @@ async def startup_event():
         logger.error('Failed to initialize client gateway database', extra={'error': str(exc)})
         raise
     app.state.execution_recovery_task = recovery.start()
+    app.state.tilda_read_task = tilda_worker.start()
     logger.info(
         f'Starting {settings.SERVICE_NAME}',
         extra={
@@ -159,6 +161,7 @@ async def startup_event():
 @app.on_event('shutdown')
 async def shutdown_event():
     await recovery.stop(getattr(app.state, 'execution_recovery_task', None))
+    await recovery.stop(getattr(app.state, 'tilda_read_task', None))
     logger.info(f'Shutting down {settings.SERVICE_NAME}')
 
 

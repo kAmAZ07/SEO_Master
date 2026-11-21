@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 from typing import Literal
 
 
@@ -26,7 +27,7 @@ SECRET_NAMES = (
     "CLIENT_EXECUTION_API_KEY",
 )
 UPGRADE_SECRET_NAMES = ("MANAGEMENT_EXECUTOR_API_KEY", "CLIENT_EXECUTION_API_KEY")
-OPTIONAL_CONFIGURATION_NAMES = frozenset(("WORDPRESS_V2_TARGETS_JSON", "SEO_MASTER_HMAC_SECRET", "SEO_MASTER_RECEIPT_SECRET", "DOMAIN_VERIFICATION_FRESH_DAYS", "VERIFICATION_DEADLINE_SECONDS"))
+OPTIONAL_CONFIGURATION_NAMES = frozenset(("WORDPRESS_V2_TARGETS_JSON", "SEO_MASTER_HMAC_SECRET", "SEO_MASTER_RECEIPT_SECRET", "DOMAIN_VERIFICATION_FRESH_DAYS", "VERIFICATION_DEADLINE_SECONDS", "TILDA_WEBHOOK_PUBLIC_URL", "TILDA_REQUESTS_PER_HOUR", "TILDA_SYNC_ENABLED"))
 CONFIGURATION_NAMES = frozenset(("COMPOSE_PROJECT_NAME", *SECRET_NAMES))
 FRONTEND_ROOT_FILES = frozenset((
     "package.json", "package-lock.json", "index.html", "vite.config.ts",
@@ -197,6 +198,17 @@ def load_configuration(root: Path, mode: Mode, *, _allow_missing_upgrade_keys: b
         value = values["VERIFICATION_DEADLINE_SECONDS"]
         if re.fullmatch(r"[0-9]{2,4}", value) is None or not 30 <= int(value) <= 3600:
             raise ValueError("Недопустимый срок публичной проверки")
+    if 'TILDA_SYNC_ENABLED' in values and values['TILDA_SYNC_ENABLED'] not in {'true', 'false'}:
+        raise ValueError('Invalid Tilda reader switch')
+    if 'TILDA_REQUESTS_PER_HOUR' in values:
+        value = values['TILDA_REQUESTS_PER_HOUR']
+        if re.fullmatch(r'[0-9]{1,3}', value) is None or not 1 <= int(value) <= 150:
+            raise ValueError('Invalid Tilda read quota')
+    if values.get('TILDA_WEBHOOK_PUBLIC_URL'):
+        target = urlsplit(values['TILDA_WEBHOOK_PUBLIC_URL'])
+        if (target.scheme != 'https' or not target.hostname or target.username or target.password
+                or target.query or target.fragment or target.path != '/api/tilda/webhook'):
+            raise ValueError('Invalid public Tilda callback base URL')
     return Configuration(
         environment_file, validate_project_name(values["COMPOSE_PROJECT_NAME"], mode),
     )

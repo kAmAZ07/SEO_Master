@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
 
 from config.logging_config import get_logger
 from services.api_gateway.config import settings, is_development
+from shared.tilda_contract import safe_callback_path
 
 logger = get_logger(__name__)
 
@@ -28,7 +29,7 @@ def setup_error_handlers(app: FastAPI) -> None:
                 "request_id": request_id,
                 "status_code": exc.status_code,
                 "detail": exc.detail,
-                "path": request.url.path,
+                "path": safe_callback_path(request.url.path),
                 "method": request.method,
                 "service": settings.SERVICE_NAME
             }
@@ -66,7 +67,7 @@ def setup_error_handlers(app: FastAPI) -> None:
             extra={
                 "request_id": request_id,
                 "errors": errors,
-                "path": request.url.path,
+                "path": safe_callback_path(request.url.path),
                 "method": request.method,
                 "service": settings.SERVICE_NAME
             }
@@ -102,7 +103,7 @@ def setup_error_handlers(app: FastAPI) -> None:
             extra={
                 "request_id": request_id,
                 "errors": errors,
-                "path": request.url.path,
+                "path": safe_callback_path(request.url.path),
                 "method": request.method,
                 "service": settings.SERVICE_NAME
             }
@@ -131,7 +132,7 @@ def setup_error_handlers(app: FastAPI) -> None:
                 "request_id": request_id,
                 "error": str(exc),
                 "error_type": type(exc).__name__,
-                "path": request.url.path,
+                "path": safe_callback_path(request.url.path),
                 "method": request.method,
                 "service": settings.SERVICE_NAME
             }
@@ -164,7 +165,7 @@ def setup_error_handlers(app: FastAPI) -> None:
                 "request_id": request_id,
                 "error": str(exc),
                 "error_type": type(exc).__name__,
-                "path": request.url.path,
+                "path": safe_callback_path(request.url.path),
                 "method": request.method,
                 "service": settings.SERVICE_NAME
             },

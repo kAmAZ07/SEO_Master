@@ -9,6 +9,7 @@ from services.api_gateway.config import settings, is_development
 from services.api_gateway.middleware import setup_cors, LoggingMiddleware, setup_error_handlers
 from services.api_gateway.routes import health_router, integrations_router, plugin_router, public_router, protected_router
 from config.logging_config import get_logger
+from services.api_gateway.routes.tilda_routes import router as tilda_router
 
 logger = get_logger(__name__)
 
@@ -29,6 +30,7 @@ app.include_router(public_router)
 app.include_router(protected_router)
 app.include_router(integrations_router)
 app.include_router(plugin_router)
+app.include_router(tilda_router)
 
 
 @app.on_event("startup")

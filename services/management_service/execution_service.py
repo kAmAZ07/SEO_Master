@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from services.management_service.approval_policy import ApprovalError, DecisionRecord, UserActor, record_state
 from services.management_service.approval_service import ApprovalService, ApprovalRow, TaskRow
-from services.management_service.models import Changelog, HITLApproval, HITLStatus, Task, TaskStatus
+from services.management_service.models import Changelog, HITLApproval, HITLStatus, Task, TaskStatus, TaskType
 from shared.hitl_execution import ExecutionRequest, WordPressBinding, canonical, digest, make_command, validate_receipt
 from shared.projects.roles import Permission, has_permission
 from shared.projects.scope import parse_scope
@@ -71,6 +71,9 @@ class ExecutionService:
                 or record_state(approval.meta or {}, version=version, now=self.clock()) != "approved"):
             raise ApprovalError("execution_approval_invalid")
         decision = DecisionRecord.model_validate((approval.meta or {})["decision_record"])
+        if (getattr(task, 'task_type', None) == TaskType.UPDATE_TILDA_PAGE
+                or (version.target.entity is not None and version.target.entity.kind == 'tilda_page')):
+            raise ApprovalError('write_unsupported')
         if decision.workspace_id != scope["workspace_id"] or decision.approval_id != str(approval.id):
             raise ApprovalError("execution_approval_invalid")
         approver_role = self.db.execute(text(

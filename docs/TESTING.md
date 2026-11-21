@@ -17,6 +17,8 @@ python -B -m tests.wordpress.run --php <explicit-php-with-sodium>
 
 Остальные backend-профили: `audit`, `semantic`, `reporting`, `tilda`. Frontend: `tsc --noEmit`, `npm run lint`, `npm test`, `npm run build` в `frontend/`. Полные обязательные команды, strict mypy/ruff и PostgreSQL-набор определены в `.github/workflows/ci.yml`; общий интерфейс — `scripts/project.py` / `scripts/project.ps1` / `Makefile`.
 
+Tilda read-only/manual Beta: [контракт и ограничения](TILDA.md). Профиль `tilda` проверяет документированный read-протокол на fixtures и отсутствие upstream-записи. `tests/integration/test_tilda_postgres.py` запускается с `TEST_PG_ADMIN_URL` только на изолированном разрешённом PostgreSQL: миграции, durable ACK, dedup, квота, leases, scope и отдельное сравнение одобренной версии. Frontend проверяет восстановление по тому же check ID и отклонение ложных успешных ответов. Эти уровни не доказывают доставку реального callback, работоспособность аккаунта Tilda или автоматическую публикацию.
+
 Настоящий CMS/HITL стенд запускается из management-test окружения:
 
 ```text

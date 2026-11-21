@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_prefix='TILDA_', extra='ignore')
 
     port: int = 8010
-    base_url: str = Field(default='https://api.tildacdn.info/v1')
+    base_url: Literal['https://api.tildacdn.info/v1'] = 'https://api.tildacdn.info/v1'
     public_key: str | None = None
     secret_key: str | None = None
 
@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     webhook_secret: str | None = None
     webhook_forward_url: str | None = None
     webhook_forward_api_key: str | None = None
-    request_timeout_seconds: float = 20.0
+    request_timeout_seconds: float = Field(default=20.0, ge=0.5, le=20)
     mock_mode: bool = False
     schema_policy: Literal['warn', 'require_hitl', 'strict'] = 'warn'
 

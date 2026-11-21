@@ -195,7 +195,7 @@ HITL означает, что важные изменения не публик�
 | [reporting-service](services/reporting_service) | Отчёты, CSV и данные внешней аналитики |
 | [project_integrations](services/project_integrations) | Хранение и отображение подключений проекта |
 | [wordpress-plugin](adapters/wordpress-plugin) | Применение изменений внутри WordPress |
-| [tilda-adapter](adapters/tilda-adapter) | Применение изменений на Tilda |
+| [tilda-adapter](adapters/tilda-adapter) | [Чтение Tilda и ручное внедрение, Beta](docs/TILDA.md); автоматическая запись не поддерживается |
 
 Подробная схема описана в [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -209,7 +209,7 @@ HITL означает, что важные изменения не публик�
 - имитация WordPress API в [tests/e2e/mocks/mock_wp_api.py](tests/e2e/mocks/mock_wp_api.py);
 - нагрузочный сценарий для Client API Gateway в [tests/load/client_api_gateway_k6.js](tests/load/client_api_gateway_k6.js).
 
-E2E-стенд позволяет показать работу WordPress/Tilda/HITL без подключения реального сайта. Это важно для безопасной демонстрации: проверяется контракт взаимодействия, но реальные страницы не изменяются.
+Изолированный WordPress/HITL-стенд проверяет взаимодействие с собственной временной CMS. Tilda read-only/manual проверяется отдельно: fixtures протокола и PostgreSQL не заменяют приёмку с реальным аккаунтом Tilda.
 
 ## Безопасность
 

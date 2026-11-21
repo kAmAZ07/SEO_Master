@@ -8,6 +8,7 @@ import { useAppDispatch, useAppSelector } from '../store/hooks'
 import type { HITLTask } from '../types/hitl'
 import OperationDetails from '../components/hitl/OperationDetails'
 import PriorityPanel from '../components/hitl/PriorityPanel'
+import TildaManualCheck from '../components/hitl/TildaManualCheck'
 
 const formatJson = (value?: Record<string, unknown>) => {
   if (!value || Object.keys(value).length === 0) {
@@ -301,6 +302,7 @@ const HITL = () => {
                     {task.rejectionReason && <p className="mt-2 text-sm text-gray-700">Причина отклонения: {task.rejectionReason}</p>}
                     {(canApply || reconcile) && <Button type="button" className="mt-3 w-full" disabled={isProcessing}
                       onClick={() => void handleApply(task)}>{reconcile ? 'Проверить результат публикации' : preparing ? 'Продолжить подготовку публикации' : 'Применить одобренные изменения'}</Button>}
+                    {task.tildaTarget && <TildaManualCheck key={`${task.taskId}:${task.recommendationVersionId}:${task.contentHash}`} task={task} />}
                     {canCancel && <Button type="button" variant="outline" className="mt-3 w-full" disabled={isProcessing}
                       onClick={() => void handleCancel(task)}>Отменить операцию до публикации</Button>}
                     {task.execution && <p role="status" className="mt-2 text-sm text-gray-700">{executionLabel[task.execution.state] || 'Неизвестный статус операции'}</p>}

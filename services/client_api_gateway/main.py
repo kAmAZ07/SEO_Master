@@ -15,6 +15,7 @@ from services.client_api_gateway.db import get_db, init_db
 from services.client_api_gateway.db.models import DeploymentLog
 from services.client_api_gateway.hitl_executor import HITLExecutor
 from services.client_api_gateway import recovery
+from services.client_api_gateway import tilda_worker
 from shared.hitl_execution import ExecutionError, ExecutionRequest
 from shared.hitl_rollback import RollbackRequest
 from services.client_api_gateway.routes import (
@@ -69,6 +70,16 @@ def _require_internal_api_key(
         )
 
 
+def _require_execution_caller(x_client_execution_key: str | None = Header(default=None)) -> None:
+    key = settings.CLIENT_EXECUTION_API_KEY.encode()
+    if len(key) < 32 or any(hmac.compare_digest(key, (other or '').encode()) for other in (
+        settings.INTERNAL_API_KEY, settings.MANAGEMENT_EXECUTOR_API_KEY, settings.TILDA_INTERNAL_API_KEY,
+    )):
+        raise HTTPException(503, 'client_execution_identity_unconfigured')
+    if x_client_execution_key is None or not hmac.compare_digest(x_client_execution_key.encode(), key):
+        raise HTTPException(401, 'client_execution_identity_required')
+
+
 def _normalize_cors_list(origins: str) -> List[str]:
     if not origins:
         return ['*']
@@ -99,7 +110,7 @@ app.include_router(tilda_webhook_router)
 
 @app.post('/internal/executions')
 async def execute_approved_operation(payload: ExecutionRequest, request: Request,
-                                     _auth: None = Depends(_require_internal_api_key)):
+                                     _auth: None = Depends(_require_execution_caller)):
     try:
         return await HITLExecutor(request.headers.get('authorization', '')).execute(payload)
     except ExecutionError as exc:
@@ -108,19 +119,19 @@ async def execute_approved_operation(payload: ExecutionRequest, request: Request
 
 @app.get('/internal/executions/{operation_id}')
 async def read_approved_operation(operation_id: uuid.UUID, request: Request,
-                                  _auth: None = Depends(_require_internal_api_key)):
+                                  _auth: None = Depends(_require_execution_caller)):
     return await HITLExecutor(request.headers.get('authorization', '')).read(str(operation_id))
 
 
 @app.post('/internal/executions/{operation_id}/cancel')
 async def cancel_prepared_operation(operation_id: uuid.UUID, request: Request,
-                                    _auth: None = Depends(_require_internal_api_key)) -> dict[str, Any]:
+                                    _auth: None = Depends(_require_execution_caller)) -> dict[str, Any]:
     return await HITLExecutor(request.headers.get('authorization', '')).cancel(str(operation_id))
 
 
 @app.post('/internal/executions/{operation_id}/rollback')
 async def rollback_operation(operation_id: uuid.UUID, payload: RollbackRequest, request: Request,
-                             _auth: None = Depends(_require_internal_api_key)) -> dict[str, Any]:
+                             _auth: None = Depends(_require_execution_caller)) -> dict[str, Any]:
     try:
         return await HITLExecutor(request.headers.get('authorization', '')).rollback(str(operation_id), payload)
     except ExecutionError as exc:
@@ -137,6 +148,7 @@ async def startup_event():
         logger.error('Failed to initialize client gateway database', extra={'error': str(exc)})
         raise
     app.state.execution_recovery_task = recovery.start()
+    app.state.tilda_read_task = tilda_worker.start()
     logger.info(
         f'Starting {settings.SERVICE_NAME}',
         extra={
@@ -149,6 +161,7 @@ async def startup_event():
 @app.on_event('shutdown')
 async def shutdown_event():
     await recovery.stop(getattr(app.state, 'execution_recovery_task', None))
+    await recovery.stop(getattr(app.state, 'tilda_read_task', None))
     logger.info(f'Shutting down {settings.SERVICE_NAME}')
 
 

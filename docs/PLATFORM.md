@@ -159,6 +159,12 @@ Make предоставляет `bootstrap`, `config`, `up`, `test`, `e2e`, `lin
 ## Канонический Compose и образы
 `docker-compose.yml` — единственный источник топологии; dev/prod-файлы — overlays, не самостоятельные стеки. Они включают API Gateway, audit/semantic/reporting, client gateway, Tilda, management web/worker/beat и frontend. Management-очереди задаются `services.management_service.tasks.celery_app:celery_app`.
 
+Сеть `ingress` соединяет только frontend и API Gateway. Frontend публикует порт на `127.0.0.1:8080`. Остальные сервисы не публикуют порты на хост. Nginx возвращает 404 для префиксов `/internal`, `/api/internal`, `/api/client` и `/changes/pending`, включая точные пути и подмаршруты.
+
+API Gateway и Client Gateway получают отдельный `CLIENT_EXECUTION_API_KEY` для `/internal/executions`. Дополнить старую локальную конфигурацию можно повторным `scripts/project.py bootstrap`: команда добавит недостающий ключ и сохранит существующие значения. При настройке внешней среды оба сервиса должны получить один новый случайный ключ. Остальным сервисам этот ключ не передаётся. Направление Client → Management использует прежний отдельный executor credential. [Контракт исполнения](EXECUTION.md).
+
+Оператор задаёт ключи прежнего Client HMAC-протокола по проекту через `CLIENT_API_HMAC_KEYS_JSON` в конфигурации сервиса. Client синхронизирует метаданные ключей при проверке подписанного запроса. Старые HTTP-маршруты чтения и ротации `/api/client/keys/{project_id}` и `/api/client/keys/{project_id}/rotate` на Client возвращают 410 без обращения к БД. Общий сервисный ключ больше не позволяет читать или менять эти записи. Ключи WordPress v2 настраиваются отдельно по [контракту WordPress](WORDPRESS.md).
+
 Корневой `Dockerfile` — alias management-образа. Другие сервисы собираются своими Dockerfile. Python-образы используют hash-lock, Python 3.11 и non-root runtime; исходники root-owned, writable только ограниченные tmpfs для временных файлов/логов/отчётов. Frontend собирается `docker/frontend.Dockerfile` с `npm ci`, работает через unprivileged nginx и проксирует `/api/` без изменения пути. Read-only/tmpfs поведение требует runtime-проверки приложения.
 
 Внешние base/runtime images закреплены SHA-256 digests. Digest проверяет идентичность артефакта, но не его запуск, отсутствие CVE или актуальность upstream. Node — 24.14.1, Python — 3.11-slim-bookworm, PostgreSQL — major 15. Major upgrade и перенос существующих томов требуют отдельной процедуры.

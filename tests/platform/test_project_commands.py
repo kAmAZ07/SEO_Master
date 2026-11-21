@@ -257,6 +257,28 @@ class ProjectCommandTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 project.bootstrap(root, "prod")
 
+    def test_tilda_configuration_bounds_quota_and_protects_callback_base(self) -> None:
+        cases = {
+            'TILDA_SYNC_ENABLED': ('true', 'false', 'yes', '1'),
+            'TILDA_REQUESTS_PER_HOUR': ('1', '150', '0', '151', '-1', '1.5'),
+            'TILDA_WEBHOOK_PUBLIC_URL': ('', 'https://app.example/api/tilda/webhook',
+                'http://app.example/api/tilda/webhook', 'https://user:pass@app.example/api/tilda/webhook',
+                'https://app.example/api/tilda/webhook?token=x', 'https://app.example/other'),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = project.bootstrap(root, 'dev')
+            original = path.read_text(encoding='utf-8')
+            for name, values in cases.items():
+                for index, value in enumerate(values):
+                    with self.subTest(name=name, value=value):
+                        path.write_text(original + f'{name}={value}\n', encoding='utf-8')
+                        if index < 2:
+                            project.load_configuration(root, 'dev')
+                        else:
+                            with self.assertRaises(ValueError):
+                                project.load_configuration(root, 'dev')
+
     def test_configuration_rejects_unknown_values_and_linked_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -276,7 +298,7 @@ class ProjectCommandTests(unittest.TestCase):
             root = Path(directory)
             path = project.bootstrap(root, "dev")
             legacy = "\n".join(line for line in path.read_text(encoding="utf-8").splitlines()
-                               if not line.startswith("MANAGEMENT_EXECUTOR_API_KEY=")) + "\n"
+                               if line.partition("=")[0] not in {"MANAGEMENT_EXECUTOR_API_KEY", "CLIENT_EXECUTION_API_KEY"}) + "\n"
             path.write_text(legacy, encoding="utf-8")
             with self.assertRaises(ValueError):
                 project.load_configuration(root, "dev")
@@ -284,8 +306,14 @@ class ProjectCommandTests(unittest.TestCase):
             upgraded = path.read_text(encoding="utf-8")
             self.assertTrue(upgraded.startswith(legacy))
             self.assertEqual(upgraded.count("MANAGEMENT_EXECUTOR_API_KEY="), 1)
+            self.assertEqual(upgraded.count("CLIENT_EXECUTION_API_KEY="), 1)
             project.bootstrap(root, "dev")
             self.assertEqual(path.read_text(encoding="utf-8"), upgraded)
+            values = dict(line.split("=", 1) for line in upgraded.splitlines())
+            values["CLIENT_EXECUTION_API_KEY"] = values["INTERNAL_API_KEY"]
+            path.write_text("".join(f"{name}={value}\n" for name, value in values.items()), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                project.load_configuration(root, "dev")
     def test_up_and_e2e_fail_closed_before_docker_until_migration_gate_exists(self) -> None:
         with patch("scripts.project.subprocess.run") as run:
             for action in ("up", "e2e"):

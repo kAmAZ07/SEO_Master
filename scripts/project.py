@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 from typing import Literal
 
 
@@ -23,8 +24,10 @@ SECRET_NAMES = (
     "POSTGRES_PASSWORD", "RUNTIME_DATABASE_PASSWORD", "REDIS_PASSWORD", "RABBITMQ_PASSWORD",
     "JWT_SECRET_KEY", "INTERNAL_API_KEY", "MANAGEMENT_EXECUTOR_API_KEY", "TILDA_INTERNAL_API_KEY",
     "TILDA_WEBHOOK_SECRET", "MASTER_ENCRYPTION_KEY",
+    "CLIENT_EXECUTION_API_KEY",
 )
-OPTIONAL_CONFIGURATION_NAMES = frozenset(("WORDPRESS_V2_TARGETS_JSON", "SEO_MASTER_HMAC_SECRET", "SEO_MASTER_RECEIPT_SECRET", "DOMAIN_VERIFICATION_FRESH_DAYS", "VERIFICATION_DEADLINE_SECONDS"))
+UPGRADE_SECRET_NAMES = ("MANAGEMENT_EXECUTOR_API_KEY", "CLIENT_EXECUTION_API_KEY")
+OPTIONAL_CONFIGURATION_NAMES = frozenset(("WORDPRESS_V2_TARGETS_JSON", "SEO_MASTER_HMAC_SECRET", "SEO_MASTER_RECEIPT_SECRET", "DOMAIN_VERIFICATION_FRESH_DAYS", "VERIFICATION_DEADLINE_SECONDS", "TILDA_WEBHOOK_PUBLIC_URL", "TILDA_REQUESTS_PER_HOUR", "TILDA_SYNC_ENABLED"))
 CONFIGURATION_NAMES = frozenset(("COMPOSE_PROJECT_NAME", *SECRET_NAMES))
 FRONTEND_ROOT_FILES = frozenset((
     "package.json", "package-lock.json", "index.html", "vite.config.ts",
@@ -122,15 +125,18 @@ def bootstrap(root: Path, mode: Mode) -> Path:
     validate_owned_path(root, directory)
     validate_owned_path(root, environment_file)
     if environment_file.exists():
-        load_configuration(root, mode, _legacy_executor=True)
+        load_configuration(root, mode, _allow_missing_upgrade_keys=True)
         previous = environment_file.read_text(encoding="utf-8")
-        if not any(line.startswith("MANAGEMENT_EXECUTOR_API_KEY=") for line in previous.splitlines()):
+        present = {line.partition("=")[0] for line in previous.splitlines()}
+        missing = [name for name in UPGRADE_SECRET_NAMES if name not in present]
+        if missing:
             # Only extend the validated private legacy config; never rotate its existing secrets.
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=directory,
-                                             prefix="executor-upgrade-", delete=False) as stream:
+                                             prefix="service-key-upgrade-", delete=False) as stream:
                 replacement = Path(stream.name)
                 restrict_permissions(replacement)
-                stream.write(previous.rstrip("\r\n") + "\nMANAGEMENT_EXECUTOR_API_KEY=" + secrets.token_urlsafe(32) + "\n")
+                stream.write(previous.rstrip("\r\n") + "\n")
+                stream.writelines(f"{name}={secrets.token_urlsafe(32)}\n" for name in missing)
             try:
                 os.replace(replacement, environment_file)
             finally:
@@ -151,7 +157,7 @@ def bootstrap(root: Path, mode: Mode) -> Path:
     return load_configuration(root, mode).environment_file
 
 
-def load_configuration(root: Path, mode: Mode, *, _legacy_executor: bool = False) -> Configuration:
+def load_configuration(root: Path, mode: Mode, *, _allow_missing_upgrade_keys: bool = False) -> Configuration:
     environment_file = root.resolve(strict=True) / ".seo-local" / mode / "environment.env"
     validate_owned_path(root, environment_file)
     validate_private_permissions(environment_file.parent)
@@ -164,14 +170,18 @@ def load_configuration(root: Path, mode: Mode, *, _legacy_executor: bool = False
         if not separator or name not in CONFIGURATION_NAMES | OPTIONAL_CONFIGURATION_NAMES or name in values:
             raise ValueError("Недопустимая структура локальной конфигурации")
         values[name] = value
-    required = CONFIGURATION_NAMES - {"MANAGEMENT_EXECUTOR_API_KEY"} if _legacy_executor else CONFIGURATION_NAMES
+    required = CONFIGURATION_NAMES - set(UPGRADE_SECRET_NAMES) if _allow_missing_upgrade_keys else CONFIGURATION_NAMES
     if not required <= values.keys():
         raise ValueError("Отсутствует обязательная локальная настройка")
     for name in SECRET_NAMES:
-        if name == "MANAGEMENT_EXECUTOR_API_KEY" and _legacy_executor and name not in values:
+        if name not in values:
             continue
         if re.fullmatch(r"[A-Za-z0-9_-]{43}=?", values[name]) is None:
             raise ValueError("Недопустимый формат локального ключа")
+    execution_key = values.get("CLIENT_EXECUTION_API_KEY")
+    if execution_key is not None and any(secrets.compare_digest(execution_key, values.get(name, ""))
+                                         for name in SECRET_NAMES if name != "CLIENT_EXECUTION_API_KEY"):
+        raise ValueError("Для вызовов Client Execution нужен отдельный ключ")
     for name in ("SEO_MASTER_HMAC_SECRET", "SEO_MASTER_RECEIPT_SECRET"):
         if name in values and (re.fullmatch(r"[0-9a-f]{64,128}", values[name]) is None or len(set(values[name])) < 8):
             raise ValueError("Недопустимый формат CMS-ключа")
@@ -188,6 +198,17 @@ def load_configuration(root: Path, mode: Mode, *, _legacy_executor: bool = False
         value = values["VERIFICATION_DEADLINE_SECONDS"]
         if re.fullmatch(r"[0-9]{2,4}", value) is None or not 30 <= int(value) <= 3600:
             raise ValueError("Недопустимый срок публичной проверки")
+    if 'TILDA_SYNC_ENABLED' in values and values['TILDA_SYNC_ENABLED'] not in {'true', 'false'}:
+        raise ValueError('Invalid Tilda reader switch')
+    if 'TILDA_REQUESTS_PER_HOUR' in values:
+        value = values['TILDA_REQUESTS_PER_HOUR']
+        if re.fullmatch(r'[0-9]{1,3}', value) is None or not 1 <= int(value) <= 150:
+            raise ValueError('Invalid Tilda read quota')
+    if values.get('TILDA_WEBHOOK_PUBLIC_URL'):
+        target = urlsplit(values['TILDA_WEBHOOK_PUBLIC_URL'])
+        if (target.scheme != 'https' or not target.hostname or target.username or target.password
+                or target.query or target.fragment or target.path != '/api/tilda/webhook'):
+            raise ValueError('Invalid public Tilda callback base URL')
     return Configuration(
         environment_file, validate_project_name(values["COMPOSE_PROJECT_NAME"], mode),
     )

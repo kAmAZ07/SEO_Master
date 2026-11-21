@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 import unittest
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DOCKERFILES = {
@@ -18,6 +20,18 @@ RUNTIME_DOCKERFILES = {
 
 
 class StackPolicyTests(unittest.TestCase):
+    def test_ingress_reaches_only_api_and_no_internal_services_publish_host_ports(self) -> None:
+        config = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+        services = config["services"]
+        self.assertEqual(set(services["frontend"]["networks"]), {"ingress"})
+        self.assertEqual({name for name, service in services.items() if "ingress" in service["networks"]},
+                         {"frontend", "api-gateway"})
+        self.assertEqual({name: service["ports"] for name, service in services.items() if "ports" in service},
+                         {"frontend": ["127.0.0.1:8080:8080"]})
+        self.assertEqual({name for name, service in services.items() if
+                          "CLIENT_EXECUTION_API_KEY" in service.get("environment", {})},
+                         {"api-gateway", "client-api-gateway"})
+
     def test_runtime_images_are_pinned_hashed_and_non_root(self) -> None:
         for filename, profile in RUNTIME_DOCKERFILES.items():
             with self.subTest(filename=filename):

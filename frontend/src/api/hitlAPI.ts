@@ -137,7 +137,10 @@ const normalizeHITLTask = (value: unknown): HITLTask => {
     authorizationStatus: asString(item.authorization_status, 'invalidated'),
     recommendationVersionId: asString(version.version_id) || null,
     contentHash: asString(version.content_hash) || null,
-    managedTarget: version.execution_mode === 'managed' && !!asObject(version.target).entity,
+    tildaTarget: task?.taskType === 'UPDATE_TILDA_PAGE' || asObject(asObject(version.target).entity).kind === 'tilda_page',
+    manualCheckFields: Array.isArray(version.changes) ? version.changes.map(asObject).filter(change => change.mode !== 'unchanged')
+      .map(change => ({ 'head.title': 'title', 'head.description': 'description', 'head.meta_description': 'description', 'head.jsonld': 'jsonld' })[asString(change.path)] ?? asString(change.path)) : [],
+    managedTarget: version.execution_mode === 'managed' && ['post', 'page'].includes(asString(asObject(asObject(version.target).entity).kind)) && task?.taskType !== 'UPDATE_TILDA_PAGE',
     execution: typeof execution.operation_id === 'string' ? {
       operationId: execution.operation_id, state: asString(execution.state),
       recommendationVersionId: asString(execution.recommendation_version_id), contentHash: asString(execution.content_hash),

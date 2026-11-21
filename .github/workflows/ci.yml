@@ -62,6 +62,18 @@ jobs:
           python -m pip install --require-hashes --only-binary=:all: -r locks/tooling.txt
       - name: Чистая установка и все unit-тесты выбранного AR-сервиса
         run: python scripts/backend.py check ${{ matrix.profile }}
+      - name: Install exact Tilda vendor types in the isolated runner
+        if: matrix.profile == 'tilda'
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all: -r locks/tilda-test.txt
+      - name: Check Tilda adapter strict types and lint
+        if: matrix.profile == 'tilda'
+        working-directory: adapters/tilda-adapter
+        env:
+          MYPYPATH: ${{ github.workspace }}
+        run: |
+          python -B -m mypy --strict --explicit-package-bases --follow-imports=silent config.py tilda_api_client.py meta_injector.py internal_routes.py tilda_webhook_handler.py main.py
+          python -B -m ruff check .
 
   migration-adapter:
     name: Alembic adapter (no database or DDL)
@@ -123,6 +135,10 @@ jobs:
         run: |
           python -B -m mypy --strict --explicit-package-bases --follow-imports=silent services/management_service/priority_policy.py services/management_service/priority_service.py services/management_service/prioritizer.py
           python -B -m ruff check services/management_service/priority_policy.py services/management_service/priority_service.py services/management_service/prioritizer.py tests/unit/test_prioritizer.py tests/integration/test_management_priority_postgres.py
+      - name: Check Tilda durable read-only boundary
+        run: |
+          python -B -m mypy --strict --explicit-package-bases --follow-imports=silent shared/tilda_contract.py services/client_api_gateway/tilda_sync.py services/client_api_gateway/tilda_manual.py services/client_api_gateway/tilda_worker.py services/client_api_gateway/routes/tilda_webhook_events.py services/api_gateway/routes/tilda_routes.py
+          python -B -m ruff check shared/tilda_contract.py services/client_api_gateway/tilda_sync.py services/client_api_gateway/tilda_manual.py services/client_api_gateway/tilda_worker.py services/client_api_gateway/routes/tilda_webhook_events.py services/api_gateway/routes/tilda_routes.py tests/integration/test_tilda_postgres.py
       - name: Проверить миграции, legacy-данные, роли и транзакции на отдельной БД
         env:
           TEST_PG_ADMIN_URL: postgresql://postgres:isolated-ci-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
@@ -153,6 +169,7 @@ jobs:
                   "tests/integration/test_management_preparation_postgres.py",
                   "tests/integration/test_management_verification_postgres.py",
                   "tests/integration/test_management_priority_postgres.py",
+                  "tests/integration/test_tilda_postgres.py",
                   "tests/integration/test_runtime_foundation_postgres.py",
               ], plugins=[RequiredTests()]))
           PY

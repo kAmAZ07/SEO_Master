@@ -12,6 +12,51 @@ from services.client_api_gateway.hitl_executor import StatusReconciler, authorit
 from shared.hitl_execution import ExecutionError
 
 
+def test_client_tilda_import_supports_the_native_public_reader_factory():
+    import subprocess
+    import sys
+    source = (
+        'from services.client_api_gateway import public_verifier\n'
+        'reader = public_verifier.PublicPageReader\n'
+        'public_verifier.PublicPageReader = lambda: reader()\n'
+        'from services.client_api_gateway import tilda_manual\n'
+        'assert callable(tilda_manual.verify_manual)\n'
+    )
+    result = subprocess.run([sys.executable, '-B', '-c', source], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('case', ['valid', 'missing_session', 'wrong_project', 'viewer_manage', 'inactive', 'denied'])
+async def test_tilda_user_controls_require_live_canonical_management_scope(monkeypatch, case):
+    import httpx
+    from services.client_api_gateway.routes import tilda_webhook_events as routes
+    project_id, actor_id = str(uuid4()), str(uuid4())
+    calls = []
+    def response(request):
+        calls.append(request)
+        payload = {'id': str(uuid4()) if case == 'wrong_project' else project_id, 'actor_id': actor_id,
+            'status': 'archived' if case == 'inactive' else 'active', 'role': 'viewer' if case == 'viewer_manage' else 'owner'}
+        return httpx.Response(403 if case == 'denied' else 200, json=payload)
+    original = httpx.AsyncClient
+    monkeypatch.setattr(routes.httpx, 'AsyncClient', lambda **kwargs: original(transport=httpx.MockTransport(response), **kwargs))
+    monkeypatch.setattr(routes.settings, 'INTERNAL_API_KEY', 'k' * 32)
+    request = SimpleNamespace(headers={} if case == 'missing_session' else {'authorization': 'Bearer original-user-access'})
+    if case == 'valid':
+        result = await routes.project_scope(project_id, request, 'manage')
+        assert result['actor_id'] == actor_id
+    else:
+        with pytest.raises(HTTPException) as caught:
+            await routes.project_scope(project_id, request, 'manage')
+        assert caught.value.status_code == (401 if case == 'missing_session' else 403 if case == 'denied' else 503)
+    if case == 'missing_session':
+        assert calls == []
+    else:
+        assert calls[0].headers['authorization'] == 'Bearer original-user-access'
+        assert calls[0].headers['x-internal-api-key'] == 'k' * 32
+        assert calls[0].url.params['permission'] == 'manage'
+
+
 def operation():
     return {"state": "outcome_unknown", "record": {"operation_id": str(uuid4()), "project_id": str(uuid4()),
         "binding": {"base_url": "https://example.com", "site_id": str(uuid4()), "key_id": "current"}}}
@@ -138,3 +183,44 @@ def test_readiness_distinguishes_explicit_disable_from_broken_recovery(monkeypat
     app.state.execution_recovery_task = task
     with TestClient(app) as client:
         assert client.get("/health/ready").status_code == expected
+
+
+@pytest.mark.parametrize('enabled,configured,task,expected', [
+    (False, False, None, 200), (True, False, None, 503), (True, True, None, 503),
+    (True, True, SimpleNamespace(done=lambda: True), 503),
+    (True, True, SimpleNamespace(done=lambda: False), 200),
+])
+def test_readiness_requires_live_tilda_reader_only_when_explicitly_enabled(monkeypatch, enabled, configured, task, expected):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from services.client_api_gateway import db, tilda_worker
+    from services.client_api_gateway.routes.health import router
+    monkeypatch.setattr(db, 'init_db', Mock())
+    monkeypatch.setattr(recovery.settings, 'EXECUTION_RECOVERY_ENABLED', False)
+    monkeypatch.setattr(tilda_worker.settings, 'TILDA_SYNC_ENABLED', enabled)
+    monkeypatch.setattr(tilda_worker.settings, 'INTERNAL_API_KEY', 'i' * 32)
+    monkeypatch.setattr(tilda_worker.settings, 'TILDA_ADAPTER_URL', 'http://adapter' if configured else None)
+    monkeypatch.setattr(tilda_worker.settings, 'TILDA_INTERNAL_API_KEY', 'k' * 32 if configured else None)
+    app = FastAPI(); app.include_router(router); app.state.tilda_read_task = task
+    with TestClient(app) as client:
+        assert client.get('/health/ready').status_code == expected
+
+
+@pytest.mark.asyncio
+async def test_tilda_worker_is_lifespan_owned_and_cancelled_without_scheduling_writes(monkeypatch):
+    from services.client_api_gateway import tilda_worker
+    monkeypatch.setattr(tilda_worker.settings, 'TILDA_SYNC_ENABLED', False)
+    assert tilda_worker.start() is None
+    monkeypatch.setattr(tilda_worker.settings, 'TILDA_SYNC_ENABLED', True)
+    monkeypatch.setattr(tilda_worker.settings, 'INTERNAL_API_KEY', 'i' * 32)
+    monkeypatch.setattr(tilda_worker.settings, 'TILDA_ADAPTER_URL', 'http://adapter')
+    monkeypatch.setattr(tilda_worker.settings, 'TILDA_INTERNAL_API_KEY', 'k' * 32)
+    started = asyncio.Event()
+    async def run():
+        started.set()
+        await asyncio.Event().wait()
+    monkeypatch.setattr(tilda_worker, 'run', run)
+    task = tilda_worker.start()
+    await asyncio.wait_for(started.wait(), 1)
+    await recovery.stop(task)
+    assert task.cancelled()

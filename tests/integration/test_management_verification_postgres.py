@@ -128,6 +128,32 @@ def test_rollback_begin_supersedes_public_token_and_reuses_the_original_snapshot
     assert claim(engine, refs, 3)["operation"]["state"] == "rollback_in_progress"
 
 
+def test_database_restore_fence_disallows_rollback_before_cms_io(executable):
+    engine, _, _, refs = executable
+    confirmed(engine, refs)
+    now = NOW + timedelta(seconds=1)
+    actor = UserActor(ALICE)
+    request = RollbackRequest(operation_id=str(uuid4()), reason="Undo after restore")
+    with Session(engine) as session:
+        service = ExecutionService(session, clock=lambda: now)
+        rollback = service.queue_rollback(refs.operation_id, request, actor)
+        rollback_refs = ExecutionRequest.model_validate({key: rollback['record'][key] for key in ExecutionRequest.model_fields})
+        preparation = ExecutionPreparation(session, clock=lambda: now)
+        lease = preparation.claim(request.operation_id, actor)['lease_id']
+        service.reserve(rollback_refs, actor, BINDING, rollback['record']['expected_current'], preparation_lease=lease)
+        ready = preparation.ready(request.operation_id, lease)
+    with engine.begin() as conn:
+        conn.execute(text('CREATE SCHEMA seo_master_restore_quarantine'))
+    with Session(engine) as session:
+        service = ExecutionService(session, clock=lambda: now)
+        with pytest.raises(ApprovalError, match='cms_write_quarantined'):
+            service.queue_rollback(refs.operation_id, request, actor)
+        with pytest.raises(ApprovalError, match='cms_write_quarantined'):
+            service.begin(request.operation_id, actor, preparation_lease=lease)
+        assert service.read(request.operation_id, actor) == ready
+        assert service.read(refs.operation_id, actor)['state'] == 'applied_unverified'
+
+
 def test_rollback_drift_fails_before_freeze_and_expired_approval_does_not_block_authorized_undo(executable):
     from copy import deepcopy
     engine, _, _, refs = executable

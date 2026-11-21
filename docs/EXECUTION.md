@@ -62,6 +62,8 @@ Client запускает одну lifespan-задачу опроса кажды
 
 Для входящих `/internal/executions` Client Gateway требует `X-Client-Execution-Key`. Этот ключ выдаётся только API Gateway и Client Gateway и применяется к входу apply, status, cancel и rollback. Пустой, короткий или совпавший с другими настроенными сервисными ключами credential блокирует обработку. Management по-прежнему независимо проверяет bearer, актуальный scope actor и версию approval. Прежний `X-Internal-API-Key` не авторизует этот вход.
 
+На восстановленной БД владелец создаёт пустую схему `seo_master_restore_quarantine` до подключения runtime. Пока схема существует, Management возвращает `503 cms_write_quarantined` для очереди, подготовки и начала apply/rollback, в том числе для существующего `ready` с действующим lease. Маркер проверяется в PostgreSQL на каждом входе, включая уже открытые соединения. Просмотр операций, status-only сверка и независимая проверка остаются доступны по обычным правилам доступа. Runtime-роль должна работать без владения этой схемой и БД. Маркер рассчитан на запуск после восстановления: он не отзывает уже выданные команды в работающей среде. Порядок восстановления описан в [BACKUP.md](BACKUP.md).
+
 Ошибки различаются: `cms_unavailable`, `operation_not_found`, `receipt_invalid`, `integration_changed`, отдельно `lease_expired`; причины остановки — `attempts_exhausted`/`deadline_exceeded`. UI объясняет их по-русски. В `needs_reconciliation` Task остаётся IN_PROGRESS, действуют version fence и запрет повторного apply. Ручной выход означает видимый обязательный разбор: автоматического force/reset/new ID или небезопасной кнопки «повторить запись» нет. Сверка CMS подтверждает запись, но не публичную видимость страницы.
 
 ## Независимая публичная проверка и rollback

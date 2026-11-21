@@ -92,6 +92,31 @@ def test_reserve_is_separate_from_apply_and_retry_preserves_exact_command(execut
     assert begin(engine, refs)["state"] == "applying"
 
 
+def test_database_restore_fence_keeps_frozen_cms_operations_readable_without_dispatch(executable):
+    engine, _, _, refs = executable
+    ready = reserve(engine, refs)
+    with engine.begin() as conn:
+        conn.execute(text('CREATE SCHEMA seo_master_restore_quarantine'))
+
+    with Session(engine) as session:
+        service = ExecutionService(session, clock=lambda: NOW)
+        lease = service._row(refs.operation_id).meta['preparation']['lease_id']
+        with pytest.raises(ApprovalError, match='cms_write_quarantined'):
+            service.queue(refs, UserActor(ALICE))
+        with pytest.raises(ApprovalError, match='cms_write_quarantined'):
+            service.queue(refs.model_copy(update={'operation_id': str(uuid.uuid4())}), UserActor(ALICE))
+        with pytest.raises(ApprovalError, match='cms_write_quarantined'):
+            service.begin(refs.operation_id, UserActor(ALICE), preparation_lease=lease)
+        with pytest.raises(ApprovalError, match='cms_write_quarantined'):
+            service.reserve(refs, UserActor(ALICE), BINDING, BEFORE, preparation_lease=lease)
+        with pytest.raises(ApprovalError, match='cms_write_quarantined'):
+            ExecutionPreparation(session, clock=lambda: NOW).claim(refs.operation_id, UserActor(ALICE))
+        with pytest.raises(ApprovalError, match='cms_write_quarantined'):
+            ExecutionPreparation(session, clock=lambda: NOW).ready(refs.operation_id, lease)
+        assert service.read(refs.operation_id, UserActor(ALICE)) == ready
+        assert session.query(Changelog).count() == 1
+
+
 @pytest.mark.parametrize("mutation", ["expired", "revoked", "role", "domain", "actor", "before", "hash"])
 def test_invalid_authority_cannot_reserve_operation(executable, mutation):
     engine, _, decision, refs = executable

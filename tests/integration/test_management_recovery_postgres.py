@@ -65,6 +65,20 @@ def receipt_for(value):
     return receipt
 
 
+def test_restore_quarantine_allows_status_reconciliation_without_reopening_dispatch(executable):
+    engine, _, _, refs = executable
+    unknown(engine, refs)
+    with engine.begin() as conn:
+        conn.execute(text('CREATE SCHEMA seo_master_restore_quarantine'))
+    lookup = claim(engine, refs)
+    assert lookup['lease_id'] and lookup['operation']['state'] == 'outcome_unknown'
+    confirmed = report(engine, refs, lookup['lease_id'], error=None, receipt=receipt_for(lookup['operation']))
+    assert confirmed['state'] == 'applied_unverified'
+    assert confirmed['record'] == lookup['operation']['record']
+    with pytest.raises(ApprovalError, match='cms_write_quarantined'):
+        begin(engine, refs)
+
+
 def test_only_one_concurrent_claim_spends_one_attempt(executable):
     engine, _, _, refs = executable
     unknown(engine, refs)

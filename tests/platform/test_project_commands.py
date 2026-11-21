@@ -14,6 +14,22 @@ from scripts import backend, project
 
 
 class ProjectCommandTests(unittest.TestCase):
+    def test_legacy_demo_commands_fail_closed_before_importing_database(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        for script in ('seed_demo_data.py', 'cleanup_demo_data.py'):
+            for profile in ('test', 'staging', 'production'):
+                with self.subTest(script=script, profile=profile):
+                    environment = {**project.build_environment(), 'ENVIRONMENT': profile,
+                                   'DATABASE_URL': 'invalid-dsn-with-fixture-private-value'}
+                    result = subprocess.run(
+                        [sys.executable, '-I', '-B', str(root / 'scripts' / script)], cwd=root,
+                        env=environment, check=False, capture_output=True, encoding='utf-8', timeout=15,
+                    )
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn('DEMO_COMMAND_DISABLED', result.stderr)
+                    self.assertNotIn('fixture-private-value', result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, '')
+
     def test_windows_bootstrap_removes_foreign_explicit_permissions(self) -> None:
         if os.name != "nt":
             # POSIX has no Windows ACEs; its permission boundary is tested below.

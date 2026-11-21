@@ -502,6 +502,23 @@ def run_apps(wp: NativeWordPress) -> None:
                         assert conn.scalar(text("SELECT has_table_privilege(current_user,'audit_schema.workspace_members','UPDATE')")) is False
                 engine.dispose()
             print("PASS actual HTTP apps AR7: UID10001/read-only and no-DDL roles; Redis JWT sessions and RabbitMQ outbox/inbox; pre-write crash fences; apply and explicit rollback each survive real post-CMS-commit SIGKILL with inactive-user service-only status recovery and independent anonymous public verification; one ledger receipt per operation, exact before restored. Only fixture-private hostname is allowed; browser/staging remains separate.")
+            from services.project_integrations.credentials_vault import CredentialsVault
+            from services.project_integrations.models import ProjectIntegration
+            from services.reporting_service.db.models import ReportRow
+            from tests.wordpress.restore_contract import check_restore
+
+            stand.stop_apps()
+            source_key = secrets.token_urlsafe(32)
+            wp.private_values.append(source_key)
+            with Session(database.engine) as session:
+                session.add(ProjectIntegration(project_id=project_id, platform='gsc',
+                    encrypted_creds=CredentialsVault(stand.master).encrypt({'api_key': source_key}),
+                    creds_hint='fixture', details={}))
+                session.add(ReportRow(report_id='backup-fixture', project_id=project_id, root_url=url,
+                                      data={'kind': 'backup_fixture', 'title': 'Сохранённый отчёт'}))
+                session.commit()
+            check_restore(wp, database.name, master_key=stand.master, expected_source_key=source_key,
+                          expected_version_hash=version.content_hash, operation_id=original_id, rollback_id=rollback_id)
         finally:
             stand.stop_apps()
             for role, _local, _inside in credentials.values():

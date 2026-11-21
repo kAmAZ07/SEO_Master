@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = 'INFO'
 
     INTERNAL_API_KEY: Optional[str] = None
+    CLIENT_EXECUTION_API_KEY: str = ''
     EXECUTION_RECOVERY_ENABLED: bool = True
 
     HMAC_MAX_DRIFT_SECONDS: int = 300

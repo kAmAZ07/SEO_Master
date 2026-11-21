@@ -282,7 +282,7 @@ class ProjectCommandTests(unittest.TestCase):
             root = Path(directory)
             path = project.bootstrap(root, "dev")
             legacy = "\n".join(line for line in path.read_text(encoding="utf-8").splitlines()
-                               if not line.startswith("MANAGEMENT_EXECUTOR_API_KEY=")) + "\n"
+                               if line.partition("=")[0] not in {"MANAGEMENT_EXECUTOR_API_KEY", "CLIENT_EXECUTION_API_KEY"}) + "\n"
             path.write_text(legacy, encoding="utf-8")
             with self.assertRaises(ValueError):
                 project.load_configuration(root, "dev")
@@ -290,8 +290,14 @@ class ProjectCommandTests(unittest.TestCase):
             upgraded = path.read_text(encoding="utf-8")
             self.assertTrue(upgraded.startswith(legacy))
             self.assertEqual(upgraded.count("MANAGEMENT_EXECUTOR_API_KEY="), 1)
+            self.assertEqual(upgraded.count("CLIENT_EXECUTION_API_KEY="), 1)
             project.bootstrap(root, "dev")
             self.assertEqual(path.read_text(encoding="utf-8"), upgraded)
+            values = dict(line.split("=", 1) for line in upgraded.splitlines())
+            values["CLIENT_EXECUTION_API_KEY"] = values["INTERNAL_API_KEY"]
+            path.write_text("".join(f"{name}={value}\n" for name, value in values.items()), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                project.load_configuration(root, "dev")
     def test_up_and_e2e_fail_closed_before_docker_until_migration_gate_exists(self) -> None:
         with patch("scripts.project.subprocess.run") as run:
             for action in ("up", "e2e"):

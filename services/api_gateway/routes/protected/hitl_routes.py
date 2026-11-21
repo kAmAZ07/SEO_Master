@@ -36,15 +36,18 @@ class ApprovalRequest(BaseModel):
 
 
 async def _hitl_json(method: str, path: str, request: Request, *, params=None, payload=None, execution=False, timeout=None):
-    if len(settings.INTERNAL_API_KEY) < 32:
+    client_execution = execution and (path == "/internal/executions" or path.startswith("/internal/executions/"))
+    key = settings.CLIENT_EXECUTION_API_KEY if client_execution else settings.INTERNAL_API_KEY
+    if len(key.encode()) < 32:
         raise HTTPException(503, "service_identity_unconfigured")
+    key_header = "X-Client-Execution-Key" if client_execution else "X-Internal-API-Key"
     authorization = request.headers.get("authorization", "")
     try:
         async with httpx.AsyncClient(timeout=timeout if timeout is not None else 50 if execution else 10, trust_env=False, follow_redirects=False) as client:
             response = await client.request(
                 method, (settings.CLIENT_GATEWAY_URL if execution else settings.MANAGEMENT_SERVICE_URL).rstrip("/") + path,
                 params=params, json=payload,
-                headers={"Authorization": authorization, "X-Internal-API-Key": settings.INTERNAL_API_KEY},
+                headers={"Authorization": authorization, key_header: key},
             )
     except httpx.RequestError:
         raise HTTPException(503, "hitl_service_unavailable") from None

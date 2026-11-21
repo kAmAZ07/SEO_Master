@@ -103,10 +103,10 @@ class AppStand:
         self.wp = wp
         self.apps: list[str] = []
         self.images: dict[str, str] = {}
-        self.internal, self.executor, self.jwt = (secrets.token_hex(32) for _ in range(3))
+        self.internal, self.executor, self.client_execution, self.jwt = (secrets.token_hex(32) for _ in range(4))
         self.redis_password, self.rabbit_password = secrets.token_hex(32), secrets.token_hex(32)
         self.master = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
-        wp.private_values.extend([self.internal, self.executor, self.jwt, self.redis_password, self.rabbit_password, self.master])
+        wp.private_values.extend([self.internal, self.executor, self.client_execution, self.jwt, self.redis_password, self.rabbit_password, self.master])
 
     def build(self) -> None:
         for service, directory in (("api", "api_gateway"), ("management", "management_service"), ("client", "client_api_gateway")):
@@ -141,11 +141,15 @@ class AppStand:
         environment = {"ENVIRONMENT": "production", "DATABASE_URL": role_url, "LOG_LEVEL": "WARNING",
             "REDIS_URL": "redis://:" + self.redis_password + "@redis:6379/0", "RABBITMQ_HOST": "rabbitmq",
             "RABBITMQ_USER": "ar4", "RABBITMQ_PASSWORD": self.rabbit_password, "INTERNAL_API_KEY": self.internal,
-            "EXECUTOR_API_KEY": self.executor, "MANAGEMENT_EXECUTOR_API_KEY": self.executor,
             "JWT_SECRET_KEY": self.jwt, "MASTER_ENCRYPTION_KEY": self.master, "CORS_ORIGINS": "http://localhost",
             "CORS_ALLOW_CREDENTIALS": "false", "MANAGEMENT_SERVICE_URL": "http://management:8004",
             "API_GATEWAY_URL": "http://api:8000", "CLIENT_GATEWAY_URL": "http://client:8005", "NETPOLICY_PROFILE": "test"}
+        if service in {"api", "client"}:
+            environment["CLIENT_EXECUTION_API_KEY"] = self.client_execution
+        if service == "management":
+            environment["EXECUTOR_API_KEY"] = self.executor
         if service == "client":
+            environment["MANAGEMENT_EXECUTOR_API_KEY"] = self.executor
             assert project_id is not None
             environment.update(SEO_MASTER_HMAC_SECRET=self.wp.secret, SEO_MASTER_RECEIPT_SECRET=self.wp.receipt_secret,
                 WORDPRESS_V2_TARGETS_JSON=json.dumps({project_id: {"base_url": "http://wordpress.test", "site_id": self.wp.site_id,
@@ -278,6 +282,10 @@ def run_apps(wp: NativeWordPress) -> None:
                     issued_at=now-timedelta(days=1), expires_at=now-timedelta(hours=23), verified_at=now))
                 session.commit()
             request(client, "POST", "/internal/executions", token=token, body=references, headers={"X-Internal-API-Key": "forged"}, expected=401)
+            request(client, "POST", "/internal/executions", token=token, body=references,
+                headers={"X-Internal-API-Key": stand.internal}, expected=401)
+            request(client, "POST", "/internal/executions", body=references,
+                headers={"X-Client-Execution-Key": stand.client_execution}, expected=401)
             request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", body=references, expected=403)  # Existing HTTPBearer missing-header contract.
             request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=user["refreshToken"], body=references, expected=401)
             request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body={**references, "changes": {"title": "unreviewed"}}, expected=422)
@@ -360,6 +368,12 @@ def run_apps(wp: NativeWordPress) -> None:
             assert database.scalar("SELECT metadata->>'state' FROM public.management_changelog WHERE id=:id", id=preparation_id) == "cancelled"
             assert wp.php("global $wpdb; echo $wpdb->get_var(\"SELECT count(*) FROM {$wpdb->prefix}seo_master_operations_v2 WHERE operation_id='" + preparation_id + "'\");").strip() == "0"
             references = {**references, "operation_id": str(uuid4())}
+            def apply_requests() -> int:
+                # Apache access logs count actual transmitted commands, even when
+                # the plugin would deduplicate them into the same ledger receipt.
+                return wp.run('logs', wp.wp).count('"POST /wp-json/seo-master/v2/target-bound/apply HTTP/')
+
+            initial_apply_requests = apply_requests()
             wp.run("exec", client_name, "python", "-c", "from pathlib import Path; Path('/tmp/ar6-hold-receipt').touch()")
             with ThreadPoolExecutor(max_workers=1) as pool:
                 pending = pool.submit(request, api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references)
@@ -383,7 +397,32 @@ def run_apps(wp: NativeWordPress) -> None:
                 else:
                     raise AssertionError("interrupted Gateway unexpectedly delivered a receipt")
             database.run("UPDATE public.users SET is_active=false WHERE id=:id", id=actor)
-            wp.run("start", client_name)
+            operation_id = references["operation_id"]
+            assert apply_requests() == initial_apply_requests + 1
+            container = json.loads(wp.run('inspect', wp.wp))[0]
+            assert wp.wp == wp.owner + '-wp' and container['Config']['Labels']['seo.test.owner'] == wp.owner
+            # Keep the real CMS container and its tmpfs/ledger intact, but stop
+            # serving HTTP until Management has durably observed a failed status read.
+            wp.run('pause', container['Id'])
+            try:
+                wp.run('start', client_name)
+                outage_deadline = time.monotonic() + 130
+                while time.monotonic() < outage_deadline:
+                    journal = database.scalar('SELECT metadata FROM public.management_changelog WHERE id=:id', id=operation_id)
+                    attempts = journal['recovery']['attempts']
+                    if attempts and attempts[0]['status'] == 'failed':
+                        assert len(attempts) == 1 and attempts[0]['error_code'] == 'cms_unavailable'
+                        assert journal['state'] == 'outcome_unknown' and journal.get('receipt') is None
+                        assert journal['record'] == frozen
+                        assert datetime.fromisoformat(journal['recovery']['next_attempt_at']) - datetime.fromisoformat(
+                            attempts[0]['completed_at']) == timedelta(seconds=10)
+                        break
+                    assert journal['state'] in {'applying', 'outcome_unknown'}
+                    time.sleep(.25)
+                else:
+                    raise AssertionError('status lookup did not record the real CMS outage')
+            finally:
+                wp.run('unpause', container['Id'])
             for _ in range(110):
                 if database.scalar("SELECT metadata->>'state' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == "verified":
                     break
@@ -391,8 +430,9 @@ def run_apps(wp: NativeWordPress) -> None:
             else:
                 raise AssertionError("restarted status/public workers did not reconcile and independently verify the committed WordPress operation")
             assert database.scalar("SELECT metadata->'record' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == frozen
-            assert database.scalar("SELECT jsonb_array_length(metadata->'recovery'->'attempts') FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == 1
-            assert database.scalar("SELECT metadata->'recovery'->'attempts'->0->>'status' FROM public.management_changelog WHERE id=:id", id=references["operation_id"]) == "succeeded"
+            recovery = database.scalar("SELECT metadata->'recovery' FROM public.management_changelog WHERE id=:id", id=operation_id)
+            assert [(attempt['status'], attempt['error_code']) for attempt in recovery['attempts']] == [
+                ('failed', 'cms_unavailable'), ('succeeded', None)]
             database.run("UPDATE public.users SET is_active=true WHERE id=:id", id=actor)
             result = request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references)
             assert result["state"] == "verified" and title() == "Мастерская зимней обуви"
@@ -400,6 +440,8 @@ def run_apps(wp: NativeWordPress) -> None:
             count = wp.php("global $wpdb; echo $wpdb->get_var(\"SELECT count(*) FROM {$wpdb->prefix}seo_master_operations_v2 WHERE operation_id='" + references["operation_id"] + "'\");")
             assert count.strip() == "1"
             assert request(api, "POST", f"/api/hitl/tasks/{task_id}/apply", token=token, body=references) == result
+            assert apply_requests() == initial_apply_requests + 1
+            print('PASS AR-13: real WordPress outage recorded without receipt; status recovery after unpause, one actual apply request and one CMS ledger entry.')
             assert database.scalar("SELECT count(*) FROM public.management_changelog WHERE source='hitl_executor_v1' AND id=:id", id=references["operation_id"]) == 1
             assert database.scalar("SELECT count(*) FROM public.management_changelog WHERE source='hitl_executor_v1'") == 2
             # Explicit rollback suffers a real Client SIGKILL after CMS commit too.

@@ -65,6 +65,7 @@ def stand(tmp_path, monkeypatch):
     monkeypatch.setattr(hitl_routes.httpx, "AsyncClient",
                         lambda **kwargs: original_client(transport=httpx.MockTransport(respond), **kwargs))
     monkeypatch.setattr(hitl_routes.settings, "INTERNAL_API_KEY", "k" * 32)
+    monkeypatch.setattr(hitl_routes.settings, "CLIENT_EXECUTION_API_KEY", "e" * 32)
     with TestClient(app) as client:
         yield client, maker, calls
 
@@ -72,6 +73,16 @@ def stand(tmp_path, monkeypatch):
 def command():
     return {"approval_id": APPROVAL_ID, "recommendation_version_id": VERSION_ID,
             "content_hash": "a" * 64, "comment": "Reviewed"}
+
+
+@pytest.mark.asyncio
+async def test_combined_tilda_callback_keeps_legacy_service_header_and_transport_timeout(stand):
+    _, _, calls = stand
+    await hitl_routes._hitl_json('POST', '/internal/tilda/webhook/published',
+        SimpleNamespace(headers={}), execution=True, timeout=2.)
+    assert calls[-1].headers['x-internal-api-key'] == 'k' * 32
+    assert 'x-client-execution-key' not in calls[-1].headers
+    assert calls[-1].extensions['timeout']['read'] == 2.
 
 
 def test_exact_version_and_original_access_token_reach_management(stand):
@@ -146,6 +157,10 @@ def test_apply_requires_deploy_role_and_sends_only_original_references_to_client
     assert calls[-1].url.path == "/internal/executions"
     assert json.loads(calls[-1].content) == body
     assert calls[-1].headers["authorization"] == "Bearer original-access"
+    assert calls[-1].headers.get("x-client-execution-key") == "e" * 32
+    assert "x-internal-api-key" not in calls[-1].headers
+    assert calls[-2].headers["x-internal-api-key"] == "k" * 32
+    assert "x-client-execution-key" not in calls[-2].headers
 
 
 def test_apply_rejects_mutable_changes_and_path_task_mismatch_before_proxy(stand):

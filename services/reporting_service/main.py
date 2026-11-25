@@ -117,22 +117,14 @@ def _derive_signal_from_payload(report: ReportRow | None, metrics: MetricsHistor
     return None, None
 
 
-def _derive_link_velocity(recent_gsc: dict | None, previous_gsc: dict | None) -> tuple[float | None, str | None]:
-    if not recent_gsc or not previous_gsc:
-        return None, None
-    recent_click_rate = float(recent_gsc.get("clicks", 0.0) or 0.0) / max(1.0, float(recent_gsc.get("range_days", 14) or 14))
-    previous_click_rate = float(previous_gsc.get("clicks", 0.0) or 0.0) / max(1.0, float(previous_gsc.get("range_days", 14) or 14))
-    return round(max(0.0, recent_click_rate - previous_click_rate), 4), "gsc_click_momentum_proxy"
-
-
-def _derive_serp_shift(recent_gsc: dict | None, previous_gsc: dict | None) -> tuple[float | None, str | None]:
-    if not recent_gsc or not previous_gsc:
-        return None, None
-    recent_position = _coerce_float(recent_gsc.get("avg_position"))
-    previous_position = _coerce_float(previous_gsc.get("avg_position"))
-    if recent_position is None or previous_position is None:
-        return None, None
-    return round(recent_position - previous_position, 4), "gsc_avg_position_delta"
+def _gsc_daily_clicks(summary: dict | None) -> float | None:
+    if not summary or summary.get("status") != "ok":
+        return None
+    clicks = _coerce_float(summary.get("clicks"))
+    days = _coerce_float(summary.get("range_days"))
+    if clicks is None or clicks < 0 or days is None or days <= 0:
+        return None
+    return clicks / days
 
 
 @app.on_event("startup")
@@ -201,10 +193,10 @@ async def get_project_summary(project_id: str, root_url: str | None = None) -> d
             gsc_recent = None
             gsc_previous = None
 
-    if serp_shift is None:
-        serp_shift, serp_source = _derive_serp_shift(gsc_recent, gsc_previous)
-    if link_velocity is None:
-        link_velocity, link_source = _derive_link_velocity(gsc_recent, gsc_previous)
+    recent_daily_clicks = _gsc_daily_clicks(gsc_recent)
+    previous_daily_clicks = _gsc_daily_clicks(gsc_previous)
+    click_delta = (round(recent_daily_clicks - previous_daily_clicks, 4)
+                   if recent_daily_clicks is not None and previous_daily_clicks is not None else None)
 
     return {
         "project_id": project_id,
@@ -226,6 +218,7 @@ async def get_project_summary(project_id: str, root_url: str | None = None) -> d
         "gsc": {
             "recent": gsc_recent,
             "previous": gsc_previous,
+            "click_delta_per_day": click_delta,
         },
         "report": None if latest_report is None else {
             "report_id": latest_report.report_id,

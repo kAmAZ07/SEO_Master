@@ -85,28 +85,6 @@ class OptimizationSaga:
 
         return "\n".join(part for part in content_parts if part).strip()
 
-    @staticmethod
-    def _derive_backlinks_count(crawl_result: dict, reporting_summary: dict | None) -> int:
-        reporting_signals = (reporting_summary or {}).get("signals") or {}
-        reporting_backlinks = reporting_signals.get("backlinks_count")
-        if isinstance(reporting_backlinks, (int, float)):
-            return max(0, int(reporting_backlinks))
-
-        summary = crawl_result.get("summary") if isinstance(crawl_result, dict) else {}
-        backlinks = summary.get("backlinks") if isinstance(summary, dict) else {}
-        top_sites = backlinks.get("top_linking_sites") if isinstance(backlinks, dict) else []
-        if isinstance(top_sites, list):
-            return len(top_sites)
-        return 0
-
-    @staticmethod
-    def _derive_brand_mentions(reporting_summary: dict | None) -> int:
-        signals = (reporting_summary or {}).get("signals") or {}
-        brand_mentions = signals.get("brand_mentions")
-        if isinstance(brand_mentions, (int, float)):
-            return max(0, int(brand_mentions))
-        return 0
-
     async def _fetch_reporting_summary(self) -> dict:
         try:
             response = await self.client.get(
@@ -302,9 +280,6 @@ class OptimizationSaga:
         if "keywords" in semantic_unavailable:
             keyword_coverage_source = "semantic_analysis_degraded"
 
-        backlinks_count = self._derive_backlinks_count(crawl_result, reporting_summary)
-        brand_mentions = self._derive_brand_mentions(reporting_summary)
-
         ffscore_response = await self.client.post(
             f"{settings.SEMANTIC_SERVICE_URL}/semantic/ff-score",
             json={
@@ -318,15 +293,15 @@ class OptimizationSaga:
                 "link_velocity": reporting_signals.get("link_velocity"),
                 "semantic_distance": semantic_distance,
                 "keyword_coverage": keyword_coverage,
-                "backlinks_count": backlinks_count,
-                "brand_mentions": brand_mentions,
+                "backlinks_count": reporting_signals.get("backlinks_count") if reporting_sources.get("backlinks_count") else None,
+                "brand_mentions": reporting_signals.get("brand_mentions") if reporting_sources.get("brand_mentions") else None,
                 "input_sources": {
                     "freshness_days_since_update": reporting_sources.get("freshness_days_since_update"),
                     "serp_shift": reporting_sources.get("serp_shift"),
                     "link_velocity": reporting_sources.get("link_velocity"),
                     "semantic_distance": semantic_distance_source,
                     "keyword_coverage": keyword_coverage_source,
-                    "backlinks_count": "audit_summary_backlinks" if backlinks_count else None,
+                    "backlinks_count": reporting_sources.get("backlinks_count"),
                     "brand_mentions": reporting_sources.get("brand_mentions"),
                 },
             },

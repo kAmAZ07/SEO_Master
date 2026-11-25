@@ -124,6 +124,12 @@ Reporting-обработчик сохраняет `eeat` как есть; что
 
 Код: `services/api_gateway/score_view.py`. Блок `ffScore` в `GET /api/projects` и `GET /api/projects/{id}`: `total` (число или `null`), `status` (`complete | insufficient_data | legacy_estimated`), `formulaVersion`, `heuristic`, `legacyEstimated`, `freshness` / `familiarity` / `quality` (число или `null`; у новой формулы берётся `score` доступного компонента), `partial`, `coverage`, `timestamp`. Недоступное значение остаётся `null`, нулём не заменяется. `GET /api/dashboard/stats`: `avgFFScore` — среднее последних баллов проектов только со статусом `complete` (оценочные `legacy_estimated` и `null` не участвуют), `ffScoreProjects` — число учтённых проектов; без таких проектов `avgFFScore = null`.
 
+### Данные Search Console и внешние ссылки
+
+Reporting получает итоговые clicks, impressions, CTR и average position отдельным запросом Search Analytics на уровне property с `dataState=final`. Это правило используется в summary проекта и при сборке отчётов. Разбивки date/query/page выгружаются ограниченным набором с `detail_coverage=limited`. При отказе запроса разбивки отчёт сохраняет сроки и значения полученного property aggregate. Пустой ответ агрегата получает `status=no_data` и значения `null`. Разница кликов в день доступна в `gsc.click_delta_per_day` вместе с обоими периодами и агрегатами. Для полей `link_velocity` и `serp_shift` нужны отдельные наблюдения. [Контракт Search Analytics](https://developers.google.com/webmaster-tools/v1/searchanalytics/query)
+
+Полный аудит показывает `backlinks.status=unavailable`, пока источник обратных ссылок отсутствует. Списки доменов из старых снимков сохранены для истории. Management передаёт в scoring только счётчики обратных ссылок и упоминаний с указанным источником Reporting. Измеренный ноль сохраняется.
+
 ## 4. LLM-слой
 
 Код: `llm/policy.py`, `llm/providers.py`, `llm/llm_cache.py`, `llm/llm_client.py`.

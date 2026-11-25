@@ -1,7 +1,7 @@
 ﻿from datetime import date, timedelta
 from typing import Any
 
-from googleapiclient.discovery import build
+from googleapiclient.discovery import Resource, build
 
 from services.project_integrations.google_auth import build_google_credentials
 from services.project_integrations.runtime import load_project_integration
@@ -32,54 +32,40 @@ def _load_credentials(project_id: str):
     )
 
 
+def _property_aggregate(service: Resource, property_url: str, start: date, end: date) -> dict[str, Any]:
+    body = {"startDate": start.isoformat(), "endDate": end.isoformat(), "aggregationType": "byProperty",
+            "dataState": "final", "rowLimit": 1}
+    resp = service.searchanalytics().query(siteUrl=property_url, body=body).execute()
+    rows = resp.get("rows", []) or []
+    row = rows[0] if rows else {}
+    return {
+        "status": "ok" if rows else "no_data",
+        "aggregation": "by_property",
+        "data_state": "final",
+        "clicks": row.get("clicks"),
+        "impressions": row.get("impressions"),
+        "ctr": row.get("ctr"),
+        "avg_position": row.get("position"),
+        "rows_count": len(rows),
+        "period_start": start.isoformat(),
+        "period_end": end.isoformat(),
+    }
+
+
 def fetch_gsc_summary(project_id: str, property_url: str | None = None, days: int = 28, offset_days: int = 0) -> dict:
     _, resolved_property_url = _resolve_property_url(project_id, property_url)
     creds = _load_credentials(project_id)
     service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
     end = date.today() - timedelta(days=max(0, offset_days))
     start = end - timedelta(days=max(0, days - 1))
-    body = {"startDate": start.isoformat(), "endDate": end.isoformat(), "dimensions": ["query"], "rowLimit": 50}
-    resp = service.searchanalytics().query(siteUrl=resolved_property_url, body=body).execute()
-    rows = resp.get("rows", []) or []
-    clicks = sum(float(r.get("clicks", 0.0) or 0.0) for r in rows)
-    impressions = sum(float(r.get("impressions", 0.0) or 0.0) for r in rows)
-    ctr = 0.0 if impressions <= 0 else clicks / impressions
-    positions = [float(r.get("position", 0.0) or 0.0) for r in rows if r.get("position") is not None]
-    avg_position = None if not positions else round(sum(positions) / len(positions), 4)
+    aggregate = _property_aggregate(service, resolved_property_url, start, end)
     return {
+        **aggregate,
         "property_url": resolved_property_url,
-        "range_days": days,
+        "range_days": (end - start).days + 1,
         "offset_days": offset_days,
-        "clicks": round(clicks, 2),
-        "impressions": round(impressions, 2),
-        "ctr": round(ctr, 4),
-        "avg_position": avg_position,
-        "rows_count": len(rows),
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
-    }
-
-
-def _ok_result(records: list[dict[str, Any]], start_date: date, end_date: date) -> dict[str, Any]:
-    clicks = sum(int(row.get("clicks", 0) or 0) for row in records)
-    impressions = sum(int(row.get("impressions", 0) or 0) for row in records)
-    positions = [float(row["position"]) for row in records if row.get("position") is not None]
-    ctr = 0.0 if impressions <= 0 else clicks / impressions
-    return {
-        "source": "gsc",
-        "available": True,
-        "status": "ok",
-        "reason": None,
-        "records": records,
-        "aggregate": {
-            "clicks": clicks,
-            "impressions": impressions,
-            "ctr": round(ctr, 4),
-            "avg_position": None if not positions else round(sum(positions) / len(positions), 4),
-            "rows_count": len(records),
-            "period_start": start_date.isoformat(),
-            "period_end": end_date.isoformat(),
-        },
+        "start_date": aggregate["period_start"],
+        "end_date": aggregate["period_end"],
     }
 
 
@@ -91,9 +77,9 @@ def _degraded_result(reason: str, start_date: date, end_date: date) -> dict[str,
         "reason": reason,
         "records": [],
         "aggregate": {
-            "clicks": 0,
-            "impressions": 0,
-            "ctr": 0.0,
+            "clicks": None,
+            "impressions": None,
+            "ctr": None,
             "avg_position": None,
             "rows_count": 0,
             "period_start": start_date.isoformat(),
@@ -113,15 +99,29 @@ def fetch_gsc_rows(
         _, resolved_property_url = _resolve_property_url(project_id, property_url)
         creds = _load_credentials(project_id)
         service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
+        aggregate = _property_aggregate(service, resolved_property_url, start_date, end_date)
+    except Exception:
+        return _degraded_result("gsc_property_aggregate_unavailable", start_date, end_date)
+
+    try:
         body = {
             "startDate": start_date.isoformat(),
             "endDate": end_date.isoformat(),
             "dimensions": ["date", "query", "page"],
+            "dataState": "final",
             "rowLimit": row_limit,
         }
         resp = service.searchanalytics().query(siteUrl=resolved_property_url, body=body).execute()
-    except Exception as exc:
-        return _degraded_result(str(exc), start_date, end_date)
+    except Exception:
+        return {
+            "source": "gsc",
+            "available": aggregate["status"] == "ok",
+            "status": "partial",
+            "reason": "gsc_detail_unavailable",
+            "records": [],
+            "aggregate": aggregate,
+            "detail_coverage": "unavailable",
+        }
 
     records: list[dict[str, Any]] = []
     for row in resp.get("rows", []) or []:
@@ -142,4 +142,12 @@ def fetch_gsc_rows(
                 "raw_data": {"keys": keys, **{key: row.get(key) for key in ("clicks", "impressions", "ctr", "position")}},
             }
         )
-    return _ok_result(records, start_date, end_date)
+    return {
+        "source": "gsc",
+        "available": aggregate["status"] == "ok",
+        "status": aggregate["status"],
+        "reason": None if aggregate["status"] == "ok" else "gsc_no_data",
+        "records": records,
+        "aggregate": aggregate,
+        "detail_coverage": "limited",
+    }

@@ -201,25 +201,25 @@ def test_cancel_running_job_releases_resources(monkeypatch):
     async def scenario():
         async with database(monkeypatch) as maker:
             cleaned = []
+            started = asyncio.Event()
 
             async def runner(audit_id, on_progress=None):
                 try:
                     await on_progress("crawl", pages_done=1, pages_max=10)
+                    started.set()
                     await asyncio.sleep(60)
                 finally:
                     cleaned.append(audit_id)  # здесь освобождаются сокеты и браузеры
 
             patch_runner(monkeypatch, runner)
             audit_id = await start()
-            await wait_until(lambda: _running(maker, audit_id))
+            await asyncio.wait_for(started.wait(), timeout=3)
+            assert (await row_of(maker, audit_id)).status == "running"
             view = await main.cancel_public_audit(audit_id)
             assert view["status"] == "cancelled" and cleaned == [audit_id]
             assert main.active_job_count() == 0 and main._public_slots()._value == PUBLIC_MAX_CONCURRENT_JOBS
             again = await main.cancel_public_audit(audit_id)  # повторная отмена безопасна
             assert again["status"] == "cancelled"
-
-    async def _running(maker, audit_id):
-        return (await row_of(maker, audit_id)).status == "running"
 
     run(scenario())
 

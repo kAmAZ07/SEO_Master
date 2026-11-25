@@ -123,7 +123,7 @@ def _map_integration_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     if isinstance(exc, IntegrationValidationError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    logger.exception("Integration request failed", exc_info=exc)
+    logger.error("Integration request failed", extra={"error_type": type(exc).__name__})
     return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Integration request failed")
 
 

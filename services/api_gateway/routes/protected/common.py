@@ -327,7 +327,7 @@ async def _proxy_service(
         try:
             response = await client.request(method, url, params=params, json=payload)
         except httpx.RequestError as exc:
-            logger.warning("Private service proxy unavailable", extra={"url": url, "error": str(exc)})
+            logger.warning("Private service proxy unavailable", extra={"error_type": type(exc).__name__})
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="private_service_unavailable") from exc
 
     if response.status_code >= 400:

@@ -171,7 +171,8 @@ async def analyze_backlink(
     try:
         rows = await _analyze_backlinks_live(request.url)
     except Exception as exc:
-        logger.warning("Backlink live analysis failed", extra={"url": request.url, "project_id": str(project.id), "error": str(exc)})
+        logger.warning("Backlink live analysis failed",
+                       extra={"project_id": str(project.id), "error_type": type(exc).__name__})
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Не удалось загрузить страницу для анализа ссылок. Проверьте URL и попробуйте снова.") from exc
 
     return rows

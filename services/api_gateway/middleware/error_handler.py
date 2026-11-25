@@ -11,13 +11,37 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 from config.logging_config import get_logger
-from services.api_gateway.config import settings, is_development
+from services.api_gateway.config import settings
 from shared.tilda_contract import safe_callback_path
 
 logger = get_logger(__name__)
 
 
+def unexpected_error_response(request: Request, exc: Exception) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.error(
+        "Unhandled exception",
+        extra={
+            "request_id": request_id,
+            "error_type": type(exc).__name__,
+            "path": safe_callback_path(request.url.path),
+            "method": request.method,
+            "service": settings.SERVICE_NAME,
+        },
+    )
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"error": {
+            "code": 500,
+            "message": "Internal server error",
+            "request_id": request_id,
+            "timestamp": datetime.utcnow().isoformat(),
+        }},
+    )
+
+
 def setup_error_handlers(app: FastAPI) -> None:
+    app.add_exception_handler(Exception, unexpected_error_response)
     
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
@@ -130,7 +154,6 @@ def setup_error_handlers(app: FastAPI) -> None:
             "Database error",
             extra={
                 "request_id": request_id,
-                "error": str(exc),
                 "error_type": type(exc).__name__,
                 "path": safe_callback_path(request.url.path),
                 "method": request.method,
@@ -138,51 +161,12 @@ def setup_error_handlers(app: FastAPI) -> None:
             }
         )
         
-        if is_development():
-            detail = str(exc)
-        else:
-            detail = "Database error occurred"
-        
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "error": {
                     "code": 500,
-                    "message": detail,
-                    "request_id": request_id,
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-            }
-        )
-    
-    @app.exception_handler(Exception)
-    async def general_exception_handler(request: Request, exc: Exception):
-        request_id = getattr(request.state, "request_id", "unknown")
-        
-        logger.error(
-            "Unhandled exception",
-            extra={
-                "request_id": request_id,
-                "error": str(exc),
-                "error_type": type(exc).__name__,
-                "path": safe_callback_path(request.url.path),
-                "method": request.method,
-                "service": settings.SERVICE_NAME
-            },
-            exc_info=True
-        )
-        
-        if is_development():
-            detail = f"{type(exc).__name__}: {str(exc)}"
-        else:
-            detail = "Internal server error"
-        
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "error": {
-                    "code": 500,
-                    "message": detail,
+                    "message": "Database error occurred",
                     "request_id": request_id,
                     "timestamp": datetime.utcnow().isoformat()
                 }

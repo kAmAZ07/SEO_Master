@@ -404,6 +404,8 @@ def test_previous_automatic_matches_become_candidates_and_downgrade_restores_the
             ('m4', 'management.projects', 'd', NULL, 'matched', 'project deleted after matching');
         """
     )
+    legacy_select = "SELECT id, status, project_id, reason FROM audit_schema.legacy_project_id_map ORDER BY id"
+    previous = db.rows(legacy_select)
     select = "SELECT id, status, project_id, candidate_project_id FROM audit_schema.legacy_project_id_map ORDER BY id"
     db.alembic("upgrade", "head")
     assert db.rows(select) == [
@@ -412,15 +414,25 @@ def test_previous_automatic_matches_become_candidates_and_downgrade_restores_the
         ("m3", "ambiguous", None, None),
         ("m4", "candidate", None, None),
     ]
-    assert "owner not proven" in db.scalar("SELECT reason FROM audit_schema.legacy_project_id_map WHERE id = 'm1'")
+    assert db.rows("SELECT id, reason FROM audit_schema.legacy_project_id_map ORDER BY id") == [
+        (row[0], row[3]) for row in previous
+    ]
 
     db.alembic("downgrade", PREVIOUS_HEAD)
-    assert db.rows("SELECT id, status, project_id FROM audit_schema.legacy_project_id_map ORDER BY id") == [
-        ("m1", "matched", "p1"),
-        ("m2", "unmatched", None),
-        ("m3", "ambiguous", None),
-        ("m4", "matched", None),
-    ]
-    assert db.scalar("SELECT reason FROM audit_schema.legacy_project_id_map WHERE id = 'm1'") == "single canonical project with the same host"
+    assert db.rows(legacy_select) == previous
     db.alembic("upgrade", "head")  # повторный накат после отката
     assert db.rows(select)[0] == ("m1", "candidate", None, "p1")
+
+
+def test_legacy_map_migration_rejects_contradictory_association_without_changes(db):
+    db.alembic("upgrade", BASELINE)
+    seed_legacy(db)
+    db.alembic("upgrade", PREVIOUS_HEAD)
+    db.run("UPDATE audit_schema.legacy_project_id_map SET status = 'ambiguous' WHERE project_id IS NOT NULL")
+    query = "SELECT * FROM audit_schema.legacy_project_id_map ORDER BY id"
+    previous = db.rows(query)
+    result = db.alembic("upgrade", "head", check=False)
+    assert result.returncode != 0
+    assert "LEGACY_MAP_INCONSISTENT" in result.stderr
+    assert db.rows(query) == previous
+    assert db.scalar("SELECT version_num FROM public.alembic_version") == PREVIOUS_HEAD

@@ -18,8 +18,9 @@ Create Date: 2026-11-10 00:00:00.000000
   * статусы: `candidate`, `unmatched`, `ambiguous`;
   * CHECK `ck_legacy_project_id_map_unproven`: `project_id` пуст, кандидат допустим только у `candidate`.
 
-Данные не удаляются. Откат возвращает прежнее состояние точно: `candidate` → `matched`, кандидат снова
-записывается в `project_id`. Таблицу в рабочем режиме никто не пишет, кроме миграций.
+Данные и прежние пояснения (`reason`) сохраняются. Откат возвращает `candidate` в `matched` и
+переносит кандидата обратно в `project_id`. Если исходный `ambiguous` или `unmatched` содержит связь,
+накат останавливается без изменений до ручной сверки записи.
 """
 import sqlalchemy as sa
 from alembic import op
@@ -35,16 +36,24 @@ STATUS_CHECK = "ck_legacy_project_id_map_status"
 UNPROVEN_CHECK = "ck_legacy_project_id_map_unproven"
 CANDIDATE_FK = "fk_legacy_project_id_map_candidate"
 CANDIDATE_INDEX = "idx_legacy_project_id_map_candidate"
-CANDIDATE_REASON = "single canonical project with the same host; owner not proven"
 
 
 def upgrade() -> None:
     op.add_column(TABLE, sa.Column("candidate_project_id", sa.String(36), nullable=True), schema=SCHEMA)
+    op.execute(f"""
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM {SCHEMA}.{TABLE} WHERE status <> 'matched' AND project_id IS NOT NULL)
+            THEN
+                RAISE EXCEPTION 'LEGACY_MAP_INCONSISTENT';
+            END IF;
+        END
+        $$;
+    """)
     op.drop_constraint(STATUS_CHECK, TABLE, schema=SCHEMA, type_="check")
     op.execute(
         f"UPDATE {SCHEMA}.{TABLE} SET candidate_project_id = project_id, project_id = NULL, "
-        f"status = 'candidate', reason = '{CANDIDATE_REASON}' "
-        "WHERE status = 'matched' OR project_id IS NOT NULL"
+        "status = 'candidate' WHERE status = 'matched'"
     )
     op.create_foreign_key(
         CANDIDATE_FK, TABLE, "projects", ["candidate_project_id"], ["id"],
@@ -65,8 +74,7 @@ def downgrade() -> None:
     op.drop_constraint(UNPROVEN_CHECK, TABLE, schema=SCHEMA, type_="check")
     op.drop_constraint(STATUS_CHECK, TABLE, schema=SCHEMA, type_="check")
     op.execute(
-        f"UPDATE {SCHEMA}.{TABLE} SET project_id = candidate_project_id, status = 'matched', "
-        "reason = 'single canonical project with the same host' WHERE status = 'candidate'"
+        f"UPDATE {SCHEMA}.{TABLE} SET project_id = candidate_project_id, status = 'matched' WHERE status = 'candidate'"
     )
     op.drop_index(CANDIDATE_INDEX, table_name=TABLE, schema=SCHEMA)
     op.drop_constraint(CANDIDATE_FK, TABLE, schema=SCHEMA, type_="foreignkey")

@@ -1,7 +1,19 @@
 import csv
 import io
 import json
+import re
 from typing import Any
+
+
+FORMULA_PREFIX = re.compile(r"^'*[\s\ufeff]*[=+\-@＝＋－＠\x00\t\r\n]")
+
+
+def _csv_cell(value: object) -> object:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, str) and FORMULA_PREFIX.match(value):
+        return "'" + value
+    return value
 
 
 def _is_record_list(value) -> bool:
@@ -59,17 +71,12 @@ def export_raw_data(data) -> bytes:
     if not rows:
         rows = [{"value": ""}]
 
-    buf = io.StringIO()
+    buf = io.StringIO(newline="")
     fieldnames = sorted({key for row in rows for key in row.keys()})
-    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
-    writer.writeheader()
+    writer = csv.writer(buf, quoting=csv.QUOTE_ALL)
+    writer.writerow(_csv_cell(field) for field in fieldnames)
     for row in rows:
-        writer.writerow(
-            {
-                key: json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value
-                for key, value in row.items()
-            }
-        )
+        writer.writerow(_csv_cell(row.get(field)) for field in fieldnames)
     return buf.getvalue().encode("utf-8")
 
 

@@ -144,9 +144,9 @@ async def startup_event():
 
     try:
         init_db()
-    except Exception as exc:
-        logger.error('Failed to initialize client gateway database', extra={'error': str(exc)})
-        raise
+    except Exception:
+        logger.error('Failed to initialize client gateway database')
+        raise RuntimeError('CLIENT_DATABASE_NOT_READY') from None
     app.state.execution_recovery_task = recovery.start()
     app.state.tilda_read_task = tilda_worker.start()
     logger.info(
@@ -184,30 +184,19 @@ async def correlation_id_middleware(request: Request, call_next):
     correlation_id = request.headers.get('X-Correlation-ID', str(uuid.uuid4()))
     request.state.correlation_id = correlation_id
 
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        # Return before the ASGI server logs the original exception and its SQL or driver details.
+        logger.error('Unhandled request failure (%s)', type(exc).__name__,
+                     extra={'correlation_id': correlation_id})
+        response = JSONResponse(status_code=500, content={
+            'detail': 'Internal server error',
+            'correlation_id': correlation_id,
+        })
     response.headers['X-Correlation-ID'] = correlation_id
 
     return response
-
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(
-        f'Unhandled exception: {str(exc)}',
-        extra={
-            'path': request.url.path,
-            'correlation_id': getattr(request.state, 'correlation_id', None),
-        },
-        exc_info=True,
-    )
-
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            'detail': 'Internal server error',
-            'correlation_id': getattr(request.state, 'correlation_id', None),
-        },
-    )
 
 
 @app.get('/')

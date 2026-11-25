@@ -73,3 +73,47 @@ def test_startup_uses_only_readiness_not_orm_or_legacy_secret_migration(monkeypa
     db.init_db()
     ddl.assert_not_called()
     check.assert_called_once_with(connection)
+
+
+def test_database_startup_error_is_safe_for_server_logging(monkeypatch):
+    from services.client_api_gateway import main
+    import asyncio
+    import traceback
+
+    secret = 'fixture-private-database-detail'
+    log = Mock()
+    monkeypatch.setattr(main, 'setup_logging', Mock())
+    monkeypatch.setattr(main, 'logger', log)
+    monkeypatch.setattr(main, 'init_db', Mock(side_effect=RuntimeError(secret)))
+    with pytest.raises(RuntimeError) as failure:
+        asyncio.run(main.startup_event())
+    assert str(failure.value) == 'CLIENT_DATABASE_NOT_READY'
+    assert secret not in ''.join(traceback.format_exception(failure.value))
+    assert secret not in str(log.mock_calls)
+
+
+def test_database_request_error_does_not_escape_to_server_logger(monkeypatch):
+    from sqlalchemy.exc import OperationalError
+    from services.client_api_gateway import main
+
+    secret = 'fixture-private-database-detail'
+    log = Mock()
+    session_log = Mock()
+    session = Mock()
+    session.query.side_effect = OperationalError('SELECT fixture', {'value': secret}, RuntimeError(secret))
+    monkeypatch.setattr(main, 'logger', log)
+    monkeypatch.setattr(db, 'logger', session_log)
+    monkeypatch.setattr(db, 'SessionLocal', lambda: session)
+    monkeypatch.setattr(main.settings, 'INTERNAL_API_KEY', 'i' * 32)
+    client = TestClient(main.app)
+    try:
+        response = client.get('/changes/pending/' + str(uuid4()),
+            headers={'X-Internal-API-Key': 'i' * 32, 'X-Correlation-ID': 'fixture-request'})
+    finally:
+        client.close()
+    assert response.status_code == 500
+    assert response.json() == {'detail': 'Internal server error', 'correlation_id': 'fixture-request'}
+    assert response.headers['x-correlation-id'] == 'fixture-request'
+    assert secret not in str(log.mock_calls) + str(session_log.mock_calls)
+    session.rollback.assert_called_once()
+    session.close.assert_called_once()

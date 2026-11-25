@@ -143,6 +143,8 @@ Reporting-обработчик сохраняет `eeat` как есть; что
 `tests/unit/test_ff_score_calculator.py`, `test_eeat_analyzer.py`, `test_llm_policy.py`, `test_semantic_proposals.py`, `test_semantic_proposals_extra.py`, `test_semantic_scoring_api.py` входят в профиль `semantic` и работают без сети и БД. `tests/integration/test_semantic_postgres.py` и `test_migrations_postgres.py` требуют PostgreSQL (`TEST_PG_ADMIN_URL`) и без него пропускаются.
 
 ## 7. Известные ограничения
+
+В существующем подключении GSC и GA4 адрес обновления токенов задан сервером. Принимаются конфигурации Google для `googleapis.com`. Исторический URI `https://accounts.google.com/o/oauth2/token` приводится к `https://oauth2.googleapis.com/token`. Другие адреса отклоняются при сохранении и при чтении уже сохранённых credentials. [Контракт Google OAuth](https://developers.google.com/identity/protocols/oauth2/web-server)
 - Полный FF-Score `null`, пока нет источников свежести, сдвига SERP и динамики ссылок.
 - `before` берётся из аудита страницы, а не из снимка CMS; точная сверка — на стороне плагина по `before_digest`.
 - Management-оркестратор принимает валидный `ff_score = null` с `insufficient_data` и запрашивает `/semantic/proposals`; обработка evidence и решений описана в [MANAGEMENT.md](MANAGEMENT.md).

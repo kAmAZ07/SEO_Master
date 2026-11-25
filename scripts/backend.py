@@ -73,6 +73,7 @@ PROFILES = (
         "tests/unit/test_public_audit_core.py",
         "tests/unit/test_public_audit_lifecycle.py",
         "tests/unit/test_public_crawler.py",
+        "tests/unit/test_google_auth.py",
     )),
     Profile("semantic", "services/semantic_service/requirements.txt", (
         "tests/unit/test_eeat_analyzer.py",
@@ -85,6 +86,7 @@ PROFILES = (
     Profile("reporting", "services/reporting_service/requirements.txt", (
         "tests/unit/test_csv_exporter.py",
         "tests/unit/test_metrics_calculator.py",
+        "tests/unit/test_google_auth.py",
     )),
     Profile("tilda", "adapters/tilda-adapter/requirements.txt", (
         "tests/unit/test_tilda_meta_injector.py",
@@ -162,6 +164,8 @@ def validate_test_inventory(snapshot: Path, profile: Profile) -> None:
         }
         if not owners and ("shared.projects" in source or "shared.netpolicy" in source):
             owners.add("api")
+        if not owners and "services.project_integrations.google_auth" in source:
+            owners.update(("audit", "reporting"))
         if not owners:
             raise RuntimeError(
                 f"Unit-файл не принадлежит ни одному backend-профилю: {candidate.name}",

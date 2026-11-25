@@ -20,12 +20,14 @@ POSTGRES = "postgres:15-alpine@sha256:09e4f20b14ddb3dfe3a0c825b206032aaf8f28300b
 
 
 class NativeWordPress(AbstractContextManager["NativeWordPress"]):
-    def __init__(self, root: Path, *, project_id: str, site_id: str, context: str = "desktop-linux", revision: str | None = None):
+    def __init__(self, root: Path, *, project_id: str, site_id: str, context: str = "desktop-linux", revision: str | None = None,
+                 internal_network: bool = False):
         self.root, self.project_id, self.site_id = root.resolve(strict=True), project_id, site_id
         self.docker = ["docker", "--context", context]
         self.tool_environment = build_environment()
         self.owner = "seo-wp-contract-" + uuid.uuid4().hex
         self.network = self.owner + "-net"
+        self.internal_network = internal_network
         self.db, self.wp = self.owner + "-db", self.owner + "-wp"
         self.secret, self.receipt_secret = secrets.token_hex(32), secrets.token_hex(32)
         self.private_values = [self.secret, self.receipt_secret]
@@ -118,7 +120,8 @@ class NativeWordPress(AbstractContextManager["NativeWordPress"]):
 
     def __enter__(self) -> "NativeWordPress":
         try:
-            self.run("network", "create", "--label", "seo.test.owner=" + self.owner, self.network)
+            network_options = ('--internal',) if self.internal_network else ()
+            self.run("network", "create", *network_options, "--label", "seo.test.owner=" + self.owner, self.network)
             self.resources.append(("network", self.network))
             password = secrets.token_hex(32)
             self.private_values.append(password)
@@ -134,13 +137,18 @@ class NativeWordPress(AbstractContextManager["NativeWordPress"]):
                     time.sleep(1)
             else:
                 raise RuntimeError("isolated MariaDB readiness timed out")
+            ports = () if self.internal_network else ('--publish', '127.0.0.1::80')
+            config = "define('DISABLE_WP_CRON', true);"
+            if self.internal_network:
+                # Keep PHP warnings in the container logs and outside HTTP/CLI payloads.
+                config += " define('WP_DEBUG_DISPLAY', false);"
             self.run("run", "-d", "--rm", "--name", self.wp, "--network", self.network,
                      "--network-alias", "wordpress.test",
-                     "--label", "seo.test.owner=" + self.owner, "--publish", "127.0.0.1::80",
+                     "--label", "seo.test.owner=" + self.owner, *ports,
                      "--tmpfs", "/var/www/html:rw,nosuid", "-e", "WORDPRESS_DB_HOST=db", "-e", "WORDPRESS_DB_USER=root",
                      "-e", "WORDPRESS_DB_PASSWORD=" + password, "-e", "WORDPRESS_DB_NAME=wordpress",
                      "-e", "WORDPRESS_DEBUG=1",
-                     "-e", "WORDPRESS_CONFIG_EXTRA=define('DISABLE_WP_CRON', true);",
+                     "-e", "WORDPRESS_CONFIG_EXTRA=" + config,
                      "-e", "SEO_MASTER_RELEASE_KEYS_JSON=" + json.dumps({identity: base64.b64encode(value).decode('ascii') for identity, value in self.release_keys.items()}),
                      "-e", "SEO_MASTER_KEY_ID=fixture", "-e", "SEO_MASTER_HMAC_SECRET=" + self.secret,
                      "-e", "SEO_MASTER_RECEIPT_SECRET=" + self.receipt_secret, "-e", "SEO_MASTER_TRUSTED_GATEWAY=1", WORDPRESS)
@@ -154,7 +162,8 @@ class NativeWordPress(AbstractContextManager["NativeWordPress"]):
             else:
                 raise RuntimeError("isolated WordPress setup timed out")
             info = json.loads(self.run("inspect", self.wp))[0]
-            self.port = int(info["NetworkSettings"]["Ports"]["80/tcp"][0]["HostPort"])
+            if not self.internal_network:
+                self.port = int(info["NetworkSettings"]["Ports"]["80/tcp"][0]["HostPort"])
             self.copy_plugin(self.baseline_package)
             admin_password = secrets.token_hex(24)
             self.private_values.append(admin_password)

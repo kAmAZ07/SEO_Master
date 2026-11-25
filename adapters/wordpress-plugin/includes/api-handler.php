@@ -40,7 +40,7 @@ function seo_master_v2_config() {
         seo_master_get_env_value(array('SEO_MASTER_KEY_ID')), seo_master_get_env_value(array('SEO_MASTER_HMAC_SECRET')),
         seo_master_get_env_value(array('SEO_MASTER_RECEIPT_SECRET')),
         seo_master_get_env_value(array('SEO_MASTER_TRUSTED_GATEWAY')) === '1',
-        !seo_master_has_supported_seo_plugin()
+        !seo_master_has_supported_seo_plugin(), seo_master_rank_math_ready()
     );
 }
 function seo_master_v2_store() {
@@ -56,6 +56,7 @@ function seo_master_capabilities() {
     $paired = false;
     $storage = false;
     $gateway = false;
+    $rank_math_ready = seo_master_rank_math_ready();
     try {
         $config = seo_master_v2_config();
         $paired = true;
@@ -69,7 +70,7 @@ function seo_master_capabilities() {
         'protocol' => 'seo-master/v2', 'plugin_version' => SEO_MASTER_CONNECTOR_VERSION, 'wordpress_version' => (string) $wp_version,
         'php_version' => PHP_VERSION, 'paired' => $paired, 'storage_ready' => $storage,
         'release_integrity' => $integrity,
-        'apply_enabled' => $integrity && $paired && $storage && $gateway, 'hitl_authority' => 'trusted_gateway_required',
+        'apply_enabled' => $integrity && $paired && $storage && $gateway && $rank_math_ready, 'hitl_authority' => 'trusted_gateway_required',
         'rollback_enabled' => $integrity && $paired && $storage && $gateway, 'rollback_model' => 'per_original_single_use_guard_v2',
         'manual_target_aba_detection' => false,
         'targets' => array('published_unprotected_post', 'published_unprotected_page'),
@@ -78,7 +79,8 @@ function seo_master_capabilities() {
         'unsupported_manual' => array('post_title', 'h1', 'content', 'html', 'internal_links'),
         'storage_model' => 'innodb_atomic_meta_and_ledger_v2', 'snapshot_digest' => 'canonical_json_sha256_v2',
         'runtime_validation' => 'pending_real_wordpress_innodb_matrix',
-        'yoast' => 'unverified_title_description_filters_jsonld_manual', 'rank_math' => 'unverified_title_description_filters_jsonld_manual',
+        'yoast' => 'unverified_title_description_filters_jsonld_manual',
+        'rank_math' => $rank_math_ready ? 'unverified_title_description_filters_jsonld_manual' : 'setup_required',
         'limitations' => array('theme_head_duplicates_require_verification', 'no_global_hook_exactly_once'),
         'limits' => array('body_bytes' => 16384, 'changes' => 3, 'title_bytes' => 512, 'description_bytes' => 2000, 'jsonld_bytes' => 8192, 'clock_skew_seconds' => 300),
     );

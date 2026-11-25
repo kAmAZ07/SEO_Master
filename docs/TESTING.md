@@ -68,6 +68,12 @@ python -u -B -m tests.e2e.hitl_browser --docker-context <context> --plugin-revis
 
 REQ-SEMANTIC §9.5 / DEC-04 / часть AC-06 проверяются `tests/unit/test_prioritizer.py`, `tests/integration/test_management_priority_postgres.py`, `tests/unit/test_hitl_gateway.py` и frontend tests `PriorityPanel`, `HITL`, `hitlAPI`. Unit проверяет контрольные значения, монотонность effort, границы, missing/zero и стабильные tie-break. Настоящий PostgreSQL проверяет формулу модели, SQL order до пагинации, scoped MANAGE/READ, атомарность журнала и rollback транзакции, гонку revision и сохранение override после audit/score/scheduler при stale identity map. Gateway проверяется на общей очереди двух проектов. Компонентные тесты проверяют authoritative order, unknown/zero, явный reason/revision, конфликт и инертный журнал. Это не доказывает остальные части AC-06 о score API/UI/CSV и источниках данных.
 
+## CSV отчётов и аудита
+
+Выгрузки используют UTF-8, запятую как разделитель и двойные кавычки для каждой ячейки. Текст с формульным префиксом, в том числе после начальных пробелов, получает апостроф. Преобразование применяется к значениям и динамическим заголовкам при экспорте. Исходные снимки отчётов и числовые метрики сохраняют свои значения. Браузерный CSV аудита сохраняет UTF-8 BOM для импорта в табличные редакторы.
+
+Reporting-профиль проверяет результат через CSV parser, включая кавычки, запятые, Unicode, разные заголовки и отрицательные числа. Frontend-тест `auditCsv.test.ts` проверяет сериализатор, общий для обеих страниц аудита. Поведение конкретного табличного редактора при импорте и повторном сохранении требует проверки в целевой среде. [OWASP ASVS — защита выгрузок](https://cornucopia.owasp.org/taxonomy/asvs-5.0/01-encoding-and-sanitization/02-injection-prevention)
+
 ## Уровни доказательств и ограничения
 
 Source review, unit/stub, native library, real database/CMS, image build/UID и staging/browser E2E — разные уровни. PHP memory/scripted SQL fixtures не доказывают InnoDB atomicity и crash recovery; такие свойства проверяет реальный стенд. HTTP 200, pending-list и CMS receipt не доказывают публичное verified. Обязательный skip/xfail, недоступная зависимость или стенд считаются незавершённой проверкой.

@@ -5,6 +5,7 @@ import { useAppSelector } from '../store/hooks'
 import { useAuditPolling } from '../hooks/useAuditPolling'
 import type { AuditCriterion, AuditFinding } from '../types/audit'
 import { describeAuditScore, hasAuditResults } from '../utils/auditStatus'
+import { serializeAuditCsv } from '../utils/auditCsv'
 import AuditStatePanel from '../components/audit/AuditStatePanel'
 import Card from '../components/ui/Card'
 import Loader from '../components/ui/Loader'
@@ -149,11 +150,6 @@ const FindingRow = ({ finding }: { finding: AuditFinding }) => {
   )
 }
 
-const escapeCsvCell = (value: unknown): string => {
-  const str = value === null || value === undefined ? '' : String(value)
-  return `"${str.replace(/"/g, '""')}"`
-}
-
 const exportAuditToCsv = (audit: import('../types/audit').AuditStatus) => {
   const rows: string[][] = []
   rows.push(['SEO Master — Отчёт расширенного аудита'])
@@ -196,7 +192,7 @@ const exportAuditToCsv = (audit: import('../types/audit').AuditStatus) => {
     }
   }
 
-  const csv = '﻿' + rows.map((row) => row.map(escapeCsvCell).join(',')).join('\r\n')
+  const csv = serializeAuditCsv(rows)
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
   const objectUrl = URL.createObjectURL(blob)
   const anchor = document.createElement('a')

@@ -51,10 +51,9 @@ async def _consume(
     except Exception as exc:
         logger.error(
             "Failed to start Management Service event consumer",
-            extra={"consumer_name": config.consumer_name, "error": str(exc)},
-            exc_info=True,
+            extra={"consumer_name": config.consumer_name, "error_type": type(exc).__name__},
         )
-        raise RuntimeError(f"Failed to connect Management Service consumer {config.consumer_name}") from exc
+        raise RuntimeError("MANAGEMENT_CONSUMER_CONNECT_FAILED") from None
 
     try:
         async with conn:
@@ -82,10 +81,9 @@ async def _consume(
     except Exception as exc:
         logger.error(
             "Management Service event consumer stopped unexpectedly",
-            extra={"consumer_name": config.consumer_name, "error": str(exc)},
-            exc_info=True,
+            extra={"consumer_name": config.consumer_name, "error_type": type(exc).__name__},
         )
-        raise
+        raise RuntimeError("MANAGEMENT_CONSUMER_FAILED") from None
 
 
 async def _wait_for_consumer_startup(started_events: list[asyncio.Event]) -> None:
@@ -95,7 +93,7 @@ async def _wait_for_consumer_startup(started_events: list[asyncio.Event]) -> Non
             first_failure = failed_tasks[0]
             exc = first_failure.exception()
             if exc:
-                raise RuntimeError("Management Service consumer failed during startup") from exc
+                raise RuntimeError("MANAGEMENT_CONSUMER_STARTUP_FAILED") from None
             raise RuntimeError("Management Service consumer stopped during startup")
         await asyncio.sleep(0.05)
 

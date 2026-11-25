@@ -14,6 +14,7 @@ logger = get_logger(__name__)
 
 engine = create_engine(
     str(settings.DATABASE_URL),
+    hide_parameters=True,
     poolclass=QueuePool,
     pool_size=20,
     max_overflow=40,

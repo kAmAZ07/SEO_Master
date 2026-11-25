@@ -18,6 +18,7 @@ SessionLocal = None
 if DATABASE_URL:
     engine = create_engine(
         DATABASE_URL,
+        hide_parameters=True,
         poolclass=QueuePool,
         pool_size=10,
         max_overflow=20,
@@ -37,8 +38,8 @@ def get_db() -> Generator:
     db = SessionLocal()
     try:
         yield db
-    except Exception as exc:
-        logger.error(f"Database session error: {exc}")
+    except Exception:
+        logger.error("Client database session failed")
         db.rollback()
         raise
     finally:

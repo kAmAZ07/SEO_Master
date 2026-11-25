@@ -183,6 +183,75 @@ def test_management_readiness_requires_schema_health_even_when_broker_is_ready(m
     assert response.status_code == 503
 
 
+@pytest.mark.parametrize(("component", "safe_error"), [
+    ("database", "MANAGEMENT_DATABASE_NOT_READY"),
+    ("broker", "MANAGEMENT_CONSUMER_STARTUP_FAILED"),
+])
+def test_management_startup_error_is_safe_for_server_logging(monkeypatch, component, safe_error):
+    import traceback
+    from unittest.mock import AsyncMock
+    from services.management_service import main
+
+    secret = "fixture-private-database-detail"
+    log = Mock()
+    monkeypatch.setattr(main, "logger", log)
+    monkeypatch.setattr(main, "init_db", Mock(side_effect=RuntimeError(secret) if component == "database" else None))
+    monkeypatch.setattr(main, "start_consumers", AsyncMock(side_effect=RuntimeError(secret)))
+
+    async def start():
+        async with main.lifespan(main.app):
+            pytest.fail("Startup unexpectedly succeeded")
+
+    with pytest.raises(RuntimeError) as failure:
+        asyncio.run(start())
+    assert str(failure.value) == safe_error
+    assert secret not in "".join(traceback.format_exception(failure.value))
+    assert secret not in str(log.mock_calls)
+
+
+def test_management_consumer_connect_failure_keeps_safe_reason(monkeypatch):
+    import traceback
+    from unittest.mock import AsyncMock
+    from services.management_service.events import consumers
+
+    secret = "fixture-private-broker-detail"
+    log = Mock()
+    monkeypatch.setattr(consumers, "logger", log)
+    monkeypatch.setattr(consumers.aio_pika, "connect_robust", AsyncMock(side_effect=RuntimeError(secret)))
+
+    async def start():
+        config = consumers.ResilientConsumerConfig(consumer_name="fixture", queue_name="fixture", routing_key="fixture")
+        await consumers._consume(config, Mock(), ("Fixture",), asyncio.Event())
+
+    with pytest.raises(RuntimeError, match="^MANAGEMENT_CONSUMER_CONNECT_FAILED$") as failure:
+        asyncio.run(start())
+    assert secret not in "".join(traceback.format_exception(failure.value))
+    assert secret not in str(log.mock_calls)
+    assert "fixture" in str(log.mock_calls)
+
+
+def test_management_request_database_error_does_not_escape_to_server_logger(monkeypatch):
+    from fastapi.testclient import TestClient
+    from sqlalchemy.exc import OperationalError
+    from services.management_service import main
+
+    secret = "fixture-private-database-detail"
+    log = Mock()
+    monkeypatch.setattr(main, "logger", log)
+    monkeypatch.setattr(main, "get_db_health",
+                        Mock(side_effect=OperationalError("SELECT fixture", {"value": secret}, RuntimeError(secret))))
+    client = TestClient(main.app)
+    try:
+        response = client.get("/health/ready", headers={"X-Correlation-ID": "fixture-request"})
+    finally:
+        client.close()
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error", "correlation_id": "fixture-request"}
+    assert response.headers["x-correlation-id"] == "fixture-request"
+    assert secret not in str(log.mock_calls)
+    log.error.assert_called_once_with("Unhandled request failure (%s), request %s", "OperationalError", "fixture-request")
+
+
 def test_management_runner_has_no_application_dsn_fallback(monkeypatch, capsys):
     from services.management_service.migrations import runner
 

@@ -101,5 +101,5 @@ async def check_rabbitmq_connection() -> bool:
         await connection.close()
         return True
     except Exception as exc:
-        logger.error("RabbitMQ health check failed", extra={"error": str(exc)})
+        logger.error("RabbitMQ health check failed (%s)", type(exc).__name__)
         return False

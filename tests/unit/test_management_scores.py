@@ -103,6 +103,34 @@ def test_saga_accepts_insufficient_data_from_real_http_schema(monkeypatch):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(("value", "source"), [(None, None), (0, "metrics_payload"), (7, "report_payload")])
+def test_saga_backlink_input_uses_reported_count_with_source(monkeypatch, value, source):
+    import json
+
+    async def scenario():
+        requests = []
+
+        def respond(request):
+            requests.append(json.loads(request.content))
+            return httpx.Response(200, json=response_payload())
+
+        saga = orchestrator.OptimizationSaga(PROJECT, "https://example.com/page", "task-1")
+        saga.context["crawl_result"] = {"summary": {"backlinks": {"top_linking_sites": [{"linking_site": "fixture.test"}]}}}
+        monkeypatch.setattr(saga, "_fetch_reporting_summary", AsyncMock(return_value={
+            "signals": {"backlinks_count": value}, "sources": {"backlinks_count": source},
+        }))
+        monkeypatch.setattr(saga, "_run_semantic_analysis", AsyncMock(return_value={}))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            saga.client = client
+            await saga._trigger_scores_calculation()
+
+        assert len(requests) == 1
+        assert requests[0]["backlinks_count"] == value
+        assert requests[0]["input_sources"]["backlinks_count"] == source
+
+    asyncio.run(scenario())
+
+
 def test_saga_does_not_complete_scores_without_validated_response():
     saga = orchestrator.OptimizationSaga(PROJECT, "https://example.com/page", "task-1")
     saga.context = {"ffscore": None}

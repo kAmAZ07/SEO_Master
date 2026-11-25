@@ -1,4 +1,3 @@
-import asyncio
 from typing import Awaitable, Callable, Optional, Type
 from urllib.parse import urlsplit
 
@@ -849,19 +848,15 @@ async def run_audit_core(
         findings.append({"code": "cwv_unavailable", "severity": "info", "confidence": "high",
                          "details": {"reason": psi_reason or "unavailable"}})
 
-    if include_external_data:
-        try:
-            from services.audit_service.integrations.gsc_link_analyzer import analyze_links
-
-            backlink_summary = await asyncio.to_thread(analyze_links, project_id, root_url)
-            summary["backlinks"] = backlink_summary
-        except Exception as exc:
-            findings.append({
-                "code": "backlinks_unavailable",
-                "severity": "info",
-                "confidence": "medium",
-                "details": {"reason": type(exc).__name__},
-            })
+    if include_external_data and not public:
+        reason = "backlink_source_not_configured"
+        summary["backlinks"] = {"status": "unavailable", "value": None, "reason": reason}
+        findings.append({
+            "code": "backlinks_unavailable",
+            "severity": "info",
+            "confidence": "high",
+            "details": {"reason": reason},
+        })
 
     if summary.get("spa_detected") and not js_render:
         findings.append({

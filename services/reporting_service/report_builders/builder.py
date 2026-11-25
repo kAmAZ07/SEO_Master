@@ -249,6 +249,7 @@ def _source_status(result: dict[str, Any]) -> dict[str, Any]:
         "status": result.get("status", "degraded"),
         "reason": result.get("reason"),
         "rows_count": len(result.get("records", []) or []),
+        **({"detail_coverage": result["detail_coverage"]} if "detail_coverage" in result else {}),
     }
 
 
@@ -268,8 +269,8 @@ def _snapshot(
         "period_start": period_start.isoformat(),
         "period_end": period_end.isoformat(),
         "traffic": {
-            "gsc_clicks": aggregates["gsc"].get("clicks", 0),
-            "gsc_impressions": aggregates["gsc"].get("impressions", 0),
+            "gsc_clicks": aggregates["gsc"].get("clicks"),
+            "gsc_impressions": aggregates["gsc"].get("impressions"),
             "ga4_sessions": aggregates["ga4"].get("sessions", 0),
             "ga4_users": aggregates["ga4"].get("users", 0),
             "yandex_shows": aggregates["yandex"].get("shows", 0),

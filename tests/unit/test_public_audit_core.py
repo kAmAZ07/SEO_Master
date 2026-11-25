@@ -5,6 +5,9 @@
 """
 import asyncio
 import gzip
+import sys
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -64,9 +67,10 @@ def psi_quota(monkeypatch):
     monkeypatch.setattr(cwv_analyzer, "fetch_pagespeed_result", _fake)
 
 
-def audit(client, root=f"{BASE}/", options=None, deadline_s=100.0, mode="public"):
+def audit(client, root=f"{BASE}/", options=None, deadline_s=100.0, mode="public", include_external_data=False):
     fetcher = AuditFetcher(client=client, budget=Budget(deadline_s=deadline_s), base_policy=build_policy())
-    return run(run_audit_core(root_url=root, mode=mode, project_id=None, options=options or {}, fetcher=fetcher))
+    return run(run_audit_core(root_url=root, mode=mode, project_id=None, options=options or {}, fetcher=fetcher,
+                              include_external_data=include_external_data))
 
 
 def codes(result):
@@ -101,6 +105,18 @@ def test_no_raw_html_or_link_lists_in_public_result(psi_poor):
     result = audit(FixtureClient())
     for page in result["pages"]:
         assert "html" not in page and "links" not in page
+
+
+def test_full_audit_reports_backlinks_unavailable_without_querying_gsc(psi_poor, monkeypatch):
+    analyze_links = Mock(return_value={"top_linking_sites": [{"linking_site": "fixture.test"}]})
+    monkeypatch.setitem(sys.modules, "services.audit_service.integrations.gsc_link_analyzer",
+                        SimpleNamespace(analyze_links=analyze_links))
+    result = audit(FixtureClient(), mode="full", include_external_data=True)
+    analyze_links.assert_not_called()
+    assert result["summary"]["backlinks"] == {
+        "status": "unavailable", "value": None, "reason": "backlink_source_not_configured",
+    }
+    assert "backlinks_unavailable" in codes(result)
 
 
 def test_depth_three_and_robots_disallowed_pages_are_not_fetched(psi_poor):

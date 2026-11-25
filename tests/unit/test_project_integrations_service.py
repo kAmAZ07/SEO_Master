@@ -1,4 +1,7 @@
+import asyncio
+import json
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from cryptography.fernet import Fernet
@@ -19,6 +22,22 @@ def test_credentials_vault_round_trip():
     decrypted = vault.decrypt(encrypted)
 
     assert decrypted == {"public_key": "pub-123", "secret_key": "sec-456"}
+
+
+@pytest.mark.parametrize("platform", ["gsc", "ga4"])
+def test_google_integration_rejects_untrusted_token_host_before_save(monkeypatch, platform):
+    service = IntegrationsService()
+    save = Mock()
+    monkeypatch.setattr(service, "_upsert_integration", save)
+    property_args = {"property_url": "https://example.com/"} if platform == "gsc" else {"property_id": "123"}
+    request = getattr(service, f"save_{platform}_credentials")(
+        None, "project-1", **property_args,
+        credentials_json=json.dumps({"web": {"client_id": "fixture", "client_secret": "fixture"}}),
+        token_json=json.dumps({"token_uri": "https://fixture.test/token", "refresh_token": "fixture"}),
+    )
+    with pytest.raises(IntegrationValidationError, match="^google_token_endpoint_unsupported$"):
+        asyncio.run(request)
+    save.assert_not_called()
 
 
 def test_resolve_tilda_page_id_prefers_explicit_metadata(monkeypatch):

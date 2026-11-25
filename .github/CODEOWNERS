@@ -38,6 +38,7 @@
 /tests/unit/test_metrics_calculator.py @sshpv
 /tests/unit/test_netpolicy.py @sshpv
 /tests/unit/test_project_integrations_service.py @sshpv
+/tests/unit/test_google_auth.py @sshpv
 /tests/unit/test_public_audit_core.py @sshpv
 /tests/unit/test_public_audit_gateway.py @sshpv
 /tests/unit/test_public_audit_lifecycle.py @sshpv

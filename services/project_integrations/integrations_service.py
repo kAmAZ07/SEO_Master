@@ -12,6 +12,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from services.project_integrations.credentials_vault import CredentialsVault
+from services.project_integrations.google_settings import GoogleConfigurationError, validate_google_token_settings
 from services.project_integrations.models import ProjectIntegration
 
 
@@ -713,6 +714,10 @@ class IntegrationsService:
         *,
         platform: str,
     ) -> str:
+        try:
+            validate_google_token_settings(credentials, token)
+        except GoogleConfigurationError as exc:
+            raise IntegrationValidationError(str(exc)) from None
         credential_type = str(credentials.get("type") or "").strip().lower()
         if credential_type == "service_account":
             return "service_account"

@@ -87,7 +87,8 @@ def _build_redis_client() -> Optional[redis.Redis]:
             socket_timeout=1,
         )
     except Exception as exc:
-        logger.error("Redis client init failed; public audit rate-limit unavailable", extra={"error": str(exc)})
+        logger.error("Redis client init failed; public audit rate-limit unavailable",
+                     extra={"error_type": type(exc).__name__})
         return None
 
 
@@ -96,7 +97,7 @@ redis_client = _build_redis_client()
 
 def _rate_limit_unavailable(exc: Exception | None = None) -> HTTPException:
     if exc:
-        logger.error("Public audit rate-limit unavailable", extra={"error": str(exc)})
+        logger.error("Public audit rate-limit unavailable", extra={"error_type": type(exc).__name__})
     return HTTPException(
         status_code=503,
         detail={

@@ -60,7 +60,7 @@ class CallbackAccessFilter(logging.Filter):
         if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
             path = args[2].split('?', 1)[0]
             safe = safe_callback_path(path)
-            if safe != path:
+            if safe != args[2]:
                 record.args = (*args[:2], safe, *args[3:])
         return True
 

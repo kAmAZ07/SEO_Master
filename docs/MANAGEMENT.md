@@ -108,7 +108,7 @@ Downgrade canonical revision допускается только без зада
 
 Client storage включает `public.client_keys` и `public.deployment_log`. Readiness требует точную мигрированную схему и отклоняет partial/plaintext legacy storage; автоматического удаления или преобразования секретов нет.
 
-Текущий Management head для AR-7 — `20261114_007_verification` поверх AR-6 `20261114_006_preparation`; Core head — `20261109_001_hitl_barrier`. Применять только явным migration runner, сначала Core, затем Management; startup остаётся read-only. Подготовка, status recovery, независимый public verify и явный rollback описаны в [EXECUTION.md](EXECUTION.md).
+Текущий Management head для AR-7 — `20261114_007_verification` поверх AR-6 `20261114_006_preparation`; Core head — `20261110_001_legacy_map_unproven`. Применять только явным migration runner, сначала Core, затем Management; startup остаётся read-only. Подготовка, status recovery, независимый public verify и явный rollback описаны в [EXECUTION.md](EXECUTION.md).
 
 Runtime foundation revisions: Core `20261109_001_hitl_barrier`, Management `20261109_004_client_storage`. Сначала Core, затем существующий проверенный Management runner; никаких миграций при application startup. Четвёртая control-plane revision содержит frozen Client storage (2 таблицы), точное безопасное adoption и запрет потери данных при downgrade. Model ownership и 6 Management tables не меняются. Partial schema/plaintext secret требуют отдельного административного решения и миграции, не неявного удаления данных.
 

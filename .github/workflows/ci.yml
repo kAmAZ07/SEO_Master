@@ -171,6 +171,7 @@ jobs:
                   "tests/integration/test_management_priority_postgres.py",
                   "tests/integration/test_tilda_postgres.py",
                   "tests/integration/test_runtime_foundation_postgres.py",
+                  "tests/integration/test_migrations_postgres.py",
               ], plugins=[RequiredTests()]))
           PY
 

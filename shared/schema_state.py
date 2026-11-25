@@ -2,7 +2,7 @@
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-CORE_HEAD = "20261109_001_hitl_barrier"
+CORE_HEAD = "20261110_001_legacy_map_unproven"
 MANAGEMENT_HEAD = "20261114_007_verification"
 HITL_STATE_TABLES = ("audit_schema.crawl_results", "semantic_schema.recommendation_versions", "public.users",
                      "audit_schema.projects", "audit_schema.workspace_members", "audit_schema.domain_authorizations")

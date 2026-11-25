@@ -145,8 +145,13 @@ class LegacyProjectIdMap(Base):
     __tablename__ = "legacy_project_id_map"
     __table_args__ = (
         UniqueConstraint("source", "legacy_id", name="uq_legacy_project_id_map_source_id"),
-        CheckConstraint("status IN ('matched', 'unmatched', 'ambiguous')", name="ck_legacy_project_id_map_status"),
+        CheckConstraint("status IN ('candidate', 'unmatched', 'ambiguous')", name="ck_legacy_project_id_map_status"),
+        CheckConstraint(
+            "project_id IS NULL AND (candidate_project_id IS NULL OR status = 'candidate')",
+            name="ck_legacy_project_id_map_unproven",
+        ),
         Index("idx_legacy_project_id_map_project", "project_id"),
+        Index("idx_legacy_project_id_map_candidate", "candidate_project_id"),
         {"schema": "audit_schema"},
     )
 
@@ -157,6 +162,12 @@ class LegacyProjectIdMap(Base):
     status = Column(String(16), nullable=False)
     reason = Column(String(255), nullable=False, default="")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # Предложенный по host проект: владелец не доказан. `project_id` зарезервирован для подтверждённого соответствия.
+    candidate_project_id = Column(
+        String(36),
+        ForeignKey("audit_schema.projects.id", ondelete="SET NULL", name="fk_legacy_project_id_map_candidate"),
+        nullable=True,
+    )
 
 
 class Crawl(Base, TimestampMixin, UUIDMixin):

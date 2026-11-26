@@ -382,6 +382,7 @@ def test_full_audit_runs_after_confirmation_and_stays_inside_the_scope(stand):
     ok = call(stand, ALICE, "POST", "/api/audit/full", json={"projectId": project_id})
     assert ok.status_code == 200 and ok.json()["project_id"] == project_id
     assert stand.proxied[-1][2]["root_url"] == "https://example.com/blog"
+    assert stand.proxied[-1][2]["options"]["js_render"] is False
     inside = call(stand, ALICE, "POST", "/api/audit/full", json={"projectId": project_id, "url": "https://example.com/blog/post-1"})
     assert inside.status_code == 200
 

@@ -21,7 +21,7 @@ class BaseAuditRequest(BaseModel):
 
 
 def _default_full_audit_options() -> AuditOptions:
-    return AuditOptions(max_pages=1000, max_depth=4, js_render=True, timeout=30.0)
+    return AuditOptions(max_pages=1000, max_depth=4, timeout=30.0)
 
 
 class PublicAuditRequest(BaseAuditRequest):

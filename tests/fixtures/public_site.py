@@ -114,6 +114,8 @@ class FixtureClient:
         seen = {current}
         while True:
             target = parse_target(current, policy)
+            if policy.target_guard is not None:
+                policy.target_guard(target)
             addresses = await self._resolve_checked(target.host, target.port)
             self.requests.append((method, current))
             resp = self.site.get(urlsplit(current).path or "/")

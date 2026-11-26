@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, replace
-from typing import Optional
+from typing import Callable, Optional
 
-from shared.netpolicy import FetchResult, NetPolicy, NetPolicyError, SafeHttpClient, parse_target, resolve_public
+from shared.netpolicy import FetchResult, NetPolicy, NetPolicyError, SafeHttpClient, Target, parse_target, resolve_public
 
 from services.audit_service.config import settings
 from services.audit_service.public_policy import (
@@ -90,6 +90,16 @@ class AuditFetcher:
     def create(cls, budget: Optional[Budget] = None, client: Optional[SafeHttpClient] = None) -> "AuditFetcher":
         policy = build_policy()
         return cls(client=client or SafeHttpClient(policy), budget=budget or Budget(), base_policy=policy)
+
+    def with_target_guard(self, guard: Callable[[Target], None]) -> "AuditFetcher":
+        existing = self.base_policy.target_guard
+
+        def require_target(target: Target) -> None:
+            if existing is not None:
+                existing(target)
+            guard(target)
+
+        return replace(self, base_policy=replace(self.base_policy, target_guard=require_target))
 
     async def fetch(
         self,

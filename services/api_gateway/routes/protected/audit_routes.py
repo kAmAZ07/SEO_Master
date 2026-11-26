@@ -102,7 +102,7 @@ async def start_project_audit(
         "options": {
             "max_pages": request.maxPages or 1000,
             "max_depth": request.maxDepth if request.maxDepth is not None else 4,
-            "js_render": True if request.jsRender is None else request.jsRender,
+            "js_render": request.jsRender is True,
             "timeout": 30.0,
         },
     }

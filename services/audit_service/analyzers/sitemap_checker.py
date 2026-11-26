@@ -104,7 +104,13 @@ async def check_sitemap(root_url: str, fetcher: AuditFetcher | None = None, extr
         if fetched >= PUBLIC_MAX_SITEMAP_FETCHES:
             result["truncated"] = True
             break
-        if urlparse(url).netloc.lower() != host and url != primary:
+        try:
+            url_host = urlparse(url).netloc.lower()
+        except ValueError:
+            if result["state"] == "missing":
+                result.update(state="invalid", error="sitemap_invalid_url")
+            continue
+        if url_host != host and url != primary:
             continue  # чужой хост не расширяет область проверки
         try:
             fetched += 1

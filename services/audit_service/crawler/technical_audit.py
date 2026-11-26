@@ -1,8 +1,10 @@
 import asyncio
 from typing import Awaitable, Callable, Optional, Type
 from urllib.parse import urlsplit
+from dataclasses import replace
 
-from shared.netpolicy import NetPolicyError
+from shared.netpolicy import NetPolicyError, Target
+from shared.projects.scope import ScopeError, scope_from_url
 from sqlalchemy import select
 
 from services.audit_service.crawler.public_crawler import crawl_public
@@ -12,7 +14,6 @@ from services.audit_service.analyzers.schema_validator import validate_jsonld
 from services.audit_service.analyzers.robots_checker import fetch_robots
 from services.audit_service.analyzers.sitemap_checker import check_sitemap
 from services.audit_service.analyzers.cwv_analyzer import analyze_cwv_detailed
-from services.audit_service.config import settings
 from services.audit_service.db.session import get_session
 from services.audit_service.db.models import CrawlResult, PublicAuditResult
 from services.audit_service.netio import AuditFetcher, Budget, BudgetExhausted
@@ -203,8 +204,8 @@ FINDING_CATALOG = {
     },
     "spa_detected_enable_js_render": {
         "title": "Обнаружен SPA-рендеринг",
-        "description": "Страница, по всей видимости, использует клиентский рендеринг, но JavaScript-рендеринг для этого обхода был отключён.",
-        "recommendation": "Повторите аудит с включённым JavaScript-рендерингом или добавьте серверный рендеринг/пре-рендеринг.",
+        "description": "Страница, по всей видимости, использует клиентский рендеринг. Анализ использует HTML, полученный по HTTP.",
+        "recommendation": "Проверьте клиентский контент в изолированном рендерере или добавьте серверный рендеринг.",
         "category": "rendering",
     },
     "anti_bot_detected": {
@@ -706,19 +707,25 @@ async def run_audit_core(
         options = public_options(options)
     max_pages = int(options.get("max_pages", 10 if public else 1000))
     max_depth = int(options.get("max_depth", 2 if public else 4))
-    js_render = False if public else bool(options.get("js_render", False))
-    respect_robots = True if public else bool(options.get("respect_robots", True))
-    timeout = float(options.get("timeout", settings.default_timeout_s))
-
     findings: list[dict] = []
     checks: dict[str, dict] = {}
     partial_reasons: list[str] = []
-    summary: dict = {"checks": checks, "mode": mode}
+    summary: dict = {"checks": checks, "mode": mode, "js_render_used": False}
+    if not public and options.get("js_render"):
+        checks["js_render"] = {"status": "unavailable", "reason": "isolated_egress_required"}
+        partial_reasons.append("js_render_unavailable")
     if project_id:
         summary["project_id"] = project_id
 
     await _report(on_progress, "precheck")
     precheck_findings = await _precheck_url(root_url, fetcher)
+    try:
+        scope = scope_from_url(root_url)
+    except ScopeError as exc:
+        scope = None
+        if not precheck_findings:
+            precheck_findings = [{"code": "invalid_url", "severity": "high", "confidence": "high",
+                                  "details": {"root_url": root_url, "reason": exc.code}}]
     if precheck_findings:
         findings.extend(precheck_findings)
         summary.update(
@@ -729,12 +736,18 @@ async def run_audit_core(
         checks["precheck"] = {"status": "failed", "code": precheck_findings[0]["code"]}
         return _finish_early(root_url, mode, project_id, summary, findings, "failed")
     checks["precheck"] = {"status": "passed"}
+    assert scope is not None
+    origin = replace(scope, path_prefix="/")
+
+    def require_robots_target(target: Target) -> None:
+        if not origin.contains(target.url) or urlsplit(target.url).path != "/robots.txt":
+            raise NetPolicyError("target_out_of_scope", url=target.url)
 
     # --- robots.txt ---
     await _report(on_progress, "robots")
     robots = None
     try:
-        robots = await fetch_robots(root_url, fetcher)
+        robots = await fetch_robots(root_url, fetcher.with_target_guard(require_robots_target))
     except BudgetExhausted as exc:
         partial_reasons.append(exc.reason)
     if robots is not None:
@@ -747,11 +760,41 @@ async def run_audit_core(
     else:
         checks["robots"] = {"status": "unavailable", "state": "budget_exhausted"}
 
+    if robots is None or not robots.can_fetch(root_url):
+        if robots is not None and robots.state == "ok":
+            findings.append({"code": "blocked_by_robots", "severity": "medium", "confidence": "high",
+                             "details": {"url": robots.robots_url}})
+            partial_reasons.append("robots_blocked")
+        elif robots is not None:
+            partial_reasons.append("robots_unreachable")
+        summary.update(coverage={"attempted": 0, "processed": 0, "max_pages": max_pages, "max_depth": max_depth},
+                       blocked_pages_count=0, precheck_failed=False, partial_reasons=partial_reasons)
+        for name in ("sitemap", "meta", "h1", "canonical", "structured_data", "links", "psi"):
+            checks[name] = {"status": "skipped"}
+        return _finish_early(root_url, mode, project_id, summary, findings, "partial")
+
+    def require_allowed_by_robots(target: Target) -> None:
+        if not robots.can_fetch(target.url):
+            raise NetPolicyError("robots_disallowed", url=target.url)
+
+    def require_crawl_target(target: Target) -> None:
+        if not scope.contains(target.url):
+            raise NetPolicyError("target_out_of_scope", url=target.url)
+        require_allowed_by_robots(target)
+
+    def require_sitemap_target(target: Target) -> None:
+        primary = origin.contains(target.url) and urlsplit(target.url).path == "/sitemap.xml"
+        if not primary and not scope.contains(target.url):
+            raise NetPolicyError("target_out_of_scope", url=target.url)
+        require_allowed_by_robots(target)
+
+    navigation = fetcher.with_target_guard(require_crawl_target)
+
     # --- sitemap ---
     await _report(on_progress, "sitemap")
     sitemap: dict | None = None
     try:
-        sitemap = await check_sitemap(root_url, fetcher, extra_urls=(robots.sitemaps if robots else None))
+        sitemap = await check_sitemap(root_url, fetcher.with_target_guard(require_sitemap_target), extra_urls=robots.sitemaps)
     except BudgetExhausted as exc:
         partial_reasons.append(exc.reason)
     if sitemap is not None:
@@ -770,31 +813,13 @@ async def run_audit_core(
     else:
         checks["sitemap"] = {"status": "unavailable", "state": "budget_exhausted"}
 
-    blocked = robots is not None and respect_robots and robots.disallow_all
-    if blocked:
-        if robots.state == "ok":
-            findings.append({"code": "blocked_by_robots", "severity": "medium", "confidence": "high",
-                             "details": {"url": robots.robots_url}})
-            partial_reasons.append("robots_blocked")
-        else:
-            partial_reasons.append("robots_unreachable")
-        summary.update(coverage={"attempted": 0, "processed": 0, "max_pages": max_pages, "max_depth": max_depth},
-                       blocked_pages_count=0, precheck_failed=False, partial_reasons=partial_reasons)
-        for name in ("meta", "h1", "canonical", "structured_data", "links"):
-            checks[name] = {"status": "skipped"}
-        checks["psi"] = {"status": "skipped"}
-        return _finish_early(root_url, mode, project_id, summary, findings, "partial")
-
     # --- обход ---
     await _report(on_progress, "crawl", pages_done=0, pages_max=max_pages)
     crawled = await crawl_public(
         root_url=root_url,
         max_pages=max_pages,
         max_depth=max_depth,
-        js_render=js_render,
-        timeout_s=timeout,
-        respect_robots=respect_robots,
-        fetcher=fetcher,
+        fetcher=navigation,
         robots=robots,
         on_progress=on_progress,
     )
@@ -802,6 +827,10 @@ async def run_audit_core(
     summary.update(crawled["summary"])
     if summary.get("truncated_reason"):
         partial_reasons.append(summary["truncated_reason"])
+    root_error = pages[0].get("error") if pages else None
+    root_policy_blocked = root_error in {"blocked_robots_disallowed", "blocked_target_out_of_scope"}
+    if root_policy_blocked:
+        partial_reasons.append(root_error.removeprefix("blocked_"))
     findings.extend(_build_page_level_findings(pages))
 
     await _report(on_progress, "analyze", pages_done=len(pages), pages_max=max_pages)
@@ -820,19 +849,30 @@ async def run_audit_core(
     # --- ссылки ---
     await _report(on_progress, "links", pages_done=len(pages), pages_max=max_pages)
     try:
-        link_findings, links_checked = await check_links_404(root_url, pages, fetcher, limit=PUBLIC_MAX_LINK_PROBES if public else None)
+        link_findings, links_checked = await check_links_404(
+            root_url, pages, navigation, limit=PUBLIC_MAX_LINK_PROBES if public else None, robots=robots,
+        )
     except BudgetExhausted as exc:
         link_findings, links_checked = [], 0
         partial_reasons.append(exc.reason)
     findings.extend(link_findings)
     summary["links_checked"] = links_checked
     link_problem = any(f["code"].startswith("broken_link") for f in link_findings)
-    checks["links"] = {"status": "failed" if link_problem else ("skipped" if not processed else "passed"), "checked": links_checked}
+    link_incomplete = any(f["code"] in {"link_check_blocked", "link_check_error"} for f in link_findings)
+    if link_problem:
+        link_status = "failed"
+    elif link_incomplete:
+        link_status = "unavailable"
+    else:
+        link_status = "passed" if processed else "skipped"
+    checks["links"] = {"status": link_status, "checked": links_checked}
 
     # --- PageSpeed ---
     await _report(on_progress, "psi")
     psi_timeout = max(1.0, min(15.0, fetcher.budget.remaining() - 1.0))
-    if fetcher.budget.time_exhausted:
+    if root_policy_blocked:
+        cwv, psi_reason = None, "target_blocked_by_crawl_policy"
+    elif fetcher.budget.time_exhausted:
         cwv, psi_reason = None, "deadline"
     else:
         cwv, psi_reason = await analyze_cwv_detailed(root_url, timeout=psi_timeout)
@@ -843,6 +883,8 @@ async def run_audit_core(
         checks["psi"] = {"status": "passed" if not cwv.get("findings") else "failed",
                          "field_data_available": cwv["summary"].get("field_data_available", False)}
         findings.extend(cwv.get("findings", []))
+    elif root_policy_blocked:
+        summary["psi"] = checks["psi"] = {"status": "skipped", "reason": psi_reason}
     else:
         summary["psi"] = {"status": "unavailable", "reason": psi_reason}
         checks["psi"] = {"status": "unavailable", "reason": psi_reason}
@@ -863,7 +905,7 @@ async def run_audit_core(
                 "details": {"reason": type(exc).__name__},
             })
 
-    if summary.get("spa_detected") and not js_render:
+    if summary.get("spa_detected"):
         findings.append({
             "code": "spa_detected_enable_js_render",
             "severity": "medium",

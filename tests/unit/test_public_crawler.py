@@ -13,7 +13,7 @@ from tests.fixtures.public_site import BASE, FixtureClient, Resp, html_page
 
 def _crawl(site, **kwargs):
     fetcher = AuditFetcher(client=FixtureClient(site), budget=Budget(deadline_s=30), base_policy=build_policy())
-    return asyncio.run(crawl_public(f"{BASE}/", fetcher=fetcher, timeout_s=5.0, **kwargs))
+    return asyncio.run(crawl_public(f"{BASE}/", fetcher=fetcher, **kwargs))
 
 
 def test_public_crawler_limits_pages():
@@ -22,7 +22,7 @@ def test_public_crawler_limits_pages():
         "/a": Resp(body=html_page(title="Page A title")),
         "/b": Resp(body=html_page(title="Page B title")),
     }
-    result = _crawl(site, max_pages=2, js_render=False)
+    result = _crawl(site, max_pages=2)
     assert result["summary"]["coverage"]["processed"] == 2
     assert len(result["pages"]) == 2
 

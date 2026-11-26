@@ -111,6 +111,161 @@ def test_depth_three_and_robots_disallowed_pages_are_not_fetched(psi_poor):
     assert "/private" not in fetched  # Disallow в robots.txt
 
 
+def test_full_audit_does_not_start_unisolated_browser(psi_poor, monkeypatch):
+    from unittest.mock import AsyncMock
+    from services.audit_service.crawler import public_crawler
+    from services.audit_service.schemas.audit import FullAuditRequest
+
+    browser = AsyncMock(return_value=(200, f"{BASE}/", html_page(), None))
+    monkeypatch.setattr(public_crawler, "fetch_html_playwright", browser, raising=False)
+    client = FixtureClient()
+    result = audit(client, mode="full", options={"js_render": True, "max_pages": 2})
+    browser.assert_not_awaited()
+    assert result["outcome"] == "partial"
+    assert "js_render_unavailable" in result["summary"]["partial_reasons"]
+    assert result["summary"]["js_render_used"] is False
+    assert "/" in client.paths("GET")
+    assert not FullAuditRequest(project_id="fixture", root_url=f"{BASE}/").options.js_render
+
+
+def test_full_audit_respects_robots_for_pages_links_and_redirects_despite_legacy_flag(psi_poor):
+    site = {
+        "/robots.txt": Resp(body="User-agent: *\nDisallow: /private\n"),
+        "/": Resp(body=html_page(links=["/private", "/alias"])),
+        "/alias": Resp(status=302, redirect="/private"),
+        "/private": Resp(body=html_page()),
+    }
+    client = FixtureClient(site)
+    audit(client, mode="full", options={"max_depth": 2, "respect_robots": False})
+    assert "/alias" in client.paths("GET")
+    assert "/private" not in client.paths()
+
+    links_only = FixtureClient(site)
+    audit(links_only, mode="full", options={"max_depth": 0})
+    assert "/alias" in links_only.paths("HEAD")
+    assert "/private" not in links_only.paths()
+    result = audit(FixtureClient(site), mode="full", options={"max_depth": 0})
+    assert result["summary"]["checks"]["links"]["status"] == "unavailable"
+
+
+def test_crawl_redirect_and_links_stay_under_requested_path_prefix(psi_poor):
+    site = {
+        "/robots.txt": Resp(status=404),
+        "/sitemap.xml": Resp(status=302, redirect="/elsewhere"),
+        "/catalog": Resp(body=html_page(links=["/catalog/next", "/elsewhere", "/catalogue"])),
+        "/catalog/next": Resp(status=302, redirect="/elsewhere"),
+        "/elsewhere": Resp(body=html_page()),
+        "/catalogue": Resp(body=html_page()),
+    }
+    client = FixtureClient(site)
+    audit(client, root=f"{BASE}/catalog", mode="full")
+    assert "/catalog/next" in client.paths("GET")
+    assert {"/elsewhere", "/catalogue"}.isdisjoint(client.paths())
+
+
+def test_audit_skips_navigation_when_robots_budget_is_exhausted(monkeypatch):
+    from services.audit_service.crawler import technical_audit
+    from services.audit_service.netio import BudgetExhausted
+
+    async def unavailable(*args):
+        raise BudgetExhausted("aux_requests")
+
+    monkeypatch.setattr(technical_audit, "fetch_robots", unavailable)
+    client = FixtureClient()
+    result = audit(client, mode="full")
+    assert result["outcome"] == "partial"
+    assert result["summary"]["checks"]["robots"]["state"] == "budget_exhausted"
+    assert result["summary"]["checks"]["psi"]["status"] == "skipped"
+    assert "/" not in client.paths()
+    assert "/sitemap.xml" not in client.paths()
+
+
+@pytest.mark.parametrize("primary", [Resp(status=404), Resp(status=302, redirect="/private")])
+def test_sitemap_discovery_cannot_fetch_a_robots_denied_path(psi_poor, primary):
+    site = {
+        "/robots.txt": Resp(body=f"User-agent: *\nDisallow: /private\nSitemap: {BASE}/private\n"),
+        "/sitemap.xml": primary,
+        "/": Resp(body=html_page()),
+        "/private": Resp(body=html_page()),
+    }
+    client = FixtureClient(site)
+    audit(client, mode="full")
+    assert "/sitemap.xml" in client.paths("GET")
+    assert "/private" not in client.paths()
+
+
+def test_malformed_sitemap_discovery_keeps_public_audit_running(psi_poor):
+    client = FixtureClient({
+        "/robots.txt": Resp(body="User-agent: *\nSitemap: https://[\n"),
+        "/sitemap.xml": Resp(status=404),
+        "/": Resp(body=html_page()),
+    })
+    result = audit(client, mode="full")
+    assert result["summary"]["coverage"]["processed"] == 1
+    assert result["summary"]["sitemap"]["state"] == "invalid"
+    assert result["summary"]["sitemap"]["error"] == "sitemap_invalid_url"
+    assert set(client.paths()) == {"/robots.txt", "/sitemap.xml", "/"}
+
+
+def test_denied_landing_redirect_is_partial_with_no_processed_pages(psi_poor):
+    client = FixtureClient({
+        "/robots.txt": Resp(body="User-agent: *\nDisallow: /private\n"),
+        "/": Resp(status=302, redirect="/private"),
+        "/private": Resp(body=html_page()),
+    })
+    result = audit(client, mode="full")
+    assert result["outcome"] == "partial"
+    assert "robots_disallowed" in result["summary"]["partial_reasons"]
+    assert result["summary"]["coverage"]["processed"] == 0
+    assert result["summary"]["checks"]["psi"]["status"] == "skipped"
+    assert "/private" not in client.paths()
+
+
+def test_longest_literal_robots_rule_wins_independent_of_file_order(psi_poor):
+    client = FixtureClient({
+        "/robots.txt": Resp(body="User-agent: *\nAllow: /catalog\nDisallow: /catalog/private\n"),
+        "/catalog": Resp(body=html_page(links=["/catalog/private", "/catalog/open"])),
+        "/catalog/private": Resp(body=html_page()),
+        "/catalog/open": Resp(body=html_page()),
+    })
+    audit(client, root=f"{BASE}/catalog", mode="full")
+    assert "/catalog/open" in client.paths("GET")
+    assert "/catalog/private" not in client.paths()
+
+
+def test_unsupported_robots_pattern_prevents_crawling():
+    client = FixtureClient({
+        "/robots.txt": Resp(body="User-agent: *\nDisallow: /private*\n"),
+        "/": Resp(body=html_page(links=["/private-report"])),
+        "/private-report": Resp(body=html_page()),
+    })
+    result = audit(client, mode="full")
+    assert result["outcome"] == "partial"
+    assert result["summary"]["robots"]["error"] == "robots_rules_unsupported"
+    assert client.paths() == ["/robots.txt"]
+
+
+def test_robots_redirect_cannot_fetch_arbitrary_content():
+    client = FixtureClient({"/robots.txt": Resp(status=302, redirect="/other"), "/other": Resp(body=html_page())})
+    result = audit(client, mode="full")
+    assert result["outcome"] == "partial"
+    assert result["summary"]["robots"]["error"] == "target_out_of_scope"
+    assert client.paths() == ["/robots.txt"]
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\v", "\f", "\x85"])
+def test_robots_comment_continues_until_physical_line_break(psi_poor, separator):
+    robots = f"User-agent: *\nDisallow: /private\n# explanation{separator}Allow: /private\n"
+    client = FixtureClient({
+        "/robots.txt": Resp(body=robots),
+        "/": Resp(body=html_page(links=["/private"])),
+        "/private": Resp(body=html_page()),
+    })
+    audit(client, mode="full")
+    assert "/" in client.paths("GET")
+    assert "/private" not in client.paths()
+
+
 def test_head_not_supported_falls_back_to_get(psi_poor):
     client = FixtureClient()
     audit(client)
@@ -256,7 +411,7 @@ def test_redirect_to_internal_address_is_blocked_and_trap_gets_no_request(psi_po
     client = FixtureClient(site, dns={"fixture.test": ["93.184.216.34"], "trap.test": ["169.254.169.254"]})
     result = audit(client)
     blog = next(p for p in result["pages"] if p["url"].endswith("/blog"))
-    assert blog["error"] == "blocked_address_blocked"
+    assert blog["error"] == "blocked_target_out_of_scope"
     assert result["summary"]["blocked_pages_count"] >= 1
     assert all("trap.test" not in url for _, url in client.requests)  # к ловушке не обращались
 

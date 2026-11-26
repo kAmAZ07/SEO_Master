@@ -12,6 +12,7 @@ import socket
 import ssl
 import tempfile
 import zlib
+from dataclasses import replace
 
 import httpcore
 import pytest
@@ -305,6 +306,21 @@ def test_relative_redirect_is_followed_and_recorded():
     assert result.body == b"final"
     assert result.redirects == ["http://example.com/next"]
     assert result.final_url == "http://example.com/next"
+
+
+def test_application_target_guard_runs_before_connect_for_every_hop():
+    candidates = []
+
+    def guard(target):
+        candidates.append(target.url)
+        if target.path_and_query != "/start":
+            raise NetPolicyError("target_out_of_scope", url=target.url)
+
+    client, backend = client_with([redirect("/other"), http_response(b"unused")])
+    error = fetch_error(client, "http://example.com/start", policy=replace(POLICY, target_guard=guard))
+    assert error.code == "target_out_of_scope" and error.is_policy_block
+    assert candidates == ["http://example.com/start", "http://example.com/other"]
+    assert len(backend.connects) == 1
 
 
 def test_redirect_loop_and_chain_limit():

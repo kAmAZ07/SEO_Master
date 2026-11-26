@@ -35,7 +35,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpcore
 
-# Коды ошибок. Первые восемь — отказы политики безопасности, остальные — сбои передачи.
+# Стабильные коды отказов политики безопасности.
 POLICY_CODES = frozenset(
     {
         "invalid_url",
@@ -50,6 +50,8 @@ POLICY_CODES = frozenset(
         "redirect_invalid",
         "response_too_large",
         "method_not_allowed",
+        "target_out_of_scope",
+        "robots_disallowed",
     }
 )
 TRANSPORT_CODES = frozenset({"timeout", "connect_error", "tls_error", "protocol_error", "unsupported_encoding"})
@@ -94,6 +96,7 @@ class NetPolicy:
     # Только для изолированного тестового профиля (NETPOLICY_PROFILE=test): точные имена
     # узлов, которым разрешён приватный адрес. В любом другом окружении список должен быть пуст.
     allow_private_hosts: frozenset[str] = field(default_factory=frozenset)
+    target_guard: Callable[[Target], None] | None = None
 
     def __post_init__(self):
         if self.allow_private_hosts and os.environ.get("NETPOLICY_PROFILE") != "test":
@@ -392,6 +395,8 @@ class SafeHttpClient:
         visited = [target.url]
         redirects: list[str] = []
         while True:
+            if policy.target_guard is not None:
+                policy.target_guard(target)
             backend = _GuardedBackend(policy, self._resolver, self._inner_backend or httpcore.AnyIOBackend())
             request_headers = [(b"host", target.host_header.encode("ascii")),
                                (b"user-agent", policy.user_agent.encode("latin-1", "replace")),

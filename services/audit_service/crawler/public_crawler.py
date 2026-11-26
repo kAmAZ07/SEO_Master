@@ -1,10 +1,9 @@
 """Обход сайта для аудита.
 
-Основной (не-JS) путь работает только через `AuditFetcher` / `SafeHttpClient`: адреса
+Обход работает через `AuditFetcher` / `SafeHttpClient`: адреса
 проверяются при соединении, редиректы, размеры и время ограничены, бюджет задания общий.
-Обход ограничен одним хостом (`www.` считается тем же узлом), robots.txt применяется
-к каждому URL. JS-рендеринг (Playwright) доступен только полному аудиту, публичный его
-не использует.
+Область обхода задана origin и префиксом пути исходного URL. Правила robots.txt
+применяются к навигации в пределах этой области.
 """
 from __future__ import annotations
 
@@ -15,8 +14,8 @@ from urllib.parse import urldefrag, urljoin, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 from shared.netpolicy import NetPolicyError
+from shared.projects.scope import scope_from_url
 
-from services.audit_service.config import settings
 from services.audit_service.netio import AuditFetcher, BudgetExhausted
 from services.audit_service.analyzers.robots_checker import RobotsInfo
 
@@ -41,7 +40,7 @@ def _canonical_url(url: str) -> str | None:
     """Приводит URL к виду для дедупликации: схема и хост в нижнем регистре, без фрагмента и порта по умолчанию."""
     url, _ = urldefrag(url.strip())
     parts = urlsplit(url)
-    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname or parts.username is not None:
         return None
     host = parts.hostname.lower()
     if ":" in host:
@@ -63,16 +62,6 @@ def _normalize_url(base: str, href: str) -> str | None:
         return _canonical_url(urljoin(base, href))
     except ValueError:
         return None
-
-
-def _host_key(url: str) -> str:
-    host = (urlsplit(url).hostname or "").lower()
-    return host[4:] if host.startswith("www.") else host
-
-
-def _same_site(root: str, candidate: str) -> bool:
-    """Тот же узел (без учёта `www.`). Совпадение зарегистрированного домена не даёт доступа к поддоменам."""
-    return _host_key(root) == _host_key(candidate)
 
 
 def _extract_basic(html: str) -> tuple[str | None, str | None, str | None, list[str], int]:
@@ -103,26 +92,6 @@ def _is_html(content_type: str) -> bool:
     return not lowered or "html" in lowered
 
 
-async def fetch_html_playwright(url: str, timeout_ms: int, user_agent: str) -> tuple[int | None, str | None, str | None, str | None]:
-    """JS-рендеринг. Только для полного аудита; не используется в публичном режиме."""
-    from playwright.async_api import async_playwright
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        try:
-            context = await browser.new_context(user_agent=user_agent)
-            try:
-                page = await context.new_page()
-                resp = await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
-                return (resp.status if resp else None), page.url, await page.content(), None
-            except Exception as e:  # noqa: BLE001 - любая ошибка браузера превращается в код
-                return None, None, None, type(e).__name__
-            finally:
-                await context.close()
-        finally:
-            await browser.close()
-
-
 def _failed_page(url: str, error: str, status: int | None = None, final_url: str | None = None) -> CrawledPage:
     return CrawledPage(url=url, status_code=status, final_url=final_url, html=None, title=None,
                        description=None, h1=None, links=[], error=error)
@@ -132,9 +101,6 @@ async def crawl_public(
     root_url: str,
     max_pages: int = 10,
     max_depth: int = 2,
-    js_render: bool = False,
-    timeout_s: float = 10.0,
-    respect_robots: bool = True,
     *,
     fetcher: Optional[AuditFetcher] = None,
     robots: Optional[RobotsInfo] = None,
@@ -142,6 +108,7 @@ async def crawl_public(
 ) -> dict:
     fetcher = fetcher or AuditFetcher.create()
     root = _canonical_url(root_url) or root_url
+    scope = scope_from_url(root)
     visited: set[str] = set()
     queue: list[tuple[str, int]] = [(root, 0)]
     pages: list[CrawledPage] = []
@@ -158,29 +125,23 @@ async def crawl_public(
             continue
         visited.add(url)
 
-        if respect_robots and robots is not None and not robots.can_fetch(url):
+        if robots is not None and not robots.can_fetch(url):
             counters["blocked"] += 1
             continue
         max_depth_reached = max(max_depth_reached, depth)
 
         status = final_url = html = None
         content_type = ""
-        err: str | None = None
         try:
-            if js_render:
-                status, final_url, html, err = await fetch_html_playwright(
-                    url, timeout_ms=int(timeout_s * 1000), user_agent=settings.user_agent
-                )
-            else:
-                response = await fetcher.fetch(url, kind="page")
-                status, final_url = response.status, response.final_url
-                content_type = response.headers.get("content-type", "")
-                if not _is_html(content_type):
-                    counters["non_html"] += 1
-                    if depth == 0:
-                        pages.append(_failed_page(url, "not_html", status, final_url))
-                    continue
-                html = _decode_body(response.body, content_type)
+            response = await fetcher.fetch(url, kind="page")
+            status, final_url = response.status, response.final_url
+            content_type = response.headers.get("content-type", "")
+            if not _is_html(content_type):
+                counters["non_html"] += 1
+                if depth == 0:
+                    pages.append(_failed_page(url, "not_html", status, final_url))
+                continue
+            html = _decode_body(response.body, content_type)
         except BudgetExhausted as exc:
             truncated_reason = exc.reason
             break
@@ -204,10 +165,6 @@ async def crawl_public(
                 await on_progress("crawl", pages_done=len(pages), pages_max=max_pages)
             continue
 
-        if err:
-            pages.append(_failed_page(url, err, status, final_url))
-            continue
-
         if status in (403, 429):
             anti_bot_detected = True
         if status and 500 <= status <= 599:
@@ -226,7 +183,7 @@ async def crawl_public(
             seen_links: set[str] = set()
             for href in raw_links:
                 normalized = _normalize_url(base, href)
-                if normalized and normalized not in seen_links and _same_site(root, normalized):
+                if normalized and normalized not in seen_links and scope.contains(normalized):
                     seen_links.add(normalized)
                     all_links.append(normalized)
 
@@ -241,7 +198,7 @@ async def crawl_public(
 
     coverage = {
         "attempted": len(visited),
-        "processed": len(pages),
+        "processed": sum(page.error is None for page in pages),
         "max_pages": max_pages,
         "max_depth": max_depth,
         "max_depth_reached": max_depth_reached,
@@ -256,7 +213,6 @@ async def crawl_public(
         "non_html_skipped": counters["non_html"],
         "anti_bot_detected": anti_bot_detected,
         "spa_detected": spa_detected,
-        "js_render_used": js_render,
         "truncated_reason": truncated_reason,
     }
     return {"root_url": root_url, "pages": [p.__dict__ for p in pages], "summary": summary}

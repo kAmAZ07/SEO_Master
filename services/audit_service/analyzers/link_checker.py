@@ -1,22 +1,16 @@
 """Проверка внутренних ссылок: HEAD с ограниченным GET-фолбэком, различие 404 / запрет / сбой сети."""
 from __future__ import annotations
 
-from urllib.parse import urlsplit
-
 from shared.netpolicy import NetPolicyError
+from shared.projects.scope import scope_from_url
 
+from services.audit_service.analyzers.robots_checker import RobotsInfo
 from services.audit_service.config import settings
 from services.audit_service.netio import AuditFetcher, BudgetExhausted
 from services.audit_service.public_policy import PUBLIC_MAX_LINK_PROBES
 
 _HEAD_UNSUPPORTED = frozenset({405, 501})
 _GET_FALLBACK_BODY_LIMIT = 256 * 1024
-
-
-def _is_internal(root_url: str, candidate: str) -> bool:
-    r = urlsplit(root_url)
-    c = urlsplit(candidate)
-    return (r.scheme, r.netloc.lower()) == (c.scheme, c.netloc.lower())
 
 
 def _classify(url: str, status: int) -> dict | None:
@@ -34,9 +28,12 @@ async def check_links_404(
     pages: list[dict],
     fetcher: AuditFetcher | None = None,
     limit: int | None = None,
+    *,
+    robots: RobotsInfo | None = None,
 ) -> tuple[list[dict], int]:
     """Возвращает (findings, число проверенных ссылок). Порядок ссылок и findings детерминирован."""
     fetcher = fetcher or AuditFetcher.create()
+    scope = scope_from_url(root_url)
     limit = min(limit or settings.max_internal_link_checks, PUBLIC_MAX_LINK_PROBES)
 
     crawled_status = {page.get("url"): page.get("status_code") for page in pages}
@@ -50,7 +47,8 @@ async def check_links_404(
     seen: set[str] = set()
     for page in pages:
         for link in page.get("links") or []:
-            if link in seen or link in crawled_status or not _is_internal(root_url, link):
+            if (link in seen or link in crawled_status or not scope.contains(link)
+                    or (robots is not None and not robots.can_fetch(link))):
                 continue
             seen.add(link)
             candidates.append(link)

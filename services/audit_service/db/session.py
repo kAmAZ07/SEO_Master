@@ -34,4 +34,5 @@ async def init_db() -> None:
     async with engine.connect() as conn:
         await conn.run_sync(lambda sync: require_core_schema(sync, (
             "audit_schema.crawl_results", "audit_schema.public_audit_results",
+            "audit_schema.projects", "audit_schema.domain_authorizations",
             "public.processed_events", "public.failed_events"), crawl_partitions=True))

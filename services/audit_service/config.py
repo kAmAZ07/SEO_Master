@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     user_agent: str = Field(default="SEO-Master-AuditBot/1.0")
     default_timeout_s: float = Field(default=10.0)
     max_internal_link_checks: int = Field(default=50)
+    domain_verification_fresh_days: int = Field(default=30, ge=1, le=365)
 
 
 settings = Settings()

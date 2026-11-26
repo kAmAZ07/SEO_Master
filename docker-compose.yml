@@ -111,6 +111,7 @@ services:
     environment:
       AUDIT_PORT: 8001
       AUDIT_DATABASE_URL: postgresql+asyncpg://seo_runtime:${RUNTIME_DATABASE_PASSWORD:?bootstrap required}@postgres:5432/seo_local
+      AUDIT_DOMAIN_VERIFICATION_FRESH_DAYS: ${DOMAIN_VERIFICATION_FRESH_DAYS:-30}
       AUDIT_REDIS_URL: redis://:${REDIS_PASSWORD:?bootstrap required}@redis:6379/0
       AUDIT_RABBITMQ_URL: amqp://seo_local:${RABBITMQ_PASSWORD:?bootstrap required}@rabbitmq:5672//
       MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:?bootstrap required}

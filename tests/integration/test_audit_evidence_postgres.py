@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tests.integration.test_semantic_postgres import ADMIN_URL, TempDatabase
 from services.audit_service import main
-from services.audit_service.db.models import CrawlResult
+from services.audit_service.db.models import CrawlResult, PublicAuditResult
 from services.management_service.proposal_handoff import audit_proposal_request
 from shared.page_evidence import verify_evidence
 
@@ -25,6 +25,120 @@ pytestmark = pytest.mark.skipif(not ADMIN_URL, reason="TEST_PG_ADMIN_URL is not 
 PROJECT_ID = "11111111-1111-4111-8111-111111111111"
 TASK_ID = "22222222-2222-4222-8222-222222222222"
 URL = "https://example.com/catalog"
+
+
+def seed_authority(database):
+    database.run("""
+        INSERT INTO audit_schema.workspaces (id, name, owner_id)
+        VALUES ('fixture-workspace', 'Audit workspace', 'fixture-user');
+        INSERT INTO audit_schema.projects (id, name, url, owner_id, workspace_id, origin, path_prefix, status)
+        VALUES ('11111111-1111-4111-8111-111111111111', 'Audit project', 'https://example.com/catalog',
+                'fixture-user', 'fixture-workspace', 'https://example.com', '/catalog', 'active');
+        INSERT INTO audit_schema.domain_authorizations
+            (id, project_id, workspace_id, status, scope_origin, scope_path_prefix,
+             challenge_hash, subject_user_id, issued_at, expires_at, verified_at)
+        VALUES ('fixture-authorization', '11111111-1111-4111-8111-111111111111', 'fixture-workspace',
+                'verified', 'https://example.com', '/catalog', repeat('a', 64), 'fixture-user',
+                now() - interval '1 hour', now() + interval '1 hour', now());
+    """)
+
+
+@pytest.mark.parametrize("model", [PublicAuditResult, CrawlResult])
+def test_only_one_postgres_worker_can_claim_a_persisted_audit(monkeypatch, model):
+    async def scenario(database, username, password):
+        url = make_url(database.async_url).set(username=username, password=password)
+        engine = create_async_engine(url, hide_parameters=True)
+        try:
+            maker = async_sessionmaker(engine, expire_on_commit=False)
+
+            @asynccontextmanager
+            async def get_session():
+                async with maker() as session:
+                    yield session
+
+            monkeypatch.setattr(main, "get_session", get_session)
+            now = datetime.now(timezone.utc)
+            audit_id = str(uuid4())
+            full = model is CrawlResult
+            async with maker() as session:
+                session.add(model(audit_id=audit_id, project_id=PROJECT_ID if full else None,
+                                  root_url=URL, mode="full" if full else "public", status="queued",
+                                  created_at=now, updated_at=now))
+                await session.commit()
+
+            started = await asyncio.gather(*(main._claim_queued_audit(audit_id, model) for _ in range(8)))
+            assert started.count(True) == 1
+            async with maker() as session:
+                row = (await session.execute(select(model).where(model.audit_id == audit_id))).scalar_one()
+                assert row.status == "running"
+            await main._finalize(audit_id, model, "cancelled", {"error_code": "cancelled"})
+            assert not await main._claim_queued_audit(audit_id, model)
+        finally:
+            await engine.dispose()
+
+    with TempDatabase() as database:
+        database.alembic("upgrade", "head")
+        if model is CrawlResult:
+            seed_authority(database)
+        role, password = "al8_audit_" + uuid4().hex[:10], secrets.token_hex(32)
+        database.run(f'CREATE ROLE "{role}" LOGIN PASSWORD :password NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE',
+                     password=password)
+        try:
+            database.run(f'GRANT USAGE ON SCHEMA audit_schema TO "{role}"; '
+                         f'GRANT SELECT, INSERT, UPDATE ON audit_schema.crawl_results, audit_schema.public_audit_results TO "{role}"; '
+                         f'GRANT SELECT ON audit_schema.projects, audit_schema.domain_authorizations TO "{role}"')
+            for table in ("projects", "domain_authorizations"):
+                assert not database.scalar("SELECT has_table_privilege(:role, :table, 'UPDATE')",
+                                           role=role, table=f"audit_schema.{table}")
+            asyncio.run(scenario(database, role, password))
+        finally:
+            database.run(f'DROP OWNED BY "{role}"; DROP ROLE "{role}"')
+
+
+@pytest.mark.parametrize("change,expected", [
+    ("revoked", "project_authorization_required"),
+    ("stale", "project_authorization_required"),
+    ("changed", "project_authorization_required"),
+    ("outside", "project_scope_changed"),
+])
+def test_full_job_rechecks_project_authority_before_running_on_postgres(monkeypatch, change, expected):
+    async def scenario(database):
+        engine = create_async_engine(database.async_url)
+        try:
+            maker = async_sessionmaker(engine, expire_on_commit=False)
+
+            @asynccontextmanager
+            async def get_session():
+                async with maker() as session:
+                    yield session
+
+            monkeypatch.setattr(main, "get_session", get_session)
+            now = datetime.now(timezone.utc)
+            audit_id = str(uuid4())
+            async with maker() as session:
+                session.add(CrawlResult(audit_id=audit_id, project_id=PROJECT_ID, root_url=URL,
+                                        mode="full", status="queued", created_at=now, updated_at=now))
+                await session.commit()
+            changes = {
+                "revoked": "UPDATE audit_schema.domain_authorizations SET status='revoked', revoked_at=now()",
+                "stale": "UPDATE audit_schema.domain_authorizations SET verified_at=now() - interval '400 days'",
+                "changed": "UPDATE audit_schema.projects SET path_prefix='/new'",
+                "outside": ("UPDATE audit_schema.projects SET path_prefix='/new'; "
+                            "UPDATE audit_schema.domain_authorizations SET scope_path_prefix='/new'"),
+            }
+            database.run(changes[change])
+
+            assert not await main._claim_queued_audit(audit_id, CrawlResult)
+            async with maker() as session:
+                row = (await session.execute(select(CrawlResult).where(CrawlResult.audit_id == audit_id))).scalar_one()
+                assert row.status == "failed" and row.summary == {"error_code": expected}
+        finally:
+            await engine.dispose()
+
+    with TempDatabase() as database:
+        database.alembic("upgrade", "head")
+        seed_authority(database)
+        asyncio.run(scenario(database))
 
 
 def test_competing_finalizers_preserve_one_persisted_snapshot(monkeypatch):

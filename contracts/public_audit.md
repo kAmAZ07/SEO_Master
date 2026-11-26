@@ -28,7 +28,9 @@
 - `partial`: результат есть, но покрытие ограничено; причины в `summary.partial_reasons` (`deadline`, `page_requests`, `aux_requests`, `robots_blocked`, `robots_unreachable`, `sitemap_truncated`).
 - `failed`: `summary.error_code` — `invalid_url`, `unsafe_target`, `dns_failure`, `deadline_exceeded`, `interrupted`, `internal_error`. Текст исключений наружу не отдаётся.
 - Этап (`stage`) и счётчики (`pages_done`, `pages_max`) отражают реальную работу: `starting, precheck, robots, sitemap, crawl, analyze, links, psi, done`.
-- Задание без обновлений дольше 150 с после перезапуска получает `failed/interrupted` при старте audit-service.
+- Задания в `queued` хранятся в PostgreSQL и подхватываются после перезапуска в порядке создания. Воркеры атомарно переводят одну запись в `running`. Интервал опроса очереди составляет одну секунду.
+- Публичное задание в `running` без обновлений дольше 150 с получает `failed/interrupted` при старте audit-service или очередной проверке раз в 30 с.
+- Для полного аудита используется отдельный слот на процесс. При захвате задания проверяются текущая область активного проекта и действующее подтверждение в его workspace. При отказе полный аудит завершается до обхода с `project_authorization_required` или `project_scope_changed`.
 
 ## HTTP
 

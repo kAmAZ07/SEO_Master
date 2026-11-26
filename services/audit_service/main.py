@@ -1,12 +1,13 @@
 import asyncio
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
-from typing import Type
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.logging_config import get_logger
 
@@ -37,17 +38,24 @@ from services.audit_service.public_policy import (
 )
 from services.audit_service.public_view import build_public_view, is_expired
 from services.audit_service.page_evidence import attach_page_evidence
+from shared.projects.authorization_state import is_fresh
 from shared.projects.claims import hash_claim_token, new_claim_token
+from shared.projects.scope import ScopeError, parse_scope
 
 logger = get_logger(__name__)
 
 app = FastAPI(title="Audit Service", version="0.1.0")
+AuditModel = type[PublicAuditResult] | type[CrawlResult]
+AuditRunner = Callable[..., Awaitable[dict]]
 
 # Ссылки на фоновые задания: без них сборщик мусора может прервать задачу, а отмена не найдёт её.
 _JOBS: dict[str, asyncio.Task] = {}
 _SLOTS: dict[int, asyncio.Semaphore] = {}
 _ORPHAN_AFTER = timedelta(seconds=PUBLIC_JOB_DEADLINE_S + 30)
 _PROGRESS_MIN_INTERVAL_S = 0.5
+_QUEUE_POLL_SECONDS = 1.0
+_ORPHAN_SWEEP_SECONDS = 30.0
+_FULL_CONCURRENT_JOBS = 1
 
 
 def _public_slots() -> asyncio.Semaphore:
@@ -67,7 +75,22 @@ async def _startup() -> None:
     await init_db()
     await purge_expired_public_audits()
     await recover_orphaned_public_audits()
-    asyncio.create_task(maybe_start_task_created_consumer())
+    stop_dispatch = asyncio.Event()
+    app.state.stop_audit_dispatch = stop_dispatch
+    app.state.audit_dispatcher = asyncio.create_task(_dispatch_saved_audits(stop_dispatch))
+    app.state.task_created_consumer = asyncio.create_task(maybe_start_task_created_consumer())
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    app.state.stop_audit_dispatch.set()
+    app.state.task_created_consumer.cancel()
+    await asyncio.gather(app.state.audit_dispatcher, app.state.task_created_consumer, return_exceptions=True)
+    tasks = list(_JOBS.values())
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    _SLOTS.pop(id(asyncio.get_running_loop()), None)
 
 
 async def purge_expired_public_audits() -> int:
@@ -85,11 +108,118 @@ async def recover_orphaned_public_audits() -> int:
     async with get_session() as session:
         result = await session.execute(
             update(PublicAuditResult)
-            .where(PublicAuditResult.status.in_(("queued", "running")), PublicAuditResult.updated_at < cutoff)
+            .where(PublicAuditResult.status == "running", PublicAuditResult.updated_at < cutoff)
             .values(status="failed", summary={"error_code": "interrupted"}, updated_at=datetime.now(timezone.utc))
         )
         await session.commit()
     return result.rowcount or 0
+
+
+def _schedule_audit(audit_id: str, row_cls: AuditModel, runner: AuditRunner) -> None:
+    current = _JOBS.get(audit_id)
+    if current is not None and not current.done():
+        return
+    task = asyncio.create_task(
+        _run_audit_background(audit_id=audit_id, row_cls=row_cls, runner=runner),
+        name=row_cls.__tablename__,
+    )
+    _JOBS[audit_id] = task
+
+    def release(finished: asyncio.Task) -> None:
+        if _JOBS.get(audit_id) is finished:
+            _JOBS.pop(audit_id)
+        if not finished.cancelled() and finished.exception() is not None:
+            logger.error("Audit worker stopped unexpectedly", extra={"audit_id": audit_id})
+
+    task.add_done_callback(release)
+
+
+async def _dispatch_saved_audits(stop: asyncio.Event) -> None:
+    loop = asyncio.get_running_loop()
+    next_sweep = loop.time() + _ORPHAN_SWEEP_SECONDS
+    while not stop.is_set():
+        try:
+            if loop.time() >= next_sweep:
+                await recover_orphaned_public_audits()
+                next_sweep = loop.time() + _ORPHAN_SWEEP_SECONDS
+            await _dispatch_queued_audits(PublicAuditResult, run_public_audit_pipeline, PUBLIC_MAX_CONCURRENT_JOBS, stop)
+            await _dispatch_queued_audits(CrawlResult, run_full_audit_pipeline, _FULL_CONCURRENT_JOBS, stop)
+        except Exception as exc:
+            logger.warning("Audit dispatch unavailable", extra={"error_type": type(exc).__name__})
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=_QUEUE_POLL_SECONDS)
+        except asyncio.TimeoutError:
+            continue
+
+
+async def _dispatch_queued_audits(row_cls: AuditModel, runner: AuditRunner, slots: int, stop: asyncio.Event) -> None:
+    active = {audit_id for audit_id, task in _JOBS.items()
+              if task.get_name() == row_cls.__tablename__ and not task.done()}
+    if stop.is_set() or len(active) >= slots:
+        return
+    mode = "public" if row_cls is PublicAuditResult else "full"
+    query = select(row_cls.audit_id).where(row_cls.mode == mode, row_cls.status == "queued", row_cls.audit_id.not_in(active))
+    if row_cls is PublicAuditResult:
+        query = query.where(row_cls.created_at >= datetime.now(timezone.utc) - PUBLIC_RETENTION)
+    query = query.order_by(row_cls.created_at, row_cls.audit_id).limit(slots - len(active))
+    async with get_session() as session:
+        audit_ids = (await session.execute(query)).scalars().all()
+    if stop.is_set():
+        return
+    for audit_id in audit_ids:
+        _schedule_audit(audit_id, row_cls, runner)
+
+
+async def _claim_queued_audit(audit_id: str, row_cls: AuditModel) -> bool:
+    now = datetime.now(timezone.utc)
+    claim = update(row_cls).where(row_cls.audit_id == audit_id, row_cls.status == "queued")
+    if row_cls is PublicAuditResult:
+        claim = claim.where(row_cls.created_at >= now - PUBLIC_RETENTION)
+    async with get_session() as session:
+        if row_cls is CrawlResult:
+            await _lock_full_audit_authority(session)
+        row = (await session.execute(
+            claim.values(status="running", updated_at=now).returning(row_cls.project_id, row_cls.root_url)
+        )).one_or_none()
+        if row is None:
+            return False
+        denial = await _full_audit_denial(session, row.project_id, row.root_url) if row_cls is CrawlResult else None
+        if denial is not None:
+            await session.execute(
+                update(CrawlResult)
+                .where(CrawlResult.audit_id == audit_id, CrawlResult.project_id == row.project_id)
+                .values(status="failed", summary={"error_code": denial})
+            )
+        await session.commit()
+    return denial is None
+
+
+async def _lock_full_audit_authority(session: AsyncSession) -> None:
+    await session.execute(text("SET TRANSACTION ISOLATION LEVEL READ COMMITTED"))
+    await session.execute(text("SET LOCAL lock_timeout='5s'"))
+    # Use the existing producer trigger's key before the crawl_results UPDATE takes a shared lock.
+    await session.execute(text("SELECT pg_advisory_xact_lock(74219031109004)"))
+
+
+async def _full_audit_denial(session: AsyncSession, project_id: str, root_url: str) -> str | None:
+    binding = (await session.execute(text("""
+        SELECT p.origin, p.path_prefix, a.status, a.verified_at
+        FROM audit_schema.projects p
+        JOIN audit_schema.domain_authorizations a
+          ON a.project_id = p.id AND a.workspace_id = p.workspace_id
+         AND a.scope_origin = p.origin AND a.scope_path_prefix = p.path_prefix
+        WHERE p.id = :project_id AND p.status = 'active'
+          AND a.status = 'verified' AND a.revoked_at IS NULL
+    """), {"project_id": project_id})).one_or_none()
+    if binding is None or not is_fresh(
+        binding.status, binding.verified_at, settings.domain_verification_fresh_days, datetime.now(timezone.utc),
+    ):
+        return "project_authorization_required"
+    try:
+        scope = parse_scope(binding.origin + binding.path_prefix)
+    except ScopeError:
+        return "project_scope_changed"
+    return None if scope.contains(root_url) else "project_scope_changed"
 
 
 @app.get("/health")
@@ -143,9 +273,8 @@ def _build_content_snapshot(result: dict) -> str:
 async def _enqueue_audit(
     *,
     payload: PublicAuditRequest | FullAuditRequest,
-    row_cls: Type[PublicAuditResult] | Type[CrawlResult],
+    row_cls: AuditModel,
     mode: str,
-    runner,
     audit_id: str | None = None,
     extra_options: dict | None = None,
     claim_token_hash: str | None = None,
@@ -184,9 +313,6 @@ async def _enqueue_audit(
         session.add(row)
         await session.commit()
 
-    task = asyncio.create_task(_run_audit_background(audit_id=audit_id, row_cls=row_cls, runner=runner))
-    _JOBS[audit_id] = task
-    task.add_done_callback(lambda _t, key=audit_id: _JOBS.pop(key, None))
     return AuditQueuedResponse(audit_id=audit_id, status="queued", mode=mode, project_id=payload.project_id)
 
 
@@ -198,7 +324,6 @@ async def start_public_audit(payload: PublicAuditRequest) -> PublicAuditResponse
         payload=payload,
         row_cls=PublicAuditResult,
         mode="public",
-        runner=run_public_audit_pipeline,
         claim_token_hash=hash_claim_token(claim_token),
     )
     return PublicAuditResponse(**queued.model_dump(), claim_token=claim_token)
@@ -212,7 +337,6 @@ async def start_full_audit(payload: FullAuditRequest) -> FullAuditResponse:
                 payload=payload,
                 row_cls=CrawlResult,
                 mode="full",
-                runner=run_full_audit_pipeline,
             )
         ).model_dump()
     )
@@ -246,10 +370,10 @@ def _progress_writer(audit_id: str, row_cls):
             return
         state.update(stage=stage, at=now)
         async with get_session() as session:
-            res = await session.execute(select(row_cls).where(row_cls.audit_id == audit_id))
+            res = await session.execute(select(row_cls).where(row_cls.audit_id == audit_id).with_for_update())
             row = res.scalar_one_or_none()
             if row is None or row.status != "running":
-                return
+                raise asyncio.CancelledError
             row.summary = {**(row.summary or {}), "progress": {"stage": stage, **counters}}
             row.updated_at = datetime.now(timezone.utc)
             await session.commit()
@@ -264,17 +388,19 @@ async def _finalize(audit_id: str, row_cls, status: str, summary: dict, **extra)
 async def _run_audit_background(
     *,
     audit_id: str,
-    row_cls: Type[PublicAuditResult] | Type[CrawlResult],
-    runner,
+    row_cls: AuditModel,
+    runner: AuditRunner,
 ) -> None:
     public = row_cls is PublicAuditResult
+    claimed = False
     result: dict | None = None
     try:
         slot = _public_slots() if public else None
         if slot is not None:
             await slot.acquire()
         try:
-            if not await _update_row(audit_id, row_cls, status="running"):
+            claimed = await _claim_queued_audit(audit_id, row_cls)
+            if not claimed:
                 return
             writer = _progress_writer(audit_id, row_cls)
             await writer("starting")
@@ -285,12 +411,17 @@ async def _run_audit_background(
             if slot is not None:
                 slot.release()
     except asyncio.CancelledError:
-        await _finalize(audit_id, row_cls, "cancelled", {"error_code": "cancelled"})
+        if claimed:
+            await _finalize(audit_id, row_cls, "failed", {"error_code": "interrupted"})
         return
     except asyncio.TimeoutError:
+        if not claimed:
+            raise
         await _finalize(audit_id, row_cls, "failed", {"error_code": "deadline_exceeded"})
         return
     except Exception as e:
+        if not claimed:
+            raise
         logger.exception("Audit failed", extra={"audit_id": audit_id})
         # Текст исключения может содержать внутренние адреса и пути: наружу идёт только код.
         summary = {"error_code": "internal_error"} if public else {"error": str(e)}
@@ -363,7 +494,6 @@ async def queue_full_audit_for_task_created(
         payload=payload,
         row_cls=CrawlResult,
         mode="full",
-        runner=run_full_audit_pipeline,
         audit_id=audit_id,
         extra_options={
             "trigger": "task_created",
@@ -396,19 +526,11 @@ async def cancel_public_audit(audit_id: str) -> dict:
     row = await _get_public_row(audit_id)
     if row.status in FINAL_STATUSES:
         return build_public_view(row)
+    cancelled = await _finalize(audit_id, PublicAuditResult, "cancelled", {"error_code": "cancelled"})
     task = _JOBS.get(audit_id)
-    if task is not None and not task.done():
+    if cancelled and task is not None and not task.done():
         task.cancel()
-        try:
-            await task
-        except BaseException:  # noqa: BLE001 - отмена завершает задачу исключением
-            pass
-        # Задача, отменённая до первого запуска, не успевает записать конечное состояние сама.
-        if (await _get_public_row(audit_id)).status not in FINAL_STATUSES:
-            await _finalize(audit_id, PublicAuditResult, "cancelled", {"error_code": "cancelled"})
-    else:
-        # Задание не принадлежит этому процессу (перезапуск, другая реплика): закрываем запись.
-        await _finalize(audit_id, PublicAuditResult, "cancelled", {"error_code": "cancelled"})
+        await asyncio.gather(task, return_exceptions=True)
     return build_public_view(await _get_public_row(audit_id))
 
 

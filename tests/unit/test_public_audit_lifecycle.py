@@ -9,6 +9,7 @@ import os
 import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from hashlib import md5
 from types import SimpleNamespace
 
 import pytest
@@ -24,9 +25,10 @@ from sqlalchemy import event, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.schema import CreateTable
 
 from services.audit_service import main
-from services.audit_service.db.models import PublicAuditResult
+from services.audit_service.db.models import CrawlResult, PublicAuditResult
 from services.audit_service.public_policy import PUBLIC_MAX_CONCURRENT_JOBS
 from services.audit_service.public_view import build_public_view
 from services.audit_service.schemas.audit import PublicAuditRequest
@@ -42,7 +44,7 @@ def run(coro):
 
 
 @asynccontextmanager
-async def database(monkeypatch):
+async def database(monkeypatch, *, dispatch=True):
     # Файловая БД: у каждого сеанса своё соединение, как в PostgreSQL (общее in-memory соединение
     # смешивало бы транзакции параллельных заданий).
     directory = tempfile.mkdtemp(prefix="audit-test-")
@@ -52,9 +54,14 @@ async def database(monkeypatch):
     @event.listens_for(engine.sync_engine, "connect")
     def _attach(dbapi_connection, _record):
         dbapi_connection.execute(f"ATTACH DATABASE '{schema_path}' AS audit_schema")
+        dbapi_connection.create_function(
+            "md5", 1, lambda value: md5(value.encode(), usedforsecurity=False).hexdigest(), deterministic=True,
+        )
 
     async with engine.begin() as conn:
         await conn.run_sync(PublicAuditResult.__table__.create)
+        crawl_ddl = str(CreateTable(CrawlResult.__table__).compile(dialect=conn.dialect))
+        await conn.exec_driver_sql(crawl_ddl.replace("DEFAULT NOW()", "DEFAULT CURRENT_TIMESTAMP"))
     maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
 
     @asynccontextmanager
@@ -63,11 +70,22 @@ async def database(monkeypatch):
             yield session
 
     monkeypatch.setattr(main, "get_session", get_session)
+    monkeypatch.setattr(main, "_QUEUE_POLL_SECONDS", 0.01)
     main._JOBS.clear()
     main._SLOTS.clear()
+
+    async def no_external_service():
+        return None
+
+    monkeypatch.setattr(main, "init_db", no_external_service)
+    monkeypatch.setattr(main, "maybe_start_task_created_consumer", no_external_service)
+    if dispatch:
+        await main._startup()
     try:
         yield maker
     finally:
+        if dispatch:
+            await main._shutdown()
         for task in list(main._JOBS.values()):
             task.cancel()
         await asyncio.gather(*main._JOBS.values(), return_exceptions=True)
@@ -98,14 +116,19 @@ async def start(url="https://x.test/", **options):
 
 
 async def finish(audit_id):
+    async def finalized():
+        row = await main._get_audit_row(audit_id)
+        return row is not None and row.status in main.FINAL_STATUSES
+
+    await wait_until(finalized, timeout=5)
     task = main._JOBS.get(audit_id)
     if task:
         await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 5)
 
 
-async def row_of(maker, audit_id):
+async def row_of(maker, audit_id, model=PublicAuditResult):
     async with maker() as session:
-        return (await session.execute(select(PublicAuditResult).where(PublicAuditResult.audit_id == audit_id))).scalar_one()
+        return (await session.execute(select(model).where(model.audit_id == audit_id))).scalar_one()
 
 
 async def wait_until(predicate, timeout=3.0):
@@ -255,11 +278,13 @@ def test_slots_limit_concurrency_and_queued_job_can_be_cancelled(monkeypatch):
     run(scenario())
 
 
-async def insert_row(maker, audit_id, *, age_days=0.0, status="completed", updated_ago_s=0.0):
+async def insert_row(maker, audit_id, *, age_days=0.0, status="completed", updated_ago_s=0.0, model=PublicAuditResult):
     now = datetime.now(timezone.utc)
+    public = model is PublicAuditResult
     async with maker() as session:
-        session.add(PublicAuditResult(
-            audit_id=audit_id, project_id=None, root_url="https://x.test/", mode="public", site_type_hint="unknown",
+        session.add(model(
+            audit_id=audit_id, project_id=None if public else "project-1",
+            root_url="https://x.test/", mode="public" if public else "full", site_type_hint="unknown",
             platform="generic", seeds=[], status=status, created_at=now - timedelta(days=age_days),
             updated_at=now - timedelta(seconds=updated_ago_s), summary={}, findings=[], pages=[], options={},
         ))
@@ -296,6 +321,77 @@ def test_orphaned_jobs_get_final_state_but_fresh_ones_are_kept(monkeypatch):
             stale = await row_of(maker, "stale-running-0001")
             assert stale.status == "failed" and stale.summary == {"error_code": "interrupted"}
             assert (await row_of(maker, "fresh-running-0002")).status == "running"
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("model", [PublicAuditResult, CrawlResult])
+def test_startup_dispatches_persisted_audit_without_an_enqueue_request(monkeypatch, model):
+    async def scenario():
+        async with database(monkeypatch, dispatch=False) as maker:
+            audit_id = "stored-queue-0001"
+            await insert_row(maker, audit_id, status="queued", updated_ago_s=3600, model=model)
+            started = asyncio.Event()
+
+            async def runner(audit_id, on_progress=None):
+                started.set()
+                return completed_result()
+
+            async def verified_project(*_args):
+                return None
+
+            patch_runner(monkeypatch, runner)
+            monkeypatch.setattr(main, "run_full_audit_pipeline", runner)
+            monkeypatch.setattr(main, "_lock_full_audit_authority", verified_project)
+            monkeypatch.setattr(main, "_full_audit_denial", verified_project)
+            await main._startup()
+            try:
+                await asyncio.wait_for(started.wait(), timeout=2)
+                await finish(audit_id)
+                assert (await row_of(maker, audit_id, model)).status == "completed"
+            finally:
+                await main._shutdown()
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("claim_timeout", [False, True])
+def test_running_audit_cannot_be_claimed_by_another_worker(monkeypatch, claim_timeout):
+    async def scenario():
+        async with database(monkeypatch, dispatch=False) as maker:
+            audit_id = "worker-claim-0001"
+            await insert_row(maker, audit_id, status="queued")
+            started, release = asyncio.Event(), asyncio.Event()
+            calls = []
+
+            async def runner(audit_id, on_progress=None):
+                calls.append(audit_id)
+                if len(calls) == 1:
+                    started.set()
+                    await release.wait()
+                return completed_result()
+
+            patch_runner(monkeypatch, runner)
+            command = {"audit_id": audit_id, "row_cls": PublicAuditResult, "runner": runner}
+            first = asyncio.create_task(main._run_audit_background(**command))
+            try:
+                await asyncio.wait_for(started.wait(), timeout=2)
+                if claim_timeout:
+                    async def stalled_claim(*_args):
+                        raise asyncio.TimeoutError
+
+                    with monkeypatch.context() as claim:
+                        claim.setattr(main, "_claim_queued_audit", stalled_claim)
+                        with pytest.raises(asyncio.TimeoutError):
+                            await main._run_audit_background(**command)
+                else:
+                    await asyncio.wait_for(main._run_audit_background(**command), timeout=2)
+                assert (await row_of(maker, audit_id)).status == "running"
+                assert calls == [audit_id]
+            finally:
+                release.set()
+                await first
+            assert (await row_of(maker, audit_id)).status == "completed"
 
     run(scenario())
 
